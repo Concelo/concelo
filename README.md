@@ -44,12 +44,12 @@ created on a device which has become inaccessible.
 
 Another advantage of the cloud model is that service providers can
 analyze the data they collect and use it to provide enhancements like
-predictive search and cloud-based content mixing and transcoding.  The
+predictive search and audio-visual mixing and transcoding.  The
 provider itself may also benefit by mining the data for marketing or
-other purposes.  The cloud model can also provide a degree of
-"stickiness" if the data cannot be easily exported or tranferred to a
-different provider.  Finally, data stored in the cloud is generally
-more accessible to law enforcement organizations data stored on
+other purposes.  This model can also provide a degree of "stickiness"
+if the data cannot be easily exported or transferred to a different
+provider.  Finally, data stored in the cloud is generally more
+accessible to law enforcement organizations than data stored on
 individual devices, especially as end-user storage encryption becomes
 more common.
 
@@ -59,13 +59,13 @@ makes it an attractive target for rogue employees, hackers, oppressive
 governments, ex-spouses, etc.  Even the service provider's own
 management and investors must balance their customers' best interests
 with those of the company, and may not always put the former ahead of
-the latter.  Furthermore, even when a company is genuinely committed
-to being a good steward if its customer's data, it may need to store
-that data in third party datacenters and shared hosting environments
-outside of its direct control.  And while the "stickiness" of
-cloud-based storage makes it easier for a company to retain customers,
-it's a liability for users who may wish to change providers without
-losing access to their library of content.
+the latter.  Furthermore, although a company may be genuinely
+committed to being a good steward if its customer's data, it may need
+to store that data in third party datacenters and shared hosting
+environments outside of its direct control.  And while the
+"stickiness" of cloud-based storage makes it easier for a company to
+retain customers, it's a liability for users who may wish to change
+providers without losing access to their library of content.
 
 #### Coherency
 
@@ -189,11 +189,11 @@ acknowledgement refers only to the chunks themselves and does not
 imply that their dependencies are also missing.  Thus, there is no
 need to explicitly acknowledge both a chunk and its dependencies, as
 the publisher will infer that the subscriber has all the direct and
-indirect dependencies of acknowledge chunks.  This allows reconnecting
-subscribers to sync very quickly in cases where the published content
-has not diverged much from its last known value -- the publisher need
-only send chunks which have not been acknowledged explicitly or
-implicitly.
+indirect dependencies of acknowledged chunks.  This allows
+reconnecting subscribers to sync very quickly in cases where the
+published content has not diverged much from its last known value --
+the publisher need only send chunks which have not been acknowledged
+explicitly or implicitly.
 
 ##### Relay Nodes
 
