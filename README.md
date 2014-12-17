@@ -158,7 +158,9 @@ repeating as necessary.
 
 A channel update consists of a channel identifier and the identifier
 of the chunk to which it should point, or zero if the channel should
-be deleted.
+be deleted.  It also includes a sequence number, ensuring that
+subscribers are not confused by out-of-order packet delivery, which
+might otherwise cause new content to be overwritten by old content.
 
 A publisher may either publish a new channel or update an existing one
 by first sending any new chunks not already known by the receiver and
@@ -215,6 +217,39 @@ nodes can provide several benefits:
 
 A relay node acts as a subscriber while communicating with a publisher
 and vice-versa.
+
+##### Relay Node Access Control
+
+Although the state encryption/decryption layer ensures that the
+content published to a channel cannot be read or modified by
+unauthorized clients, the synchronization layer cannot by itself
+distinguish between legitimate and illegitimate packets.  In
+particular, while authorized subscribers can easily detect and discard
+illegitimate packets at the decryption layer, relay nodes will not
+have the keys necessary to do the same.  Also, the operators of a
+given relay node may wish to impose storage and bandwidth quotas on a
+per-user and/or per-channel basis, making some form of authentication
+essential.
+
+Fortunately, the Transport Layer Security (TLS) protocol provides
+authentication and message integrity, solving these issues neatly.
+Therefore a practical relay node will only accept TLS (or DTLS)
+protected streams from publishers and subscribers, verifying in each
+case that the client certificate presented has been signed by one of
+the authorities the node trusts.
+
+Once the TLS negotiation has completed, the client must present an
+authorization message to the relay node prior to sending any other
+packets.  This message must be signed using a private key
+corresponding to a public key trusted by the node for this purpose and
+contains a list of permissions granted to and quotas imposed on the
+presenting client.  Thus, the node need not maintain a list of
+per-user permissions and quotas locally; it need only verify that a
+trusted authentication service has authorized the client as specified
+in the message.
+
+(todo: specify permission and quota format, including interval of
+validity, etc.)
 
 #### State Encryption/Decryption Layer
 
