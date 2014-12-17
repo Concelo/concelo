@@ -251,6 +251,12 @@ in the message.
 (todo: specify permission and quota format, including interval of
 validity, etc.)
 
+(todo: it seems redundant to encrypt and sign everything twice, once
+for the subscribers and again for the relay node.  Is there a way for
+the relay node to verify packet authenticity and integrity without
+having access to its content and without this redundancy?  How
+important is it to authenticate subscriber messages?)
+
 #### State Encryption/Decryption Layer
 
 (todo: using public key cryptography and key regression to control
