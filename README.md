@@ -233,29 +233,19 @@ essential.
 
 Fortunately, the Transport Layer Security (TLS) protocol provides
 authentication and message integrity, solving these issues neatly.
-Therefore a practical relay node will only accept TLS (or DTLS)
-protected streams from publishers and subscribers, verifying in each
-case that the client certificate presented has been signed by one of
-the authorities the node trusts.
-
-Once the TLS negotiation has completed, the client must present an
-authorization message to the relay node prior to sending any other
-packets.  This message must be signed using a private key
-corresponding to a public key trusted by the node for this purpose and
-contains a list of permissions granted to and quotas imposed on the
-presenting client.  Thus, the node need not maintain a list of
-per-user permissions and quotas locally; it need only verify that a
-trusted authentication service has authorized the client as specified
-in the message.
+However, because client authentication is not widely used e.g. by Web
+browsers, a relay node should not rely on it.  Instead, the client
+must present an authorization message to the relay node prior to
+sending any other packets.  This message must be signed using a
+private key corresponding to a public key trusted by the node for this
+purpose and contains a list of permissions granted to and quotas
+imposed on the presenting client.  Thus, the node need not maintain a
+list of per-user permissions and quotas locally; it need only verify
+that a trusted authentication service has authorized the client as
+specified in the message.
 
 (todo: specify permission and quota format, including interval of
 validity, etc.)
-
-(todo: it seems redundant to encrypt and sign everything twice, once
-for the subscribers and again for the relay node.  Is there a way for
-the relay node to verify packet authenticity and integrity without
-having access to its content and without this redundancy?  How
-important is it to authenticate subscriber messages?)
 
 #### State Encryption/Decryption Layer
 
