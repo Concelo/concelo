@@ -132,6 +132,11 @@ relationships are immutable.  Two chunks may have identical content
 and dependencies but different identifiers, but no two chunks with
 different content or dependencies may share an identifier.
 
+(todo: is the immutability of chunks and dependencies going to be a
+problem for some applications, e.g. ones that want to rearrange
+dependency relationships without resending the content?  If so, we
+could make the chunk content and graph structure independent.)
+
 In order to share content with subscribers, a publisher may define one
 or more channels, each of which has its own unique 256-bit identifier
 and which may be declared to point to a chunk via its identifier.  The
@@ -148,13 +153,18 @@ define this), the identifier, a list of dependency identifiers, and
 the opaque content.  In order to allow chunks to be sent reliably as
 IP datagrams, we further require that the serialized form is less than
 the 1500 byte Ethernet maximum transmission unit, or MTU, minus IP and
-UDP header sizes, etc.  Content exceeding this limit must be
-fragmented into several chunks bound by a chain of dependencies.
-Additionally, if an application needs to send a chunk which depends on
-more chunks than can be declared in a single datagram, it may fragment
-the dependency list into a set of empty chunks which only depend on
-other chunks and declare the original chunk to depend on that set,
-repeating as necessary.
+UDP header sizes, etc.  Another advantage of this relatively small
+size is that it gives the application maximum flexibility for
+prioritizing and multiplexing data for multiple channels over a single
+connection.
+
+Content exceeding the size limit must be fragmented into several
+chunks bound by a chain of dependencies.  Additionally, if an
+application needs to send a chunk which depends on more chunks than
+can be declared in a single datagram, it may fragment the dependency
+list into a set of empty chunks which only depend on other chunks and
+declare the original chunk to depend on that set, repeating as
+necessary.
 
 A channel update consists of a channel identifier and the identifier
 of the chunk to which it should point, or zero if the channel should
@@ -167,8 +177,10 @@ by first sending any new chunks not already known by the receiver and
 then sending a channel update to point it to the chunk representing
 the "root" of the content to be published.  The chunks should be sent
 in reverse order of dependency, i.e. no chunk should be sent before
-all its dependencies have been sent.  (todo: are circular dependencies
-useful?  Do we need to explicitly allow or disallow them?)
+all its dependencies have been sent.
+
+(todo: are circular dependencies useful?  Do we need to explicitly
+allow or disallow them?)
 
 ##### Subscriber Protocol
 
@@ -238,7 +250,7 @@ browsers, a relay node should not rely on it.  Instead, the client
 must present an authorization message to the relay node prior to
 sending any other packets.  This message must be signed using a
 private key corresponding to a public key trusted by the node for this
-purpose and contains a list of permissions granted to and quotas
+purpose and may contain a list of permissions granted to and quotas
 imposed on the presenting client.  Thus, the node need not maintain a
 list of per-user permissions and quotas locally; it need only verify
 that a trusted authentication service has authorized the client as
