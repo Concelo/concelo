@@ -125,21 +125,21 @@ of the data it is synchronizing.
 The fundamental unit at this layer is a chunk of opaque, encrypted
 content emitted by publishers and consumed by consumers.  A given
 application might break up its content into an arbitrary set of these
-chunks, each of which is identified by a unique, non-zero, 256-bit
-identifier, and each of which may be declared to depend on zero or
-more other chunks.  The content of each chunk and its dependency
-relationships are immutable.  Two chunks may have identical content
-and dependencies but different identifiers, but no two chunks with
-different content or dependencies may share an identifier.
+chunks, each of which is identified by a unique, non-zero identifier
+up to 256 bits in length, and each of which may be declared to depend
+on zero or more other chunks.  The content of each chunk and its
+dependency relationships are immutable.  Two chunks may have identical
+content and dependencies but different identifiers, but no two chunks
+with different content or dependencies may share an identifier.
 
-(todo: is the immutability of chunks and dependencies going to be a
+(todo: Is the immutability of chunks and dependencies going to be a
 problem for some applications, e.g. ones that want to rearrange
 dependency relationships without resending the content?  If so, we
 could make the chunk content and graph structure independent.)
 
 In order to share content with subscribers, a publisher may define one
-or more channels, each of which has its own unique 256-bit identifier
-and which may be declared to point to a chunk via its identifier.  The
+or more channels, each of which has its own unique identifier and
+which may be declared to point to a chunk via its identifier.  The
 pointer to the chunk is mutable and may change rapidly as new data is
 published.
 
@@ -181,6 +181,14 @@ all its dependencies have been sent.
 
 (todo: are circular dependencies useful?  Do we need to explicitly
 allow or disallow them?)
+
+Identifiers are encoded using the same base 128 "varint" encoding used
+in Protocol Buffers:
+https://developers.google.com/protocol-buffers/docs/encoding#varints.
+The publisher may generate successive identifiers in whatever way it
+choses (e.g. incrementing, random, or checksum), provided no distinct
+chunks are assigned the same identifier.  Subscribers should not rely
+on the publisher using any specific strategy.
 
 ##### Subscriber Protocol
 
@@ -261,8 +269,41 @@ validity, etc.)
 
 #### State Encryption/Decryption Layer
 
-(todo: using public key cryptography and key regression to control
-access to published content end-to-end)
+Above the state synchronization layer, applications are free to use
+any encryption strategy they chose, including no encryption at all if
+privacy is not desired.  For those which do require privacy, the
+following describes a recommended design for the encryption layer,
+ideally packaged as a reusable, auditable library.
+
+The design centers on a block cipher, such as AES, combined with a
+mode of operation, such as CBC or XTS, which takes a unique
+initialization vector as input for each chunk of date encrypted.
+Alternatively, a tweakable block cipher, such as Threefish, may be
+used, in which case the initialization vector is replaced with a
+tweak, and no additional mode of operation is needed.
+
+For maximum security, it may be desireable to encrypt the content
+twice with two separate ciphers and/or operation modes, which ensures
+that it will remain private if one of the algorithms is cracked, at
+which point the content can be re-encrypted with a new pair of
+algorithms.  This won't help if both algorithms are found to be
+vulnerable in a short amount of time, nor will it guarantee privacy if
+the second algorithm is broken after the content is re-encrypted,
+since an adversary might have saved a private copy of the content in
+its originally-encrypted form.  However, it does make attacks
+logistically more difficult.
+
+Each chunk of content may be encrypted independently of the others,
+using a channel-specific key, plus the chunk identifier as the
+initialization vector or tweak.
+
+##### Key Regression
+
+(todo)
+
+##### Key Storage and Distribution
+
+(todo)
 
 #### Application Layer
 
