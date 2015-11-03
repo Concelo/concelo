@@ -4,3 +4,4 @@
 /.psci*
 /src/.webpack.js
 /*.tix
+/.browserify-cache.json

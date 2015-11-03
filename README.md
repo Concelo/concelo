@@ -1,6 +1,8 @@
 Concelo - Real-time synchronization of encrypted content
 ========================================================
 
+[![Build Status](https://travis-ci.org/Concelo/concelo.svg?branch=master)](https://travis-ci.org/Concelo/concelo)
+
 Concelo is a (currently hypothetical) system for synchronizing
 encrypted application state among multiple peers.  Its goals include:
 
