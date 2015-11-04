@@ -1,7 +1,7 @@
 module Concelo.Receiver
   ( receive
   , apply
-  , Receiver() ) where
+  , Receiver(Receiver) ) where
 
 import Prelude (($), otherwise, Show, show, Eq, eq, Ord, (++))
 import Data.Either (Either(Left, Right))
@@ -17,7 +17,8 @@ import Concelo.Subscriber (Update(Add, NewRoot))
 
 data Receiver k v = Receiver
   { received :: Map k (Tree k v)
-  , root :: (Tree k v) }
+  , root :: (Tree k v)
+  , nacks :: Set k }
 
 instance showReceiver :: (Show k, Show v) => Show (Receiver k v) where
   show (Receiver receiver) =
@@ -35,22 +36,23 @@ receive root = Receiver
   { received: T.fold (\tree result -> M.insert (T.key tree) tree result)
       M.empty
       $ S.singleton root
-  , root: root }
+  , root: root
+  , nacks: S.empty }
 
 apply :: forall v. (Show v) =>
          Update String v ->
          Receiver String v ->
-         Either (Set String) (Receiver String v)
+         Receiver String v
          
 apply (Add content children) (Receiver receiver) =
   case foldr f (Right S.empty) children of
     Right trees ->
       let tree = T.tree content trees in
-        Right $ Receiver receiver
+        Receiver receiver
           { received = M.insert (T.key tree) tree receiver.received }
 
     Left nacks ->
-      Left nacks
+      Receiver receiver { nacks = S.union nacks receiver.nacks }
 
   where f id result =
           case result of
@@ -66,5 +68,5 @@ apply (Add content children) (Receiver receiver) =
               
 apply (NewRoot root) (Receiver receiver) =
   case M.lookup root receiver.received of
-    Just tree -> Right $ receive tree
-    Nothing -> Left $ S.singleton root
+    Just tree -> receive tree
+    Nothing -> Receiver receiver { nacks = S.insert root receiver.nacks }

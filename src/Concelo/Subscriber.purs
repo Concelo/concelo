@@ -6,7 +6,7 @@ module Concelo.Subscriber
   , Update(Add, NewRoot)
   , Subscriber(Subscriber) ) where
 
-import Prelude (($), (==), otherwise, Ord, compare)
+import Prelude (($), (==), otherwise, Ord, compare, Show, show, (++))
 import Data.List (List(Cons, Nil))
 import Data.Set (Set())
 import qualified Data.Set as S
@@ -23,6 +23,10 @@ data Subscriber k v = Subscriber
 data Update k v
   = Add v (Set k)
   | NewRoot k
+
+instance showUpdate :: (Show k, Show v) => Show (Update k v) where
+  show (Add v children) = "add " ++ show v ++ " " ++ show children
+  show (NewRoot k) = "new root " ++ show k
 
 data Next k v
   = Next (Update k v) (Subscriber k v)
