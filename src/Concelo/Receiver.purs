@@ -1,7 +1,8 @@
 module Concelo.Receiver
   ( receive
   , apply
-  , Receiver(Receiver) ) where
+  , Receiver(Receiver)
+  , Spec() ) where
 
 import Prelude (($), otherwise, Show, show, Eq, eq, Ord, (++))
 import Data.Either (Either(Left, Right))
