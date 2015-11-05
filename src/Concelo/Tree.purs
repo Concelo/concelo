@@ -3,6 +3,7 @@ module Concelo.Tree
   , key
   , value
   , children
+  , hash
   , tree
   , leaf
   , fold
@@ -35,21 +36,29 @@ children (Tree _ _ c) = c
 
 foreign import hashStrings :: List String -> String
 
+hash' :: forall v. (Show v) =>
+         v ->
+         Set (Tree String v) ->
+         String
+        
+hash' content children =
+  hashStrings $ Cons (show content)
+    $ (foldr (\tree result -> Cons (key tree) result) Nil children)
+
 hash :: forall v. (Show v) =>
         v ->
-        Set (Tree String v) ->
+        Set String ->
         String
         
 hash content children =
-  hashStrings $ Cons (show content)
-    $ (foldr (\tree result -> Cons (key tree) result) Nil children)
+  hashStrings $ Cons (show content) $ (foldr Cons Nil children)
 
 tree :: forall v. (Show v) =>
         v ->
         Set (Tree String v) ->
         Tree String v
         
-tree content children = Tree (hash content children) content children
+tree content children = Tree (hash' content children) content children
 
 leaf :: forall v. (Show v) =>
         v ->

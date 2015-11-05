@@ -112,12 +112,8 @@ main = runTest do
       $ Cons (NewRoot (key root))
       Nil
 
--- todo: should only get nacks on missing updates; out of order updates should result in correct tree
-  test "nacks on out-of-order updates" do
-    expectNacks (S.insert (key root)
-                 $ S.insert (key intermediate)
-                 $ S.insert (key leaf1)
-                 $ S.singleton (key leaf3))
+  test "build tree from out-of-order updates" do
+    expectReceived root
       $ Cons (Add (value leaf2) S.empty)      
       $ Cons (NewRoot (key root))
       $ Cons (Add (value intermediate)
@@ -129,3 +125,18 @@ main = runTest do
               $ S.singleton (key leaf3))
       $ Cons (Add (value leaf3) S.empty)
       Nil
+
+  test "nacks on missing updates" do
+    expectNacks (S.insert (key leaf2)
+                 $ S.singleton (key leaf3))
+      $ Cons (Add (value leaf1) S.empty)
+      $ Cons (Add (value intermediate)
+              $ S.insert (key leaf2)
+              $ S.singleton (key leaf1))
+      $ Cons (Add (value root)
+              $ S.insert (key intermediate)
+              $ S.singleton (key leaf3))
+      $ Cons (NewRoot (key root))
+      Nil
+
+-- todo: test full sync process with random trees and random packet loss, ensuring it always converges on correct value

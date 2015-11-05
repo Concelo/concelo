@@ -15,10 +15,22 @@ import Concelo.Tree (Tree())
 import qualified Concelo.Tree as T
 import Concelo.Subscriber (Update(Add, NewRoot))
 
+data Spec k v = Spec
+  { key :: k,
+    value :: v,
+    children :: Set k }
+
+instance showSpec :: (Show k, Show v) => Show (Spec k v) where
+  show (Spec s) =
+    "spec key " ++ show s.key
+    ++ " value " ++ show s.value
+    ++ " children " ++ show s.children
+
 data Receiver k v = Receiver
-  { received :: Map k (Tree k v)
+  { received :: Map k (Spec k v)
   , root :: (Tree k v)
-  , nacks :: Set k }
+  , nacks :: Set k
+  , newRoot :: Maybe k }
 
 instance showReceiver :: (Show k, Show v) => Show (Receiver k v) where
   show (Receiver receiver) =
@@ -33,40 +45,72 @@ receive :: forall k v. (Ord k) =>
            Receiver k v
 
 receive root = Receiver
-  { received: T.fold (\tree result -> M.insert (T.key tree) tree result)
+  { received: T.fold
+      (\tree result -> M.insert (T.key tree) (treeToSpec tree) result)
       M.empty
       $ S.singleton root
   , root: root
-  , nacks: S.empty }
+  , nacks: S.empty
+  , newRoot: Nothing }
+
+spec :: forall v. (Show v) =>
+        v ->
+        Set String ->
+        Spec String v
+
+spec content children = Spec
+  { key: T.hash content children
+  , value: content
+  , children: children }
+
+treeToSpec :: forall k v. (Ord k) =>
+              Tree k v ->
+              Spec k v
+
+treeToSpec tree = Spec
+  { key: T.key tree
+  , value: T.value tree
+  , children: foldr (\tree result -> S.insert (T.key tree) result)
+                S.empty (T.children tree) }
+
+key (Spec s) = s.key
 
 apply :: forall v. (Show v) =>
          Update String v ->
          Receiver String v ->
          Receiver String v
          
-apply (Add content children) (Receiver receiver) =
-  case foldr f (Right S.empty) children of
-    Right trees ->
-      let tree = T.tree content trees in
-        Receiver receiver
-          { received = M.insert (T.key tree) tree receiver.received }
+apply (Add content children) (Receiver r) =
+  case r.newRoot of
+    Just newRoot -> apply (NewRoot newRoot) result
+    Nothing -> result
 
-    Left nacks ->
-      Receiver receiver { nacks = S.union nacks receiver.nacks }
+  where s = spec content children
+        
+        addIfNack key nacks =
+          if M.member key r.received then
+            nacks else
+            S.insert key nacks
 
-  where f id result =
-          case result of
-            Right trees ->
-              case M.lookup id receiver.received of
-                Just tree -> Right $ S.insert tree trees
-                Nothing -> Left $ S.singleton id
+        result = Receiver r
+          { received = M.insert (key s) s r.received
+          , nacks = S.delete (key s) $ foldr addIfNack r.nacks children }
+            
+apply (NewRoot root) (Receiver r) =
+  case M.lookup root r.received of
+    Just spec ->
+      if S.isEmpty r.nacks then
+        receive $ specToTree spec else
+        Receiver r { newRoot = Just root }
 
-            Left nacks ->
-              if M.member id receiver.received
-              then result
-              else Left $ S.insert id nacks
-              
-apply (NewRoot root) (Receiver receiver) =
-  case M.lookup root receiver.received of
-    Just tree -> receive tree
-    Nothing -> Receiver receiver { nacks = S.insert root receiver.nacks }
+    Nothing ->
+      Receiver r { nacks = S.insert root r.nacks
+                 , newRoot = Just root }
+
+  where specToTree (Spec s) =
+          T.tree s.value $ foldr
+          (\key trees -> case M.lookup key r.received of
+              Just spec -> S.insert (specToTree spec) trees
+              Nothing -> trees)
+          S.empty
+          s.children
