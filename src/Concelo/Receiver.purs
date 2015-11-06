@@ -10,6 +10,7 @@ import Data.Map (Map())
 import qualified Data.Map as M
 import Data.Set (Set())
 import qualified Data.Set as S
+import Data.List (List(Cons, Nil))
 import Data.Maybe (Maybe(Just, Nothing))
 import Data.Foldable (foldr)
 import Concelo.Tree (Tree())
@@ -100,18 +101,26 @@ apply (Add content children) (Receiver r) =
 apply (NewRoot root) (Receiver r) =
   case M.lookup root r.received of
     Just spec ->
-      if S.isEmpty r.nacks then
-        receive $ specToTree spec else
-        Receiver r { newRoot = Just root }
+      case specToTree spec of
+        Just tree -> receive tree
+        Nothing -> Receiver r { newRoot = Just root }
 
     Nothing ->
       Receiver r { nacks = S.insert root r.nacks
                  , newRoot = Just root }
 
   where specToTree (Spec s) =
-          T.tree s.value $ foldr
-          (\key trees -> case M.lookup key r.received of
-              Just spec -> S.insert (specToTree spec) trees
-              Nothing -> trees)
-          S.empty
-          s.children
+          case iterate S.empty (S.toList s.children) of
+            Just trees -> Just (T.tree s.value trees)
+            Nothing -> Nothing
+
+        iterate trees (Cons key keys) =
+          case M.lookup key r.received of
+            Just spec ->
+              case specToTree spec of
+                Just tree -> iterate (S.insert tree trees) keys
+                Nothing -> Nothing
+
+            Nothing -> Nothing
+
+        iterate trees Nil = Just trees

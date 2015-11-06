@@ -77,6 +77,9 @@ remove tree acks =
                       
                   where below = recurse result
 
+                iterate Nil = { acks: result.acks
+                              , found: Nothing }
+
 subscribe root =
   Subscriber { acks: S.singleton root
              , root: root

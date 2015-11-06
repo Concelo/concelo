@@ -112,12 +112,15 @@ main = runTest do
       $ Cons (NewRoot (key root))
       Nil
 
-  test "build tree from out-of-order updates" do
+  test "build tree from out-of-order updates plus unused update" do
     expectReceived root
       $ Cons (Add (value leaf2) S.empty)      
       $ Cons (NewRoot (key root))
       $ Cons (Add (value intermediate)
               $ S.insert (key leaf2)
+              $ S.singleton (key leaf1))
+      $ Cons (Add "unused"
+              $ S.insert "nonexistent"
               $ S.singleton (key leaf1))
       $ Cons (Add (value leaf1) S.empty)
       $ Cons (Add (value root)
@@ -139,4 +142,4 @@ main = runTest do
       $ Cons (NewRoot (key root))
       Nil
 
--- todo: test full sync process with random trees and random packet loss, ensuring it always converges on correct value
+-- todo: test full sync process with random trees, random packet loss, and random reconnects, flushing periodically and ensuring all subscribers converge on the correct value
