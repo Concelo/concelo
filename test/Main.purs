@@ -1,8 +1,8 @@
 module Test.Main where
 
 import Concelo.Subscriber (Next(Next, End), update, subscribe,
-                           Subscriber(Subscriber), Update(Add, NewRoot))
-import Concelo.Receiver (apply, receive, Receiver(Receiver))
+                           Subscriber(), Update(Add, NewRoot))
+import Concelo.Receiver (apply, receive, Receiver())
 import Concelo.Tree (tree, leaf, key, value, empty, Tree())
 import Prelude (($), (++), unit, (==), (/=), bind, show, return, Unit(), Show,
                 Eq, flip)
@@ -13,9 +13,7 @@ import Data.Monoid (Monoid)
 import qualified Data.Set as S
 import Control.Monad.Eff (Eff())
 import Control.Monad.Eff.Ref (REF())
-import Test.Unit (assert, Assertion(), runTest, test)
-
-fail message = assert message false
+import Test.Unit (assert, Assertion(), runTest, test, failure, success)
 
 assertEqual :: forall v e. (Show v, Eq v) =>
                v ->
@@ -29,10 +27,10 @@ checkReceived :: forall v e. (Show v, Eq v, Monoid v) =>
                  Receiver String v ->
                  Assertion e
 
-checkReceived tree receiver@(Receiver r) =
-  if S.isEmpty r.nacks then
+checkReceived tree receiver =
+  if S.isEmpty $ Rec.nacks receiver then
     assertEqual receiver $ receive tree else
-    fail $ "got nacks " ++ show r.nacks ++ " when syncing " ++ show tree
+    failure $ "got nacks " ++ show r.nacks ++ " when syncing " ++ show tree
 
 sync :: forall v e. (Show v, Eq v, Monoid v) =>
         Tree String v ->
@@ -41,15 +39,14 @@ sync :: forall v e. (Show v, Eq v, Monoid v) =>
 sync tree = 
   checkReceived tree result
   
-  where iterate subscriber@(Subscriber s) result =
-          case s.next of
+  where iterate subscriber result =
+          case Sub.next subscriber of
             Next update subscriber -> iterate subscriber $ apply update result
             End -> result
 
         result = iterate
           (update (subscribe empty) tree)
           (receive empty)
-
 
 expectReceived :: forall v e. (Show v, Eq v, Monoid v) =>
                Tree String v ->
@@ -64,9 +61,10 @@ checkNacks :: forall v e. (Show v, Eq v, Monoid v) =>
               Receiver String v ->
               Assertion e
 
-checkNacks expected receiver@(Receiver r) =
-  if S.isEmpty r.nacks then
-    fail $ "expected nacks " ++ show expected ++ ", but got " ++ show receiver
+checkNacks expected receiver =
+  if S.isEmpty $ Rec.nacks receiver then
+    failure $ "expected nacks " ++ show expected ++ ", but got "
+    ++ show receiver
   else
     assertEqual r.nacks expected
 
@@ -142,4 +140,4 @@ main = runTest do
       $ Cons (NewRoot (key root))
       Nil
 
--- todo: test full sync process with random trees, random packet loss, and random reconnects, flushing periodically and ensuring all subscribers converge on the correct value
+  Simulator.main
