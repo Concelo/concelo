@@ -1,8 +1,8 @@
 module Test.Main where
 
-import Concelo.Subscriber (Next(Next, End), update, subscribe,
-                           Subscriber(), Update(Add, NewRoot))
-import Concelo.Receiver (apply, receive, Receiver())
+import Concelo.Publisher (Next(Next, End), update, publisher,
+                           Publisher(), Update(Add, NewRoot))
+import Concelo.Subscriber (apply, subscriber, Subscriber())
 import Concelo.Tree (tree, leaf, key, value, empty, Tree())
 import Prelude (($), (++), unit, (==), (/=), bind, show, return, Unit(), Show,
                 Eq, flip)
@@ -24,12 +24,12 @@ assertEqual a b = assert (show a ++ " is not equal to " ++ show b) (a == b)
 
 checkReceived :: forall v e. (Show v, Eq v, Monoid v) =>
                  Tree String v ->
-                 Receiver String v ->
+                 Subscriber String v ->
                  Assertion e
 
-checkReceived tree receiver =
-  if S.isEmpty $ Rec.nacks receiver then
-    assertEqual receiver $ receive tree else
+checkReceived tree subscriber =
+  if S.isEmpty $ Rec.nacks subscriber then
+    assertEqual subscriber $ subscriber tree else
     failure $ "got nacks " ++ show r.nacks ++ " when syncing " ++ show tree
 
 sync :: forall v e. (Show v, Eq v, Monoid v) =>
@@ -39,14 +39,14 @@ sync :: forall v e. (Show v, Eq v, Monoid v) =>
 sync tree = 
   checkReceived tree result
   
-  where iterate subscriber result =
-          case Sub.next subscriber of
-            Next update subscriber -> iterate subscriber $ apply update result
+  where iterate publisher result =
+          case Sub.next publisher of
+            Next update publisher -> iterate publisher $ apply update result
             End -> result
 
         result = iterate
-          (update (subscribe empty) tree)
-          (receive empty)
+          (update (publisher empty) tree)
+          (subscriber empty)
 
 expectReceived :: forall v e. (Show v, Eq v, Monoid v) =>
                Tree String v ->
@@ -54,17 +54,17 @@ expectReceived :: forall v e. (Show v, Eq v, Monoid v) =>
                Assertion e
 
 expectReceived tree updates =
-  checkReceived tree $ foldl (flip apply) (receive empty) updates
+  checkReceived tree $ foldl (flip apply) (subscriber empty) updates
 
 checkNacks :: forall v e. (Show v, Eq v, Monoid v) =>
               Set String ->
-              Receiver String v ->
+              Subscriber String v ->
               Assertion e
 
-checkNacks expected receiver =
-  if S.isEmpty $ Rec.nacks receiver then
+checkNacks expected subscriber =
+  if S.isEmpty $ Rec.nacks subscriber then
     failure $ "expected nacks " ++ show expected ++ ", but got "
-    ++ show receiver
+    ++ show subscriber
   else
     assertEqual r.nacks expected
 
@@ -74,7 +74,7 @@ expectNacks :: forall v e. (Show v, Eq v, Monoid v) =>
                Assertion e
 
 expectNacks expected updates =
-  checkNacks expected $ foldl (flip apply) (receive empty) updates
+  checkNacks expected $ foldl (flip apply) (subscriber empty) updates
 
 leaf1 = leaf "leaf 1"
 leaf2 = leaf "leaf 2"
@@ -91,41 +91,41 @@ main = runTest do
     
   test "build leaf from updates" do
     expectReceived leaf1
-      $ Cons (Add (value leaf1) S.empty)
-      $ Cons (Add (value leaf2) S.empty)      
-      $ Cons (NewRoot (key leaf1))
-      Nil
+      $ Add (value leaf1) S.empty
+      : Add (value leaf2) S.empty
+      : NewRoot (key leaf1)
+      : Nil
 
   test "build tree from updates" do
     expectReceived root
-      $ Cons (Add (value leaf3) S.empty)
-      $ Cons (Add (value leaf2) S.empty)      
-      $ Cons (Add (value leaf1) S.empty)
-      $ Cons (Add (value intermediate)
-              $ S.insert (key leaf2)
-              $ S.singleton (key leaf1))
-      $ Cons (Add (value root)
-              $ S.insert (key intermediate)
-              $ S.singleton (key leaf3))
-      $ Cons (NewRoot (key root))
-      Nil
+      $ Add (value leaf3) S.empty
+      : Add (value leaf2) S.empty
+      : Add (value leaf1) S.empty
+      : (Add (value intermediate)
+         $ S.insert (key leaf2)
+         $ S.singleton (key leaf1))
+      : (Add (value root)
+         $ S.insert (key intermediate)
+         $ S.singleton (key leaf3))
+      : NewRoot (key root)
+      : Nil
 
   test "build tree from out-of-order updates plus unused update" do
     expectReceived root
-      $ Cons (Add (value leaf2) S.empty)      
-      $ Cons (NewRoot (key root))
-      $ Cons (Add (value intermediate)
-              $ S.insert (key leaf2)
-              $ S.singleton (key leaf1))
-      $ Cons (Add "unused"
-              $ S.insert "nonexistent"
-              $ S.singleton (key leaf1))
-      $ Cons (Add (value leaf1) S.empty)
-      $ Cons (Add (value root)
-              $ S.insert (key intermediate)
-              $ S.singleton (key leaf3))
-      $ Cons (Add (value leaf3) S.empty)
-      Nil
+      $ Add (value leaf2) S.empty
+      : NewRoot (key root)
+      : (Add (value intermediate)
+         $ S.insert (key leaf2)
+         $ S.singleton (key leaf1))
+      : (Add "unused"
+         $ S.insert "nonexistent"
+         $ S.singleton (key leaf1))
+      : Add (value leaf1) S.empty
+      : (Add (value root)
+         $ S.insert (key intermediate)
+         $ S.singleton (key leaf3))
+      : Add (value leaf3) S.empty
+      : Nil
 
   test "nacks on missing updates" do
     expectNacks (S.insert (key leaf2)
