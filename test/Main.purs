@@ -1,19 +1,21 @@
 module Test.Main where
 
-import Concelo.Publisher (Next(Next, End), update, publisher,
-                           Publisher(), Update(Add, NewRoot))
-import Concelo.Subscriber (apply, subscriber, Subscriber())
+import Concelo.Publisher (Next(Next, End), Publisher(), Update(Add, NewRoot))
+import qualified Concelo.Publisher as Pub
+import Concelo.Subscriber (Subscriber())
+import qualified Concelo.Subscriber as Sub
 import Concelo.Tree (tree, leaf, key, value, empty, Tree())
 import Prelude (($), (++), unit, (==), (/=), bind, show, return, Unit(), Show,
                 Eq, flip)
 import Data.Foldable (foldr, foldl)
 import Data.Set (Set())
-import Data.List (List(Cons, Nil))
+import Data.List (List(Cons, Nil), (:))
 import Data.Monoid (Monoid)
 import qualified Data.Set as S
 import Control.Monad.Eff (Eff())
 import Control.Monad.Eff.Ref (REF())
-import Test.Unit (assert, Assertion(), runTest, test, failure, success)
+import Test.Unit (assert, Assertion(), runTest, test)
+import Test.QuickCheck.LCG (randomSeed, mkSeed)
 
 assertEqual :: forall v e. (Show v, Eq v) =>
                v ->
@@ -22,15 +24,18 @@ assertEqual :: forall v e. (Show v, Eq v) =>
                
 assertEqual a b = assert (show a ++ " is not equal to " ++ show b) (a == b)
 
+fail message = assert message false
+
 checkReceived :: forall v e. (Show v, Eq v, Monoid v) =>
                  Tree String v ->
                  Subscriber String v ->
                  Assertion e
 
 checkReceived tree subscriber =
-  if S.isEmpty $ Rec.nacks subscriber then
-    assertEqual subscriber $ subscriber tree else
-    failure $ "got nacks " ++ show r.nacks ++ " when syncing " ++ show tree
+  if S.isEmpty $ Sub.nacks subscriber then
+    assertEqual subscriber $ Sub.make tree else
+    fail $ "got nacks " ++ show (Sub.nacks subscriber) ++ " when syncing "
+    ++ show tree
 
 sync :: forall v e. (Show v, Eq v, Monoid v) =>
         Tree String v ->
@@ -40,13 +45,15 @@ sync tree =
   checkReceived tree result
   
   where iterate publisher result =
-          case Sub.next publisher of
-            Next update publisher -> iterate publisher $ apply update result
+          case Pub.next publisher of
+            Next update publisher ->
+              iterate publisher $ Sub.apply update result
+              
             End -> result
 
         result = iterate
-          (update (publisher empty) tree)
-          (subscriber empty)
+          (Pub.publish (Pub.make empty) tree)
+          (Sub.make empty)
 
 expectReceived :: forall v e. (Show v, Eq v, Monoid v) =>
                Tree String v ->
@@ -54,7 +61,7 @@ expectReceived :: forall v e. (Show v, Eq v, Monoid v) =>
                Assertion e
 
 expectReceived tree updates =
-  checkReceived tree $ foldl (flip apply) (subscriber empty) updates
+  checkReceived tree $ foldl (flip Sub.apply) (Sub.make empty) updates
 
 checkNacks :: forall v e. (Show v, Eq v, Monoid v) =>
               Set String ->
@@ -62,11 +69,11 @@ checkNacks :: forall v e. (Show v, Eq v, Monoid v) =>
               Assertion e
 
 checkNacks expected subscriber =
-  if S.isEmpty $ Rec.nacks subscriber then
-    failure $ "expected nacks " ++ show expected ++ ", but got "
+  if S.isEmpty $ Sub.nacks subscriber then
+    fail $ "expected nacks " ++ show expected ++ ", but got "
     ++ show subscriber
   else
-    assertEqual r.nacks expected
+    assertEqual (Sub.nacks subscriber) expected
 
 expectNacks :: forall v e. (Show v, Eq v, Monoid v) =>
                Set String ->
@@ -74,7 +81,7 @@ expectNacks :: forall v e. (Show v, Eq v, Monoid v) =>
                Assertion e
 
 expectNacks expected updates =
-  checkNacks expected $ foldl (flip apply) (subscriber empty) updates
+  checkNacks expected $ foldl (flip Sub.apply) (Sub.make empty) updates
 
 leaf1 = leaf "leaf 1"
 leaf2 = leaf "leaf 2"
@@ -82,7 +89,7 @@ leaf3 = leaf "leaf 3"
 intermediate = tree "intermediate" $ S.insert leaf1 $ S.singleton leaf2
 root = tree "root" $ S.insert leaf3 $ S.singleton intermediate
 
-main = runTest do
+tests = do
   test "sync leaf" do
     sync leaf1
     
@@ -140,4 +147,10 @@ main = runTest do
       $ Cons (NewRoot (key root))
       Nil
 
-  Simulator.main
+main = do
+  -- seed <- randomSeed
+
+  runTest do
+    tests
+
+    -- Test.Simulator.tests (mkSeed 42) -- seed

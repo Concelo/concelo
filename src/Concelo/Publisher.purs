@@ -1,10 +1,12 @@
 module Concelo.Publisher
-  ( publisher
-  , update
+  ( make
+  , publish
   , nack
+  , root
+  , next
   , Next(Next, End)
   , Update(Add, NewRoot)
-  , Publisher(Publisher) ) where
+  , Publisher() ) where
 
 import Prelude (($), (==), otherwise, Ord, compare, Show, show, (++))
 import Data.List (List(Cons, Nil))
@@ -12,6 +14,7 @@ import Data.Set (Set())
 import qualified Data.Set as S
 import Data.Maybe (Maybe(Just, Nothing))
 import Data.Foldable (foldr)
+import Data.Monoid (Monoid)
 import Concelo.Tree (Tree())
 import qualified Concelo.Tree as T
 
@@ -32,9 +35,13 @@ data Next k v
   = Next (Update k v) (Publisher k v)
   | End
 
-newRoot (Publisher publisher) root = Publisher publisher
+root (Publisher p) = p.root
+
+next (Publisher p) = p.next
+
+newRoot (Publisher p) root = Publisher p
   { acks = S.singleton root
-  , next = Next (NewRoot (T.key root)) (publisher root) }
+  , next = Next (NewRoot (T.key root)) $ make root }
 
 add :: forall k v. (Ord k) =>
        Publisher k v ->
@@ -49,48 +56,50 @@ add (Publisher publisher) tree (Publisher next) = Publisher publisher
   where keys trees =
           foldr (\tree result -> S.insert (T.key tree) result) S.empty trees
 
-remove :: forall k v. (Ord k) =>
+remove :: forall k v. (Ord k, Ord v) =>
           Tree k v ->
           Set (Tree k v) ->
           Set (Tree k v)
 
-remove tree acks =
-  (recurse { acks: acks, found: Nothing }).acks
+remove key acks =
+  (recurse acks).acks
   
-  where recurse result =
-          if S.member tree result.acks
-             
-          then { acks: S.delete tree result.acks
-               , found: Just tree }
+  where recurse acks =
+          if S.member key acks then
+            
+            { acks: S.delete key acks
+            , found: Just key } else
                
-          else iterate (S.toList result.acks)
+            iterate $ S.toList acks
                
-          where iterate (Cons ack acks) =
+          where iterate (Cons head tail) =
                   case below.found of
                     Just found ->
-                      { acks: S.delete ack
-                          $ S.union result.acks
-                          $ S.delete found (T.children ack)
-                      , found: Just ack }
+                      { acks: S.delete head
+                        $ S.union acks
+                        $ S.delete found
+                        $ T.children head
+                        
+                      , found: Just head }
 
-                    Nothing -> iterate acks
+                    Nothing -> iterate tail
                       
-                  where below = recurse result
+                  where below = recurse $ T.children head
 
-                iterate Nil = { acks: result.acks
+                iterate Nil = { acks: acks
                               , found: Nothing }
 
-publisher root =
+make root =
   Publisher { acks: S.singleton root
-             , root: root
-             , next: End }
+            , root: root
+            , next: End }
 
-update :: forall k v. (Ord k) =>
-          Publisher k v ->
-          Tree k v ->
-          Publisher k v
+publish :: forall k v. (Ord k) =>
+           Publisher k v ->
+           Tree k v ->
+           Publisher k v
 
-update publisher@(Publisher p) root
+publish publisher@(Publisher p) root
   | p.root == root = Publisher p { next = End }
 
   | S.member root p.acks = newRoot publisher root
@@ -101,18 +110,16 @@ update publisher@(Publisher p) root
       where acks = T.fold S.insert S.empty p.acks
             recurse trees result =
               foldr (\tree result ->
-                      if S.member tree acks
-                      then result
-                      else recurse (T.children tree) $
-                             add publisher tree result)
+                      if S.member tree acks then
+                        result else
+                        recurse (T.children tree) $ add publisher tree result)
                 result
                 trees
 
-nack :: forall k v. (Ord k) =>
-        Publisher k v ->
-        Tree k v ->
-        Tree k v ->
-        Publisher k v
+nack :: forall v. (Monoid v, Ord v, Show v) =>
+        Publisher String v ->
+        String ->
+        Publisher String v
 
-nack publisher@(Publisher p) tree root =
-  update (Publisher p { acks = remove tree p.acks }) root
+nack publisher@(Publisher p) nack =
+  publish (Publisher p { acks = remove (T.wrap nack) p.acks }) p.root

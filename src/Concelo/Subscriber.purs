@@ -1,7 +1,11 @@
 module Concelo.Subscriber
-  ( subscriber
+  ( make
   , apply
-  , Subscriber(Subscriber)
+  , root
+  , next
+  , nacks
+  , Next(Next, End)
+  , Subscriber()
   , Spec() ) where
 
 import Prelude (($), otherwise, Show, show, Eq, eq, Ord, (++))
@@ -15,7 +19,7 @@ import Data.Maybe (Maybe(Just, Nothing))
 import Data.Foldable (foldr)
 import Concelo.Tree (Tree())
 import qualified Concelo.Tree as T
-import Concelo.Subscriber (Update(Add, NewRoot))
+import Concelo.Publisher (Update(Add, NewRoot))
 
 data Spec k v = Spec
   { key :: k,
@@ -34,6 +38,10 @@ data Subscriber k v = Subscriber
   , nacks :: Set k
   , newRoot :: Maybe k }
 
+data Next k v
+  = Next k (Subscriber k v)
+  | End
+
 instance showSubscriber :: (Show k, Show v) => Show (Subscriber k v) where
   show (Subscriber subscriber) =
     "subscriber root " ++ show subscriber.root
@@ -42,11 +50,24 @@ instance showSubscriber :: (Show k, Show v) => Show (Subscriber k v) where
 instance eqSubscriber :: (Eq k) => Eq (Subscriber k v) where
   eq (Subscriber a) (Subscriber b) = eq a.root b.root
 
-subscriber :: forall k v. (Ord k) =>
-           Tree k v ->
-           Subscriber k v
+root (Subscriber s) = s.root
 
-subscriber root = Subscriber
+nacks (Subscriber s) = s.nacks
+
+next :: forall k v. (Ord k) =>
+        Subscriber k v ->
+        Next k v
+
+next (Subscriber s) =
+  case S.toList s.nacks of
+    Cons nack _ -> Next nack $ Subscriber s { nacks = S.delete nack s.nacks }
+    Nil -> End
+
+make :: forall k v. (Ord k) =>
+        Tree k v ->
+        Subscriber k v
+
+make root = Subscriber
   { received: T.fold
       (\tree result -> M.insert (T.key tree) (treeToSpec tree) result)
       M.empty
@@ -87,7 +108,7 @@ apply (Add content children) (Subscriber s) =
     Just newRoot -> apply (NewRoot newRoot) result
     Nothing -> result
 
-  where s = spec content children
+  where spec' = spec content children
         
         addIfNack key nacks =
           if M.member key s.received then
@@ -95,19 +116,19 @@ apply (Add content children) (Subscriber s) =
             S.insert key nacks
 
         result = Subscriber s
-          { received = M.insert (key s) s s.received
-          , nacks = S.delete (key s) $ foldr addIfNack s.nacks children }
+          { received = M.insert (key spec') spec' s.received
+          , nacks = S.delete (key spec') $ foldr addIfNack s.nacks children }
             
 apply (NewRoot root) (Subscriber s) =
   case M.lookup root s.received of
     Just spec ->
       case specToTree spec of
-        Just tree -> subscriber tree
+        Just tree -> make tree
         Nothing -> Subscriber s { newRoot = Just root }
 
     Nothing ->
       Subscriber s { nacks = S.insert root s.nacks
-                 , newRoot = Just root }
+                   , newRoot = Just root }
 
   where specToTree (Spec s) =
           case iterate S.empty (S.toList s.children) of

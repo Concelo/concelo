@@ -7,7 +7,8 @@ module Concelo.Tree
   , tree
   , leaf
   , fold
-  , empty ) where
+  , empty
+  , wrap ) where
 
 import Prelude (Eq, eq, Ord, compare, Show, show, ($), (++))
 import Data.Set (Set())
@@ -65,6 +66,12 @@ leaf :: forall v. (Show v) =>
         Tree String v
         
 leaf content = tree content S.empty
+
+wrap :: forall v. (Monoid v, Show v) =>
+        String ->
+        Tree String v
+
+wrap key = Tree key mempty S.empty
 
 empty :: forall v. (Monoid v, Show v) =>
          Tree String v
