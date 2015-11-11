@@ -4,7 +4,8 @@ import Concelo.Publisher (Next(Next, End), Publisher(), Update(Add, NewRoot))
 import qualified Concelo.Publisher as Pub
 import Concelo.Subscriber (Subscriber())
 import qualified Concelo.Subscriber as Sub
-import Concelo.Tree (tree, leaf, key, value, empty, Tree())
+import Concelo.Tree (Tree())
+import qualified Concelo.Tree as T
 import Prelude (($), (++), unit, (==), (/=), bind, show, return, Unit(), Show,
                 Eq, flip)
 import Data.Foldable (foldr, foldl)
@@ -22,7 +23,8 @@ assertEqual :: forall v e. (Show v, Eq v) =>
                v ->
                Assertion e
                
-assertEqual a b = assert (show a ++ " is not equal to " ++ show b) (a == b)
+assertEqual a b =
+  assert ("\n" ++ show a ++ "\n\n is not equal to\n\n " ++ show b) (a == b)
 
 fail message = assert message false
 
@@ -52,8 +54,8 @@ sync tree =
             End -> result
 
         result = iterate
-          (Pub.publish (Pub.make empty) tree)
-          (Sub.make empty)
+          (Pub.publish (Pub.make T.empty) tree)
+          (Sub.make T.empty)
 
 expectReceived :: forall v e. (Show v, Eq v, Monoid v) =>
                Tree String v ->
@@ -61,7 +63,7 @@ expectReceived :: forall v e. (Show v, Eq v, Monoid v) =>
                Assertion e
 
 expectReceived tree updates =
-  checkReceived tree $ foldl (flip Sub.apply) (Sub.make empty) updates
+  checkReceived tree $ foldl (flip Sub.apply) (Sub.make T.empty) updates
 
 checkNacks :: forall v e. (Show v, Eq v, Monoid v) =>
               Set String ->
@@ -81,15 +83,51 @@ expectNacks :: forall v e. (Show v, Eq v, Monoid v) =>
                Assertion e
 
 expectNacks expected updates =
-  checkNacks expected $ foldl (flip Sub.apply) (Sub.make empty) updates
+  checkNacks expected $ foldl (flip Sub.apply) (Sub.make T.empty) updates
 
-leaf1 = leaf "leaf 1"
-leaf2 = leaf "leaf 2"
-leaf3 = leaf "leaf 3"
-intermediate = tree "intermediate" $ S.insert leaf1 $ S.singleton leaf2
-root = tree "root" $ S.insert leaf3 $ S.singleton intermediate
+leaf1 = T.leaf "leaf 1"
+leaf2 = T.leaf "leaf 2"
+leaf3 = T.leaf "leaf 3"
+intermediate = T.make "intermediate" $ S.insert leaf1 $ S.singleton leaf2
+root = T.make "root" $ S.insert leaf3 $ S.singleton intermediate
 
 tests = do
+  test "remove nonexistent leaf from leaves" do
+    let set = S.insert (T.key leaf3) $ S.singleton (T.key leaf1)
+    assertEqual
+      (Pub.removeAck "nonexistent" set root)
+      set
+
+  test "remove leaf from leaves" do
+    let set = S.insert (T.key leaf3) $ S.singleton (T.key leaf1)    
+    assertEqual
+      (Pub.removeAck (T.key leaf3) set root)
+      (S.singleton (T.key leaf1))
+
+  test "remove nonexistent leaf from tree" do
+    let set = S.singleton (T.key root)
+    assertEqual
+      (Pub.removeAck "nonexistent" set root)
+      set
+
+  test "remove leaf from tree" do
+    let set = S.singleton (T.key root)
+    assertEqual
+      (Pub.removeAck (T.key leaf2) set root)
+      (S.insert (T.key leaf3)
+       $ S.insert (T.key intermediate)
+       $ S.insert (T.key root)
+       $ S.singleton (T.key leaf1))
+
+  test "remove root from tree" do
+    let set = S.singleton (T.key root)
+    assertEqual
+      (Pub.removeAck (T.key root) set root)
+      (S.insert (T.key leaf3)
+       $ S.insert (T.key intermediate)
+       $ S.insert (T.key leaf2)
+       $ S.singleton (T.key leaf1))
+  
   test "sync leaf" do
     sync leaf1
     
@@ -98,54 +136,54 @@ tests = do
     
   test "build leaf from updates" do
     expectReceived leaf1
-      $ Add (value leaf1) S.empty
-      : Add (value leaf2) S.empty
-      : NewRoot (key leaf1)
+      $ Add (T.value leaf1) S.empty
+      : Add (T.value leaf2) S.empty
+      : NewRoot (T.key leaf1)
       : Nil
 
   test "build tree from updates" do
     expectReceived root
-      $ Add (value leaf3) S.empty
-      : Add (value leaf2) S.empty
-      : Add (value leaf1) S.empty
-      : (Add (value intermediate)
-         $ S.insert (key leaf2)
-         $ S.singleton (key leaf1))
-      : (Add (value root)
-         $ S.insert (key intermediate)
-         $ S.singleton (key leaf3))
-      : NewRoot (key root)
+      $ Add (T.value leaf3) S.empty
+      : Add (T.value leaf2) S.empty
+      : Add (T.value leaf1) S.empty
+      : (Add (T.value intermediate)
+         $ S.insert (T.key leaf2)
+         $ S.singleton (T.key leaf1))
+      : (Add (T.value root)
+         $ S.insert (T.key intermediate)
+         $ S.singleton (T.key leaf3))
+      : NewRoot (T.key root)
       : Nil
 
   test "build tree from out-of-order updates plus unused update" do
     expectReceived root
-      $ Add (value leaf2) S.empty
-      : NewRoot (key root)
-      : (Add (value intermediate)
-         $ S.insert (key leaf2)
-         $ S.singleton (key leaf1))
+      $ Add (T.value leaf2) S.empty
+      : NewRoot (T.key root)
+      : (Add (T.value intermediate)
+         $ S.insert (T.key leaf2)
+         $ S.singleton (T.key leaf1))
       : (Add "unused"
          $ S.insert "nonexistent"
-         $ S.singleton (key leaf1))
-      : Add (value leaf1) S.empty
-      : (Add (value root)
-         $ S.insert (key intermediate)
-         $ S.singleton (key leaf3))
-      : Add (value leaf3) S.empty
+         $ S.singleton (T.key leaf1))
+      : Add (T.value leaf1) S.empty
+      : (Add (T.value root)
+         $ S.insert (T.key intermediate)
+         $ S.singleton (T.key leaf3))
+      : Add (T.value leaf3) S.empty
       : Nil
 
   test "nacks on missing updates" do
-    expectNacks (S.insert (key leaf2)
-                 $ S.singleton (key leaf3))
-      $ Cons (Add (value leaf1) S.empty)
-      $ Cons (Add (value intermediate)
-              $ S.insert (key leaf2)
-              $ S.singleton (key leaf1))
-      $ Cons (Add (value root)
-              $ S.insert (key intermediate)
-              $ S.singleton (key leaf3))
-      $ Cons (NewRoot (key root))
-      Nil
+    expectNacks (S.insert (T.key leaf2)
+                 $ S.singleton (T.key leaf3))
+      $ (Add (T.value leaf1) S.empty)
+      : (Add (T.value intermediate)
+              $ S.insert (T.key leaf2)
+              $ S.singleton (T.key leaf1))
+      : (Add (T.value root)
+              $ S.insert (T.key intermediate)
+              $ S.singleton (T.key leaf3))
+      : NewRoot (T.key root)
+      : Nil
 
 main = do
   -- seed <- randomSeed

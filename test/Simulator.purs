@@ -30,7 +30,7 @@ arbitraryTree maxChildCount = do
   value :: String <- arbitrary
   childCount <- chooseInt 0 maxChildCount
   children <- listOf childCount $ arbitraryTree $ maxChildCount - 1
-  return $ T.tree value $ S.fromList children
+  return $ T.make value $ S.fromList children
 
 data Task
   = Send
@@ -140,7 +140,11 @@ apply Flush state =
 
   where iterate state@(State s) try
           | Sub.root s.subscriber == Pub.root s.publisher =
-            if L.null s.trees then Done else Iterate state
+            if Pub.consistent s.publisher then
+               if L.null s.trees then
+                 Done else
+                 Iterate state else
+            Error "inconsistent publisher"
             
           | try <= 0 =
             Error "flush failed"
