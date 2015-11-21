@@ -16,3 +16,10 @@ exports.hashStrings = function (strings) {
     return hash.digest("hex");
 }
 
+exports.hexToInt = function (string) {
+    return parseInt(string, 16);
+}
+
+exports.intToHex = function (n) {
+    return n.toString(16);
+}

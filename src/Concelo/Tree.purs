@@ -4,20 +4,20 @@ module Concelo.Tree
   , value
   , tree
   , children
-  , hash
   , make
   , leaf
   , fold
   , empty ) where
 
-import Prelude (Eq, eq, Ord, compare, Show, show, ($), (++), (<<<))
+import Prelude (Eq, eq, Ord, compare, Show, show, ($), (++), (<<<), (<=), (+),
+                (-), otherwise)
 import Data.Set (Set())
 import qualified Data.Set as S
 import Data.List (List(Cons, Nil))
 import Data.Foldable (foldr)
 import Data.Monoid (Monoid, mempty)
 import Data.Maybe (Maybe(Just, Nothing))
-import Data.String (take)
+import Data.String (take, drop, length)
 
 data Tree k v = Tree k v (Set (Tree k v))
 
@@ -27,9 +27,9 @@ instance eqTree :: (Eq k) => Eq (Tree k v) where
 instance ordTree :: (Ord k) => Ord (Tree k v) where
   compare a b = compare (key a) (key b)  
 
-instance showTree :: (Show k, Show v) => Show (Tree k v) where
+instance showTree :: (Show v) => Show (Tree String v) where
   show (Tree key value children) =
-    "(" ++ (take 7 <<< show) key ++
+    "(" ++ take 16 key ++
     " " ++ show value ++
     " " ++ show children ++ ")"
 
@@ -41,22 +41,33 @@ children (Tree _ _ c) = c
 
 foreign import hashStrings :: List String -> String
 
-hash' :: forall v. (Show v) =>
-         v ->
-         Set (Tree String v) ->
-         String
-        
-hash' content children =
-  hashStrings $ Cons (show content)
-    $ (foldr (\tree result -> Cons (key tree) result) Nil children)
+foreign import hexToInt :: String -> Int
 
-hash :: forall v. (Show v) =>
-        v ->
-        Set String ->
-        String
+foreign import intToHex :: Int -> String
+
+height key = hexToInt $ take 8 key
+
+height' Nil = 0
+height' (Cons key _) = height key
+
+pad n string
+  | n <= length string = string
+  | otherwise = pad n ("0" ++ string)
+
+setHeight height hash = pad 8 (intToHex height) ++ drop 8 hash
+
+makeKey :: forall v. (Show v) =>
+            v ->
+            Set (Tree String v) ->
+            String
         
-hash content children =
-  hashStrings $ Cons (show content) $ (foldr Cons Nil children)
+makeKey content children =
+   setHeight (1 + height' childKeys)
+   $ hashStrings
+   $ Cons (show content) childKeys
+   
+   where childKeys =
+           foldr (\tree result -> Cons (key tree) result) Nil children
 
 tree :: forall k v.
         k ->
@@ -71,7 +82,7 @@ make :: forall v. (Show v) =>
         Set (Tree String v) ->
         Tree String v
         
-make content children = tree (hash' content children) content children
+make content children = tree (makeKey content children) content children
 
 leaf :: forall v. (Show v) =>
         v ->

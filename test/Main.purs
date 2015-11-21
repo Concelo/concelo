@@ -13,6 +13,7 @@ import Data.Set (Set())
 import Data.List (List(Cons, Nil), (:))
 import Data.Monoid (Monoid)
 import qualified Data.Set as S
+import Data.Either (Either(Left, Right))
 import Control.Monad.Eff (Eff())
 import Control.Monad.Eff.Ref (REF())
 import Test.Unit (assert, Assertion(), runTest, test)
@@ -43,15 +44,20 @@ sync :: forall v e. (Show v, Eq v, Monoid v) =>
         Tree String v ->
         Assertion e
 
-sync tree = 
-  checkReceived tree result
+sync tree =
+  case result of
+    Left error -> fail error
+    Right subscriber -> checkReceived tree subscriber
   
   where iterate publisher result =
-          case Pub.next publisher of
-            Next update publisher ->
-              iterate publisher $ Sub.apply update result
+          if Pub.consistent publisher then
+            case Pub.next publisher of
+              Next update publisher ->
+                iterate publisher $ Sub.apply update result
               
-            End -> result
+              End -> Right result else
+
+            Left "inconsistent publisher"
 
         result = iterate
           (Pub.publish (Pub.make T.empty) tree)
@@ -92,42 +98,6 @@ intermediate = T.make "intermediate" $ S.insert leaf1 $ S.singleton leaf2
 root = T.make "root" $ S.insert leaf3 $ S.singleton intermediate
 
 tests = do
-  test "remove nonexistent leaf from leaves" do
-    let set = S.insert (T.key leaf3) $ S.singleton (T.key leaf1)
-    assertEqual
-      (Pub.removeAck "nonexistent" set root)
-      set
-
-  test "remove leaf from leaves" do
-    let set = S.insert (T.key leaf3) $ S.singleton (T.key leaf1)    
-    assertEqual
-      (Pub.removeAck (T.key leaf3) set root)
-      (S.singleton (T.key leaf1))
-
-  test "remove nonexistent leaf from tree" do
-    let set = S.singleton (T.key root)
-    assertEqual
-      (Pub.removeAck "nonexistent" set root)
-      set
-
-  test "remove leaf from tree" do
-    let set = S.singleton (T.key root)
-    assertEqual
-      (Pub.removeAck (T.key leaf2) set root)
-      (S.insert (T.key leaf3)
-       $ S.insert (T.key intermediate)
-       $ S.insert (T.key root)
-       $ S.singleton (T.key leaf1))
-
-  test "remove root from tree" do
-    let set = S.singleton (T.key root)
-    assertEqual
-      (Pub.removeAck (T.key root) set root)
-      (S.insert (T.key leaf3)
-       $ S.insert (T.key intermediate)
-       $ S.insert (T.key leaf2)
-       $ S.singleton (T.key leaf1))
-  
   test "sync leaf" do
     sync leaf1
     
@@ -136,53 +106,41 @@ tests = do
     
   test "build leaf from updates" do
     expectReceived leaf1
-      $ Add (T.value leaf1) S.empty
-      : Add (T.value leaf2) S.empty
-      : NewRoot (T.key leaf1)
+      $ Pub.add leaf1
+      : Pub.add leaf2
+      : Pub.newRoot leaf1
       : Nil
 
   test "build tree from updates" do
     expectReceived root
-      $ Add (T.value leaf3) S.empty
-      : Add (T.value leaf2) S.empty
-      : Add (T.value leaf1) S.empty
-      : (Add (T.value intermediate)
-         $ S.insert (T.key leaf2)
-         $ S.singleton (T.key leaf1))
-      : (Add (T.value root)
-         $ S.insert (T.key intermediate)
-         $ S.singleton (T.key leaf3))
-      : NewRoot (T.key root)
+      $ Pub.add leaf3
+      : Pub.add leaf2
+      : Pub.add leaf1
+      : Pub.add intermediate
+      : Pub.add root
+      : Pub.newRoot root
       : Nil
 
   test "build tree from out-of-order updates plus unused update" do
     expectReceived root
-      $ Add (T.value leaf2) S.empty
-      : NewRoot (T.key root)
-      : (Add (T.value intermediate)
-         $ S.insert (T.key leaf2)
-         $ S.singleton (T.key leaf1))
-      : (Add "unused"
+      $ Pub.add leaf2
+      : Pub.newRoot root
+      : Pub.add intermediate
+      : (Add "unused" "unused"
          $ S.insert "nonexistent"
          $ S.singleton (T.key leaf1))
-      : Add (T.value leaf1) S.empty
-      : (Add (T.value root)
-         $ S.insert (T.key intermediate)
-         $ S.singleton (T.key leaf3))
-      : Add (T.value leaf3) S.empty
+      : Pub.add leaf1
+      : Pub.add root
+      : Pub.add leaf3
       : Nil
 
   test "nacks on missing updates" do
     expectNacks (S.insert (T.key leaf2)
                  $ S.singleton (T.key leaf3))
-      $ (Add (T.value leaf1) S.empty)
-      : (Add (T.value intermediate)
-              $ S.insert (T.key leaf2)
-              $ S.singleton (T.key leaf1))
-      : (Add (T.value root)
-              $ S.insert (T.key intermediate)
-              $ S.singleton (T.key leaf3))
-      : NewRoot (T.key root)
+      $ Pub.add leaf1
+      : Pub.add intermediate
+      : Pub.add root
+      : Pub.newRoot root
       : Nil
 
 main = do

@@ -32,7 +32,7 @@ data Next k v
   = Next k (Subscriber k v)
   | End
 
-instance showSubscriber :: (Show k, Show v) => Show (Subscriber k v) where
+instance showSubscriber :: (Show v) => Show (Subscriber String v) where
   show (Subscriber subscriber) =
     "subscriber root " ++ show subscriber.root
     ++ " received " ++ show subscriber.received
@@ -71,12 +71,12 @@ apply :: forall v. (Show v) =>
          Subscriber String v ->
  Subscriber String v
          
-apply (Add content children) (Subscriber s) =
+apply (Add key content children) (Subscriber s) =
   case s.newRoot of
     Just newRoot -> apply (NewRoot newRoot) result
     Nothing -> result
 
-  where spec' = TS.make content children
+  where spec' = TS.make key content children
         
         addIfNack key nacks =
           if M.member key s.received then

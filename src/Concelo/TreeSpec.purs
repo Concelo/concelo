@@ -28,13 +28,14 @@ instance showTreeSpec :: (Show k, Show v) => Show (TreeSpec k v) where
     " " ++ show s.value ++
     " " ++ show (map (take 7 <<< show) $ S.toList s.children) ++ ")"
 
-make :: forall v. (Show v) =>
+make :: forall k v. (Show v) =>
+        k ->
         v ->
-        Set String ->
-        TreeSpec String v
+        Set k ->
+        TreeSpec k v
 
-make content children = TreeSpec
-  { key: T.hash content children
+make key content children = TreeSpec
+  { key: key
   , value: content
   , children: children }
 
