@@ -10,14 +10,13 @@ module Concelo.Tree
   , fold
   , empty ) where
 
-import Prelude (Eq, eq, Ord, compare, Show, show, ($), (++), (<<<), (<=), (+),
-                (-), otherwise)
+import Prelude (Eq, eq, Ord, compare, Show, show, ($), (++), (<=), (+),
+                otherwise)
 import Data.Set (Set())
 import qualified Data.Set as S
 import Data.List (List(Cons, Nil))
 import Data.Foldable (foldr)
 import Data.Monoid (Monoid, mempty)
-import Data.Maybe (Maybe(Just, Nothing))
 import Data.String (take, drop, length, null)
 
 data Tree k v = Tree k v (Set (Tree k v))

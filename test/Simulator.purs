@@ -1,23 +1,22 @@
 module Test.Simulator (tests) where
 
-import Concelo.Publisher (Publisher(), Update(Add, NewRoot))
+import Concelo.Publisher (Publisher())
 import qualified Concelo.Publisher as Pub
 import Concelo.Subscriber (Subscriber())
 import qualified Concelo.Subscriber as Sub
 import Concelo.Tree (Tree())
 import qualified Concelo.Tree as T
 import Prelude (($), (+), (-), (++), unit, (==), (<=), bind, return, Unit(),
-                mod, otherwise, (<<<), Show, show, (>))
+                mod, otherwise, Show, show, (>))
 import Data.Foldable (foldr)
 import Data.List (List(Cons, Nil), (:))
 import qualified Data.List as L
 import Data.Sequence (Seq())
 import qualified Data.Sequence as Q
-import Data.Set (Set())
 import qualified Data.Set as S
 import Data.Tuple (Tuple(Tuple))
 import Data.Maybe (Maybe(Just, Nothing))
-import Data.String (take, drop)
+import Data.String (drop)
 import Test.Unit (Assertion(), test, assert)
 import Test.QuickCheck.Arbitrary (Arbitrary, arbitrary )
 import Test.QuickCheck.LCG (Seed(), mkSeed, runSeed, lcgNext)
@@ -37,7 +36,9 @@ arbitraryTree maxChildCount = do
   return $ T.make value $ S.fromList children
 
 data Task
-  = Send
+  = SendFirst
+  | SendLast
+  | DropFirst
   | Reconnect
   | Flush
   | Publish
@@ -45,7 +46,9 @@ data Task
   | QueueNack
 
 instance showTask :: Show Task where
-  show Send = "send"
+  show SendFirst = "sendFirst"
+  show SendLast = "sendLast"
+  show DropFirst = "dropFirst"
   show Reconnect = "reconnect"
   show Flush = "flush"
   show Publish = "publish"
@@ -122,64 +125,24 @@ pickNumber min max generator =
   { value: (mod (runSeed generator) (max - min + 1)) + min
   , generator: lcgNext generator }
 
-type MessageResult =
-  { message :: Maybe Message
-  , messages :: Seq Message
-  , generator :: Seed }
+apply SendFirst state@(State s) =
+  Iterate case Q.uncons s.messages of
+    Just (Tuple (Message head) tail) ->
+      head.deliver $ State s { messages = tail }
+      
+    Nothing -> state
 
-pickMessage :: Seq Message ->
-               Seed ->
-               MessageResult
+apply SendLast state@(State s) =
+  Iterate case Q.unsnoc s.messages of
+    Just (Tuple head (Message tail)) ->
+      tail.deliver $ State s { messages = head }
+      
+    Nothing -> state
 
-pickMessage messages generator =
-  case Q.uncons messages of
-    Just (Tuple first afterFirst) ->
-      case Q.uncons afterFirst of
-        Just (Tuple second afterSecond) ->
-          let reorder = pickNumber 0 9 generator in
-          { message: Just if reorder.value == 0 then
-                            log "pick second" \_-> second else
-                            first
-          , messages: if reorder.value == 0 then
-                        Q.cons first afterSecond else
-                        afterFirst
-          , generator: reorder.generator }
-
-        Nothing ->
-          { message: Just first
-          , messages: afterFirst
-          , generator: generator }
-
-    Nothing ->
-      { message: Nothing
-      , messages: messages
-      , generator: generator }
-
-maybeDrop :: MessageResult ->
-             MessageResult
-
-maybeDrop picked =
-  picked { message =
-              case picked.message of
-                Just m ->
-                  if drop.value == 0 then
-                    log ("drop " ++ show m) \_-> Nothing else
-                    log ("pick " ++ show m) \_-> Just m
-
-                Nothing -> Nothing
-                
-         , generator = drop.generator }
-
-  where drop = pickNumber 0 9 picked.generator
-
-apply Send (State state) =
-  Iterate case result.message of
-    Just (Message m) -> m.deliver state'
-    Nothing -> state'
-
-  where result = maybeDrop $ pickMessage state.messages state.generator
-        state' = State state { generator = result.generator
-                             , messages = result.messages }
+apply DropFirst state@(State s) =
+  Iterate case Q.uncons s.messages of
+    Just (Tuple _ tail) -> State s { messages = tail }
+    Nothing -> state
 
 apply Flush state = log "\n** flush" \_-> 
   iterate state 1000
@@ -200,20 +163,19 @@ apply Flush state = log "\n** flush" \_->
 
           | otherwise =
             let task = head s.tasks
-                state' = State s { tasks = tail s.tasks } in
+                state' = State s { tasks = tail s.tasks }
+                skip Publish = true
+                skip Reconnect = true
+                skip Flush = true
+                skip _ = false in
 
             -- log ("  flush task " ++ show task) \_->
-            case task of
-              Publish -> iterate state' try
-              Reconnect -> iterate state' try
-              Flush -> iterate state' try              
-              _ ->
-                let result = apply task state' in
-                case result of
-                  Iterate state'' ->
-                    iterate state'' (try - 1)
-                      
-                  _ -> result
+            if skip task then
+              iterate state' try else
+              let result = apply task state' in
+              case result of
+                Iterate state'' -> iterate state'' (try - 1)
+                _ -> result
 
 apply Reconnect state@(State s) = log "\n** reconnect" \_-> 
   iterate (State s { generator = delay.generator }) delay.value
@@ -230,19 +192,20 @@ apply Reconnect state@(State s) = log "\n** reconnect" \_->
 
           | otherwise =
             let task = head s.tasks
-                state' = State s { tasks = tail s.tasks } in
+                state' = State s { tasks = tail s.tasks }
+                skip SendFirst = true
+                skip SendLast = true
+                skip DropFirst = true
+                skip Flush = true
+                skip Reconnect = true
+                skip _ = false in
             
-            case task of
-              Send -> iterate state' delay
-              Flush -> iterate state' delay
-              Reconnect -> iterate state' delay              
-              _ ->
-                let result = apply task state' in
-                case result of
-                  Iterate state'' ->
-                    iterate state'' (delay - 1)
-                      
-                  _ -> result
+            if skip task then
+              iterate state' delay else
+              let result = apply task state' in
+              case result of
+                Iterate state'' -> iterate state'' (delay - 1)
+                _ -> result
   
 apply Publish state@(State s) =
   Iterate case s.trees of
@@ -295,11 +258,13 @@ apply QueueNack state@(State s) =
             Sub.End -> state
 
 taskList
-  = Tuple 40 Send
+  = Tuple 30 SendFirst
   : Tuple 20 QueueUpdate
   : Tuple 20 QueueNack
   : Tuple 10 Flush
   : Tuple 10 Publish
+  : Tuple  5 SendLast
+  : Tuple  5 DropFirst
   : Tuple  1 Reconnect
   : Nil
 
@@ -310,7 +275,7 @@ pickTask generator =
   , generator: which.generator }
   
   where which = pickNumber 0 taskTotalWeight generator
-        pick n Nil = Send
+        pick n Nil = SendFirst
         pick n (Cons (Tuple weight task) tail) =
           if n <= weight then task else pick (n - weight) tail
 
@@ -345,6 +310,4 @@ tests seed = do
         ++ show seed ++ ")") do
     check seed 100 run
   
--- todo: divide Send into SendFirst, SendSecond, and DropFirst
--- todo: reduce weight of QueueRoot or bake it into Publisher somehow
 -- todo: divide Publish into PublishArbitrary, PublishSuper, PublishSub, and PublishShared

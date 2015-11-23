@@ -1,21 +1,18 @@
 module Test.Main where
 
-import Concelo.Publisher (Next(Next, End), Publisher(), Update(Add, NewRoot))
+import Concelo.Publisher (Update())
 import qualified Concelo.Publisher as Pub
 import Concelo.Subscriber (Subscriber())
 import qualified Concelo.Subscriber as Sub
 import Concelo.Tree (Tree())
 import qualified Concelo.Tree as T
-import Prelude (($), (++), unit, (==), (/=), bind, show, return, Unit(), Show,
-                Eq, flip)
-import Data.Foldable (foldr, foldl)
+import Prelude (($), (++), (==), bind, show, Show, Eq, flip)
+import Data.Foldable (foldl)
 import Data.Set (Set())
-import Data.List (List(Cons, Nil), (:))
+import Data.List (List(Nil), (:))
 import Data.Monoid (Monoid)
 import qualified Data.Set as S
 import Data.Either (Either(Left, Right))
-import Control.Monad.Eff (Eff())
-import Control.Monad.Eff.Ref (REF())
 import Test.Unit (assert, Assertion(), runTest, test)
 import Test.QuickCheck.LCG (randomSeed, mkSeed)
 
@@ -52,13 +49,13 @@ sync tree =
   where iterate publisher result =
           if Pub.consistent publisher then
             case Pub.next publisher of
-              Next update publisher ->
+              Pub.Next update publisher ->
                 let subscriber = Sub.apply update result in
                 case Sub.next subscriber of
                   Sub.End -> iterate publisher subscriber
                   _ -> Left $ "got nack while syncing " ++ show tree
               
-              End -> Right result else
+              Pub.End -> Right result else
 
             Left "inconsistent publisher"
 
@@ -129,7 +126,7 @@ tests = do
       $ Pub.add leaf2
       : Pub.newRoot root
       : Pub.add intermediate
-      : (Add "unused" "unused"
+      : (Pub.Add "unused" "unused"
          $ S.insert "nonexistent"
          $ S.singleton (T.key leaf1))
       : Pub.add leaf1

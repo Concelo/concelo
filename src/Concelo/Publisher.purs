@@ -11,7 +11,7 @@ module Concelo.Publisher
   , Update(Add, NewRoot)
   , Publisher() ) where
 
-import Prelude (($), (==), otherwise, Ord, compare, Show, show, (++), (<<<))
+import Prelude (($), (==), otherwise, Ord, Show, show, (++))
 import Data.List (List(Cons, Nil), (:))
 import qualified Data.List as L
 import Data.Set (Set())
@@ -21,7 +21,7 @@ import qualified Data.Map as M
 import Data.Maybe (Maybe(Just, Nothing))
 import Data.Foldable (foldr)
 import Data.Monoid (Monoid)
-import Data.String (take, drop, null)
+import Data.String (drop, null)
 import Concelo.Tree (Tree())
 import qualified Concelo.Tree as T
 

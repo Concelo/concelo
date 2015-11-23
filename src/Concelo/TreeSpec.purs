@@ -7,7 +7,7 @@ module Concelo.TreeSpec
 
 import Concelo.Tree (Tree())
 import qualified Concelo.Tree as T
-import Prelude (Ord, compare, Show, show, ($), (++), (<<<), map)
+import Prelude (Ord, Show, show, ($), (++), (<<<), map)
 import Data.Set (Set())
 import qualified Data.Set as S
 import Data.Map (Map())
