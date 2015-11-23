@@ -53,7 +53,10 @@ sync tree =
           if Pub.consistent publisher then
             case Pub.next publisher of
               Next update publisher ->
-                iterate publisher $ Sub.apply update result
+                let subscriber = Sub.apply update result in
+                case Sub.next subscriber of
+                  Sub.End -> iterate publisher subscriber
+                  _ -> Left $ "got nack while syncing " ++ show tree
               
               End -> Right result else
 
@@ -149,4 +152,4 @@ main = do
   runTest do
     tests
 
-    -- Test.Simulator.tests (mkSeed 42) -- seed
+    Test.Simulator.tests (mkSeed 42) -- seed

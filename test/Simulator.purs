@@ -7,7 +7,7 @@ import qualified Concelo.Subscriber as Sub
 import Concelo.Tree (Tree())
 import qualified Concelo.Tree as T
 import Prelude (($), (+), (-), (++), unit, (==), (<=), bind, return, Unit(),
-                mod, otherwise, (<<<), show)
+                mod, otherwise, (<<<), Show, show, (>))
 import Data.Foldable (foldr)
 import Data.List (List(Cons, Nil), (:))
 import qualified Data.List as L
@@ -17,14 +17,18 @@ import Data.Set (Set())
 import qualified Data.Set as S
 import Data.Tuple (Tuple(Tuple))
 import Data.Maybe (Maybe(Just, Nothing))
+import Data.String (take, drop)
 import Test.Unit (Assertion(), test, assert)
 import Test.QuickCheck.Arbitrary (Arbitrary, arbitrary )
 import Test.QuickCheck.LCG (Seed(), mkSeed, runSeed, lcgNext)
-import Test.QuickCheck.Gen (chooseInt, listOf)
-import Test.QuickCheck (Testable, quickCheckPure)
+import Test.QuickCheck.Gen (chooseInt, listOf, evalGen)
+import Test.QuickCheck (Testable)
 import qualified Test.QuickCheck as QC
 
 foreign import trace :: forall a. String -> (Unit -> a) -> a
+
+--foreign import log :: forall a. String -> (Unit -> a) -> a
+log _ continuation = continuation unit
 
 arbitraryTree maxChildCount = do
   value :: String <- arbitrary
@@ -39,6 +43,14 @@ data Task
   | Publish
   | QueueUpdate
   | QueueNack
+
+instance showTask :: Show Task where
+  show Send = "send"
+  show Reconnect = "reconnect"
+  show Flush = "flush"
+  show Publish = "publish"
+  show QueueUpdate = "queueUpdate"
+  show QueueNack = "queueNack"
 
 data Result
   = Iterate State
@@ -62,12 +74,20 @@ instance arbitrarySimulation :: Arbitrary Simulation where
                         , tasks: tasks
                         , seed: seed }
 
+data Message = Message
+  { deliver :: State -> State
+  , show :: Unit -> String }
+
+instance showMessage :: Show Message where
+  show (Message m) = m.show unit
+
 data State = State
   { trees :: List (Tree String String)
   , tasks :: Tasks
-  , messages :: Seq (State -> State)
+  , messages :: Seq Message
   , publisher :: Publisher String String
   , subscriber :: Subscriber String String
+  , resendCounter :: Int
   , generator :: Seed }
 
 data Tasks = Tasks Task (Unit -> Tasks)
@@ -88,15 +108,28 @@ check :: forall e p. (Testable p) =>
          Assertion e
 
 check seed count property =
-  assertSuccess $ quickCheckPure seed count property
+  iterate seed count
 
-  where assertSuccess Nil = succeed
-        assertSuccess (Cons (QC.Failed message) _) = fail message
-        assertSuccess (Cons _ results) = assertSuccess results
+  where iterate seed count
+          | count <= 0 = succeed
+
+          | otherwise =
+            case evalGen (QC.test property) { newSeed: seed, size: 10 } of
+              QC.Failed message -> fail message
+              QC.Success -> iterate (lcgNext seed) (count - 1)
 
 pickNumber min max generator =
   { value: (mod (runSeed generator) (max - min + 1)) + min
   , generator: lcgNext generator }
+
+type MessageResult =
+  { message :: Maybe Message
+  , messages :: Seq Message
+  , generator :: Seed }
+
+pickMessage :: Seq Message ->
+               Seed ->
+               MessageResult
 
 pickMessage messages generator =
   case Q.uncons messages of
@@ -104,7 +137,9 @@ pickMessage messages generator =
       case Q.uncons afterFirst of
         Just (Tuple second afterSecond) ->
           let reorder = pickNumber 0 9 generator in
-          { message: Just if reorder.value == 0 then second else first
+          { message: Just if reorder.value == 0 then
+                            log "pick second" \_-> second else
+                            first
           , messages: if reorder.value == 0 then
                         Q.cons first afterSecond else
                         afterFirst
@@ -120,39 +155,54 @@ pickMessage messages generator =
       , messages: messages
       , generator: generator }
 
+maybeDrop :: MessageResult ->
+             MessageResult
+
 maybeDrop picked =
-  picked { message = if drop.value == 0 then Nothing else picked.message
+  picked { message =
+              case picked.message of
+                Just m ->
+                  if drop.value == 0 then
+                    log ("drop " ++ show m) \_-> Nothing else
+                    log ("pick " ++ show m) \_-> Just m
+
+                Nothing -> Nothing
+                
          , generator = drop.generator }
 
   where drop = pickNumber 0 9 picked.generator
 
 apply Send (State state) =
   Iterate case result.message of
-    Just message -> message state'
+    Just (Message m) -> m.deliver state'
     Nothing -> state'
 
   where result = maybeDrop $ pickMessage state.messages state.generator
         state' = State state { generator = result.generator
                              , messages = result.messages }
 
-apply Flush state =
+apply Flush state = log "\n** flush" \_-> 
   iterate state 1000
 
   where iterate state@(State s) try
           | Sub.root s.subscriber == Pub.root s.publisher =
             if Pub.consistent s.publisher then
-               if L.null s.trees then
-                 Done else
-                 Iterate state else
-            Error "inconsistent publisher"
+              if L.null s.trees then
+                log "  done **" \_-> Done else
+                log "  end flush **" \_-> Iterate state else
+              Error $ "inconsistent " ++ show s.publisher
             
-          | try <= 0 =
-            Error "flush failed"
+          | try <= 0 = log "  epic fail **" \_->
+            Error $ "flush failed: subscriber has "
+            ++ show (Sub.root s.subscriber)
+            ++ "; publisher has "
+            ++ show (Pub.root s.publisher)
 
           | otherwise =
             let task = head s.tasks
                 state' = State s { tasks = tail s.tasks } in
-            
+
+            -- log ("  flush task " ++ show task) \_->
             case task of
               Publish -> iterate state' try
               Reconnect -> iterate state' try
@@ -165,7 +215,7 @@ apply Flush state =
                       
                   _ -> result
 
-apply Reconnect state@(State s) =
+apply Reconnect state@(State s) = log "\n** reconnect" \_-> 
   iterate (State s { generator = delay.generator }) delay.value
 
   where delay = pickNumber 10 1000 s.generator
@@ -196,13 +246,13 @@ apply Reconnect state@(State s) =
   
 apply Publish state@(State s) =
   Iterate case s.trees of
-    Cons tree trees ->
+    Cons tree trees -> log ("publish " ++ show tree) \_->
       State s { publisher = Pub.publish s.publisher tree
               , trees = trees }
 
     Nil -> state
 
-apply QueueUpdate state@(State s) =
+apply QueueUpdate (State s) =
   Iterate $ send s.publisher
 
   where receive update (State s) =
@@ -211,10 +261,21 @@ apply QueueUpdate state@(State s) =
         send publisher =
           case Pub.next publisher of
             Pub.Next update publisher ->
+              let message = Message { deliver: receive update
+                                    , show: \_-> show update } in
+              log ("queue " ++ show message) \_->
               State s { publisher = publisher
-                      , messages = Q.snoc s.messages (receive update) }
+                      , messages = Q.snoc s.messages message }
 
-            Pub.End -> state
+            Pub.End ->
+              if s.resendCounter > 10 then
+                let update = Pub.newRoot $ Pub.root publisher
+                    message = Message { deliver: receive update
+                                      , show: \_-> show update } in
+                log ("queue " ++ show message) \_->
+                State s { messages = Q.snoc s.messages message
+                        , resendCounter = 0 } else
+                State s { resendCounter = s.resendCounter + 1 }
 
 apply QueueNack state@(State s) =
   Iterate $ send s.subscriber
@@ -225,8 +286,11 @@ apply QueueNack state@(State s) =
         send subscriber =
           case Sub.next subscriber of
             Sub.Next nack subscriber ->
+              let message = Message { deliver: receive nack
+                                    , show: \_-> "nack " ++ drop 56 nack } in
+              log ("queue " ++ show message) \_->
               State s { subscriber = subscriber
-                      , messages = Q.snoc s.messages (receive nack) }
+                      , messages = Q.snoc s.messages message }
 
             Sub.End -> state
 
@@ -261,12 +325,13 @@ head (Tasks task _) = task
 
 tail (Tasks _ next) = next unit
         
-run (Simulation s) =
+run (Simulation s) = log "\n\n *** begin simulation *** \n" \_->
   iterate $ State { trees: s.trees
                   , tasks: s.tasks
                   , messages: Q.empty
                   , publisher: Pub.make T.empty
                   , subscriber: Sub.make T.empty
+                  , resendCounter: 0
                   , generator: mkSeed s.seed }
 
   where iterate state@(State s) =
@@ -276,7 +341,10 @@ run (Simulation s) =
             Done -> QC.Success
                     
 tests seed = do
-  test ("sync random trees with packet loss and reconnects (seed "
+  test ("sync random trees with packet loss and reconnects ("
         ++ show seed ++ ")") do
-    check seed 10 run
+    check seed 100 run
   
+-- todo: divide Send into SendFirst, SendSecond, and DropFirst
+-- todo: reduce weight of QueueRoot or bake it into Publisher somehow
+-- todo: divide Publish into PublishArbitrary, PublishSuper, PublishSub, and PublishShared

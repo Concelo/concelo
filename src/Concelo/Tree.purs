@@ -4,6 +4,7 @@ module Concelo.Tree
   , value
   , tree
   , children
+  , showSet
   , make
   , leaf
   , fold
@@ -17,7 +18,7 @@ import Data.List (List(Cons, Nil))
 import Data.Foldable (foldr)
 import Data.Monoid (Monoid, mempty)
 import Data.Maybe (Maybe(Just, Nothing))
-import Data.String (take, drop, length)
+import Data.String (take, drop, length, null)
 
 data Tree k v = Tree k v (Set (Tree k v))
 
@@ -27,11 +28,18 @@ instance eqTree :: (Eq k) => Eq (Tree k v) where
 instance ordTree :: (Ord k) => Ord (Tree k v) where
   compare a b = compare (key a) (key b)  
 
-instance showTree :: (Show v) => Show (Tree String v) where
+showSet :: forall v.
+                Set (Tree String v) ->
+                String
+
+showSet set =
+  "(" ++ (foldr (\t s -> show t ++ if null s then s else ", " ++ s)
+          "" set) ++ ")"
+
+instance showTree :: Show (Tree String v) where
   show (Tree key value children) =
-    "(" ++ take 16 key ++
-    " " ++ show value ++
-    " " ++ show children ++ ")"
+    "[" ++ drop 56 key ++
+    " " ++ showSet children ++ "]"
 
 key (Tree k _ _) = k
 

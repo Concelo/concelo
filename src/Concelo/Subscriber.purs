@@ -89,9 +89,7 @@ apply (Add key content children) (Subscriber s) =
             S.delete (TS.key spec') $ foldr addIfNack s.nacks children }
             
 apply (NewRoot root) (Subscriber s) =
-  if M.member root s.received then
-    case TS.toTree root s.received of
-      Just tree -> make tree
-      Nothing -> Subscriber s { newRoot = Just root } else
-    Subscriber s { nacks = S.insert root s.nacks
-                 , newRoot = Just root }
+  case TS.toTree root s.received of
+    Right tree -> make tree
+    Left nacks -> Subscriber s { nacks = S.union nacks s.nacks
+                               , newRoot = Just root }

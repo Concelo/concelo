@@ -14,6 +14,7 @@ import Data.Map (Map())
 import qualified Data.Map as M
 import Data.List (List(Cons, Nil))
 import Data.Maybe (Maybe(Just, Nothing))
+import Data.Either (Either(Left, Right))
 import Data.Foldable (foldr)
 import Data.String (take)
 
@@ -52,21 +53,27 @@ toSpec tree = TreeSpec
 toTree :: forall k v. (Ord k) =>
           k ->
           Map k (TreeSpec k v) ->
-          Maybe (Tree k v)
+          Either (Set k) (Tree k v)
 
 toTree root specs =
   resolve root
 
   where resolve key = case M.lookup key specs of
-          Just (TreeSpec s) -> case iterate (S.toList s.children) S.empty of
-            Just trees -> Just $ T.tree s.key s.value trees
-            Nothing -> Nothing
-          Nothing -> Nothing
+          Just (TreeSpec s) ->
+            case iterate (S.toList s.children) (Right S.empty) of
+              Right trees -> Right $ T.tree s.key s.value trees
+              Left nacks -> Left nacks
+          Nothing -> Left $ S.singleton key
           
-        iterate (Cons key keys) trees = case resolve key of
-          Just tree -> iterate keys $ S.insert tree trees
-          Nothing -> Nothing
+        iterate (Cons key keys) result =
+          iterate keys case resolve key of
+            Right tree -> case result of
+              Right trees -> Right $ S.insert tree trees
+              left -> left
+            Left newNacks -> case result of
+              Right trees -> Left newNacks
+              Left oldNacks -> Left $ S.union newNacks oldNacks
           
-        iterate Nil trees = Just trees
+        iterate Nil result = result
 
 key (TreeSpec s) = s.key

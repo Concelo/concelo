@@ -21,7 +21,7 @@ import qualified Data.Map as M
 import Data.Maybe (Maybe(Just, Nothing))
 import Data.Foldable (foldr)
 import Data.Monoid (Monoid)
-import Data.String (take)
+import Data.String (take, drop, null)
 import Concelo.Tree (Tree())
 import qualified Concelo.Tree as T
 
@@ -32,16 +32,44 @@ data Publisher k v = Publisher
   , nackList :: List (Tree k v)
   , newRoot :: Boolean }
 
+showKeys :: forall v.
+            Map String v ->
+            String
+
+showKeys map =
+  "(" ++ (foldr (\k s -> drop 56 k ++ if null s then s else ", " ++ s)
+          "" $ M.keys map) ++ ")"
+
+instance showPublisher :: Show (Publisher String v) where
+  show (Publisher p) =
+    let root = T.fold S.insert S.empty p.root
+        maps = foldr S.insert S.empty $ M.union p.acks p.nacks
+        rootButNotMaps = S.difference root maps
+        mapsButNotRoot = S.difference maps root
+        inconsistent =
+          (if S.isEmpty rootButNotMaps then "" else
+             " in root but not maps: " ++ T.showSet rootButNotMaps) ++
+          (if S.isEmpty mapsButNotRoot then "" else
+             " in maps but not root: " ++ T.showSet mapsButNotRoot) in
+
+    "publisher acks " ++ showKeys p.acks ++ " nacks "
+    ++ showKeys p.nacks ++ " root "
+    ++ show p.root
+    ++ inconsistent
+
 data Update k v
   = Add k v (Set k)
   | NewRoot k
 
-instance showUpdate :: (Show k, Show v) => Show (Update k v) where
+instance showUpdate :: (Show v) => Show (Update String v) where
   show (Add k v children) =
-    "add " ++ (take 7 <<< show) k ++ show v ++ " " ++ show children
+    "add " ++ drop 56 k ++ " ("
+    ++ foldr (\k s -> (drop 56 k) ++ if null s then s else ", " ++ s)
+    "" children
+    ++ ")"
     
   show (NewRoot k) =
-    "new root " ++ (take 7 <<< show) k
+    "new root " ++ drop 56 k
 
 data Next k v
   = Next (Update k v) (Publisher k v)
@@ -95,6 +123,13 @@ make root =
             , nackList: Nil
             , newRoot: true }
 
+findOld :: forall v r.
+           (Tree String v -> r -> r) ->
+           (Tree String v -> Boolean) ->
+           Tree String v ->
+           r ->
+           r
+
 findOld onOld isInNext previous result =
   visit previous result
 
@@ -103,13 +138,13 @@ findOld onOld isInNext previous result =
           | otherwise =
             foldr visit (onOld previous result) $ T.children previous
 
-findNewAndOld :: forall k v r. (Ord k) =>
-                 (Tree k v -> r -> r) ->
-                 (Tree k v -> r -> r) ->
-                 (Tree k v -> Boolean) ->
+findNewAndOld :: forall v r.
+                 (Tree String v -> r -> r) ->
+                 (Tree String v -> r -> r) ->
+                 (Tree String v -> Boolean) ->
                  r ->
-                 Tree k v ->
-                 Tree k v ->
+                 Tree String v ->
+                 Tree String v ->
                  r
 
 findNewAndOld onNew onOld isInPrevious result previous next =
@@ -117,15 +152,16 @@ findNewAndOld onNew onOld isInPrevious result previous next =
 
   where state = visit next { found: S.empty, result: result }
         visit next state
-          | isInPrevious next = state { found = S.insert next state.found }
+          | isInPrevious next =
+            state { found = S.insert next state.found }
           | otherwise =
             foldr visit state { result = onNew next state.result }
             $ T.children next
 
-publish :: forall k v. (Ord k) =>
-           Publisher k v ->
-           Tree k v ->
-           Publisher k v
+publish :: forall v.
+           Publisher String v ->
+           Tree String v ->
+           Publisher String v
 
 publish publisher@(Publisher p) root
   | p.root == root = publisher
@@ -145,8 +181,8 @@ publish publisher@(Publisher p) root
                    , nacks: M.delete (T.key old) maps.nacks })
                  
                  (\tree ->
-                   if M.member (T.key tree) p.acks then
-                     M.member (T.key tree) p.nacks else false)
+                   if M.member (T.key tree) p.acks then true else
+                     M.member (T.key tree) p.nacks)
                  
                  { acks: p.acks
                  , nacks: p.nacks }
