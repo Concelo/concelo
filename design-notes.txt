@@ -1,0 +1,56 @@
+synchronization layer
+
+content: (opaque at this layer, but transparent to application layer)
+  set of key/value pairs, encrypted en mass with a single key (which means they must share the same set of authorized readers)
+  hash of key used to encrypt
+
+chunk:
+  immutable unique name
+  immutable content (fixed size, e.g. 8KB)
+  immutable signature of writer
+
+snapshot:
+  immutable set of chunks
+  immutable set of encrypted keys (one for each applicable key/reader combination) as chunks
+  immutable signature of writer
+
+channel:
+  immutable unique name
+  mutable set of authorized writers (don't need to track authorized readers since only those who can prove they can decrypt a given chunk will be sent it)
+  mutable map of writers to snapshots
+
+user:
+  public/private keypair
+
+
+application layer (firebase)
+
+The webapp includes its rules JSON as part of its static content (e.g. in a .js file) and uses it to determine lists of authorized readers and writers for each key/value pair added/updated/deleted in a given incoming or outgoing diff.
+
+For incoming diffs, each change is validated and authenticated according to the rules and the identity of the publisher.  If any rule is violated, or authentication fails, the diff is discarded.
+
+For outgoing diffs, each change is encrypted with a key specific to the set of authorized readers for that node.  If such a key does not yet exist, it is created, encrypted separately for each reader, and included as part of the snapshot.
+
+Note that when a new reader is added to an existing list of readers, it may be possible to continue using the existing key if that key is not also used for content off limits to the new reader.  However, if a reader is removed from the list, a new key must be generated (or a more restricted existing key selected), and it may also be desireable to re-encrypt content which used the obsolete key.
+
+Diffs are serialized as chunks by grouping them by encryption key and dividing each group into a minimum set of chunks required to update the subscriber.  These chunks are sent to the subscriber, followed by a signed manifest of chunks and key IDs representing the snapshot (with new chunks added and obsolete chunks removed).
+
+
+events
+
+auth request #n result or error
+
+write request #n complete (server acknowledged) or error
+
+transaction request #n result (peer acknowledged, possible error, snapshot of result regardless of success)
+
+query #n diff (from local or remote write) or error (e.g. permission)
+
+onDisconnect write patch request #n complete (server acknowledged) or error
+
+
+consistency
+
+Server enforces a global order for updates, and each update has a prerequisite such that it is only accepted if it immediately follows its prerequisite in the global order.  This make every update atomic.  Clients trust but verify by checking that updates have arrived in an order consistent with the prerequisite chain.
+
+The server is free to choose any order that creates a valid prerequisite chain, but it can't change its mind later without clients detecting it.  If it's sneaky, it can send different orders to different consumers by forking when there's more than one "simultaneous" write, but that just amounts to creating an artificial partition, which is already possible via selective delivery of updates.

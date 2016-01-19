@@ -1,0 +1,1025 @@
+{-# LINE 1 "/tmp/ghc9256_3/ghc_9.s" #-}
+.data
+	.align 4
+.align 1
+.globl __stginit_DatabaseziConceloziIgnis
+.type __stginit_DatabaseziConceloziIgnis, @object
+__stginit_DatabaseziConceloziIgnis:
+.data
+	.align 4
+.align 1
+.globl DatabaseziConceloziIgnis_ignisPointer_closure
+.type DatabaseziConceloziIgnis_ignisPointer_closure, @object
+DatabaseziConceloziIgnis_ignisPointer_closure:
+	.long	DatabaseziConceloziIgnis_ignisPointer_info
+.text
+	.align 4,0x90
+	.long	65541
+	.long	0
+	.long	15
+.globl DatabaseziConceloziIgnis_ignisPointer_info
+.type DatabaseziConceloziIgnis_ignisPointer_info, @object
+DatabaseziConceloziIgnis_ignisPointer_info:
+.Lc3g5:
+	movl 8(%ebx),%eax
+	leal -4(%ebp),%ecx
+	cmpl 840(%ebx),%ecx
+	jb .Lc3g6
+.Lc3g7:
+	movl $c3g2_info,-4(%ebp)
+	movl %eax,%esi
+	addl $-4,%ebp
+	testw $7,%si
+	jne .Lc3g2
+.Lc3g3:
+	jmp *(%esi)
+.text
+	.align 4,0x90
+	.long	0
+	.long	32
+c3g2_info:
+.Lc3g2:
+	movl 3(%esi),%esi
+	andl $-8,%esi
+	addl $4,%ebp
+	jmp *(%esi)
+.Lc3g6:
+	movl %eax,8(%ebx)
+	movl $DatabaseziConceloziIgnis_ignisPointer_closure,%esi
+	jmp *-8(%ebx)
+	.size DatabaseziConceloziIgnis_ignisPointer_info, .-DatabaseziConceloziIgnis_ignisPointer_info
+.data
+	.align 4
+.align 1
+.globl DatabaseziConceloziIgnis_ignisConnection_closure
+.type DatabaseziConceloziIgnis_ignisConnection_closure, @object
+DatabaseziConceloziIgnis_ignisConnection_closure:
+	.long	DatabaseziConceloziIgnis_ignisConnection_info
+.text
+	.align 4,0x90
+	.long	65541
+	.long	0
+	.long	15
+.globl DatabaseziConceloziIgnis_ignisConnection_info
+.type DatabaseziConceloziIgnis_ignisConnection_info, @object
+DatabaseziConceloziIgnis_ignisConnection_info:
+.Lc3gr:
+	movl 8(%ebx),%eax
+	leal -4(%ebp),%ecx
+	cmpl 840(%ebx),%ecx
+	jb .Lc3gs
+.Lc3gt:
+	movl $c3go_info,-4(%ebp)
+	movl %eax,%esi
+	addl $-4,%ebp
+	testw $7,%si
+	jne .Lc3go
+.Lc3gp:
+	jmp *(%esi)
+.text
+	.align 4,0x90
+	.long	0
+	.long	32
+c3go_info:
+.Lc3go:
+	movl 7(%esi),%esi
+	andl $-8,%esi
+	addl $4,%ebp
+	jmp *(%esi)
+.Lc3gs:
+	movl %eax,8(%ebx)
+	movl $DatabaseziConceloziIgnis_ignisConnection_closure,%esi
+	jmp *-8(%ebx)
+	.size DatabaseziConceloziIgnis_ignisConnection_info, .-DatabaseziConceloziIgnis_ignisConnection_info
+.data
+	.align 4
+.align 1
+.globl DatabaseziConceloziIgnis_authUid_closure
+.type DatabaseziConceloziIgnis_authUid_closure, @object
+DatabaseziConceloziIgnis_authUid_closure:
+	.long	DatabaseziConceloziIgnis_authUid_info
+.text
+	.align 4,0x90
+	.long	65541
+	.long	0
+	.long	15
+.globl DatabaseziConceloziIgnis_authUid_info
+.type DatabaseziConceloziIgnis_authUid_info, @object
+DatabaseziConceloziIgnis_authUid_info:
+.Lc3gN:
+	movl 8(%ebx),%eax
+	leal -4(%ebp),%ecx
+	cmpl 840(%ebx),%ecx
+	jb .Lc3gO
+.Lc3gP:
+	movl $c3gK_info,-4(%ebp)
+	movl %eax,%esi
+	addl $-4,%ebp
+	testw $7,%si
+	jne .Lc3gK
+.Lc3gL:
+	jmp *(%esi)
+.text
+	.align 4,0x90
+	.long	0
+	.long	32
+c3gK_info:
+.Lc3gK:
+	movl 3(%esi),%esi
+	andl $-8,%esi
+	addl $4,%ebp
+	jmp *(%esi)
+.Lc3gO:
+	movl %eax,8(%ebx)
+	movl $DatabaseziConceloziIgnis_authUid_closure,%esi
+	jmp *-8(%ebx)
+	.size DatabaseziConceloziIgnis_authUid_info, .-DatabaseziConceloziIgnis_authUid_info
+.data
+	.align 4
+.align 1
+.globl DatabaseziConceloziIgnis_authProvider_closure
+.type DatabaseziConceloziIgnis_authProvider_closure, @object
+DatabaseziConceloziIgnis_authProvider_closure:
+	.long	DatabaseziConceloziIgnis_authProvider_info
+.text
+	.align 4,0x90
+	.long	65541
+	.long	0
+	.long	15
+.globl DatabaseziConceloziIgnis_authProvider_info
+.type DatabaseziConceloziIgnis_authProvider_info, @object
+DatabaseziConceloziIgnis_authProvider_info:
+.Lc3h9:
+	movl 8(%ebx),%eax
+	leal -4(%ebp),%ecx
+	cmpl 840(%ebx),%ecx
+	jb .Lc3ha
+.Lc3hb:
+	movl $c3h6_info,-4(%ebp)
+	movl %eax,%esi
+	addl $-4,%ebp
+	testw $7,%si
+	jne .Lc3h6
+.Lc3h7:
+	jmp *(%esi)
+.text
+	.align 4,0x90
+	.long	0
+	.long	32
+c3h6_info:
+.Lc3h6:
+	movl 7(%esi),%esi
+	andl $-8,%esi
+	addl $4,%ebp
+	jmp *(%esi)
+.Lc3ha:
+	movl %eax,8(%ebx)
+	movl $DatabaseziConceloziIgnis_authProvider_closure,%esi
+	jmp *-8(%ebx)
+	.size DatabaseziConceloziIgnis_authProvider_info, .-DatabaseziConceloziIgnis_authProvider_info
+.data
+	.align 4
+.align 1
+.globl DatabaseziConceloziIgnis_authExpires_closure
+.type DatabaseziConceloziIgnis_authExpires_closure, @object
+DatabaseziConceloziIgnis_authExpires_closure:
+	.long	DatabaseziConceloziIgnis_authExpires_info
+.text
+	.align 4,0x90
+	.long	65541
+	.long	0
+	.long	15
+.globl DatabaseziConceloziIgnis_authExpires_info
+.type DatabaseziConceloziIgnis_authExpires_info, @object
+DatabaseziConceloziIgnis_authExpires_info:
+.Lc3hv:
+	movl 8(%ebx),%eax
+	leal -4(%ebp),%ecx
+	cmpl 840(%ebx),%ecx
+	jb .Lc3hw
+.Lc3hx:
+	movl $c3hs_info,-4(%ebp)
+	movl %eax,%esi
+	addl $-4,%ebp
+	testw $7,%si
+	jne .Lc3hs
+.Lc3ht:
+	jmp *(%esi)
+.text
+	.align 4,0x90
+	.long	0
+	.long	32
+c3hs_info:
+.Lc3hs:
+	movl 11(%esi),%esi
+	andl $-8,%esi
+	addl $4,%ebp
+	jmp *(%esi)
+.Lc3hw:
+	movl %eax,8(%ebx)
+	movl $DatabaseziConceloziIgnis_authExpires_closure,%esi
+	jmp *-8(%ebx)
+	.size DatabaseziConceloziIgnis_authExpires_info, .-DatabaseziConceloziIgnis_authExpires_info
+.data
+	.align 4
+.align 1
+.globl DatabaseziConceloziIgnis_mainzuf1_closure
+.type DatabaseziConceloziIgnis_mainzuf1_closure, @object
+DatabaseziConceloziIgnis_mainzuf1_closure:
+	.long	DatabaseziConceloziIgnis_mainzuf1_info
+	.long	0
+	.long	0
+	.long	0
+.section .rodata
+	.align 4
+.align 1
+c3hW_str:
+	.byte	40
+	.byte	102
+	.byte	117
+	.byte	110
+	.byte	99
+	.byte	116
+	.byte	105
+	.byte	111
+	.byte	110
+	.byte	40
+	.byte	115
+	.byte	44
+	.byte	102
+	.byte	41
+	.byte	123
+	.byte	72
+	.byte	97
+	.byte	115
+	.byte	116
+	.byte	101
+	.byte	91
+	.byte	115
+	.byte	93
+	.byte	32
+	.byte	61
+	.byte	32
+	.byte	102
+	.byte	59
+	.byte	125
+	.byte	41
+	.byte	0
+.text
+	.align 4,0x90
+	.long	0
+	.long	22
+.globl DatabaseziConceloziIgnis_mainzuf1_info
+.type DatabaseziConceloziIgnis_mainzuf1_info, @object
+DatabaseziConceloziIgnis_mainzuf1_info:
+.Lc3hZ:
+	leal -16(%ebp),%eax
+	cmpl 840(%ebx),%eax
+	jb .Lc3ih
+.Lc3ii:
+	subl $4,%esp
+	pushl %esi
+	pushl %ebx
+	call newCAF
+	addl $12,%esp
+	testl %eax,%eax
+	je .Lc3hV
+.Lc3hU:
+	movl $stg_bh_upd_frame_info,-12(%ebp)
+	movl %eax,-8(%ebp)
+	movl $c3hX_info,-16(%ebp)
+	movl $c3hW_str,8(%ebx)
+	addl $-16,%ebp
+	jmp ghczmprim_GHCziCString_unpackCStringzh_info
+.Lc3hV:
+	jmp *(%esi)
+.text
+	.align 4,0x90
+	.long	0
+	.long	32
+c3hX_info:
+.Lc3hX:
+	movl $c3i2_info,(%ebp)
+	jmp toJSStr
+.text
+	.align 4,0x90
+	.long	0
+	.long	32
+c3i2_info:
+.Lc3i2:
+	addl $8,%edi
+	cmpl 856(%ebx),%edi
+	ja .Lc3im
+.Lc3il:
+	movl $ghczmprim_GHCziTypes_Izh_con_info,-4(%edi)
+	movl %esi,(%edi)
+	movl $c3ie_info,(%ebp)
+	movl (%edi),%eax
+	movl 872(%ebx),%ecx
+	movl 20(%ecx),%edx
+	movl %ebp,12(%edx)
+	movl 888(%ebx),%edx
+	movl %eax,64(%esp)
+	leal 4(%edi),%eax
+	movl %eax,8(%edx)
+	movl 100(%ecx),%eax
+	movl %eax,76(%esp)
+	movl 104(%ecx),%eax
+	movl %eax,88(%esp)
+	leal 4(%edi),%eax
+	subl (%edx),%eax
+	xorl %edx,%edx
+	movl %edx,100(%esp)
+	movl 76(%esp),%edx
+	subl %eax,%edx
+	movl 88(%esp),%eax
+	movl %edx,112(%esp)
+	movl 100(%esp),%edx
+	sbbl %edx,%eax
+	movl 112(%esp),%edx
+	movl %edx,100(%ecx)
+	movl %eax,104(%ecx)
+	subl $4,%esp
+	pushl $0
+	pushl %ebx
+	call suspendThread
+	addl $12,%esp
+	subl $8,%esp
+	movl 72(%esp),%ecx
+	pushl %ecx
+	movl %eax,136(%esp)
+	call eval
+	addl $12,%esp
+	subl $8,%esp
+	movl 132(%esp),%ecx
+	pushl %ecx
+	movl %eax,148(%esp)
+	call resumeThread
+	addl $12,%esp
+	movl %eax,%ebx
+	movl 872(%ebx),%eax
+	movl 20(%eax),%ecx
+	movl 12(%ecx),%ebp
+	addl $104,%ecx
+	movl %ecx,840(%ebx)
+	movl $0,904(%ebx)
+	movl 888(%ebx),%ecx
+	movl 8(%ecx),%edx
+	leal -4(%edx),%edi
+	movl %eax,148(%esp)
+	movl (%ecx),%eax
+	movl 48(%ecx),%ecx
+	shll $12,%ecx
+	decl %ecx
+	movl %ecx,160(%esp)
+	movl %eax,%ecx
+	movl %edx,172(%esp)
+	movl 160(%esp),%edx
+	addl %edx,%ecx
+	movl %ecx,856(%ebx)
+	movl 148(%esp),%ecx
+	movl 100(%ecx),%edx
+	movl 104(%ecx),%ecx
+	movl %ecx,184(%esp)
+	movl 172(%esp),%ecx
+	subl %eax,%ecx
+	xorl %eax,%eax
+	addl %ecx,%edx
+	movl 184(%esp),%ecx
+	adcl %eax,%ecx
+	movl 148(%esp),%eax
+	movl %edx,100(%eax)
+	movl %ecx,104(%eax)
+	movl 136(%esp),%eax
+	movl %eax,%esi
+	jmp *(%ebp)
+.text
+	.align 4,0x90
+	.long	0
+	.long	32
+c3ie_info:
+.Lc3ie:
+	addl $8,%edi
+	cmpl 856(%ebx),%edi
+	ja .Lc3iq
+.Lc3ip:
+	movl $base_GHCziPtr_Ptr_con_info,-4(%edi)
+	movl %esi,(%edi)
+	leal -3(%edi),%esi
+	addl $4,%ebp
+	jmp *(%ebp)
+.Lc3ih:
+	jmp *-16(%ebx)
+.Lc3im:
+	movl $8,904(%ebx)
+	jmp stg_gc_unbx_r1
+.Lc3iq:
+	movl $8,904(%ebx)
+	jmp stg_gc_unbx_r1
+	.size DatabaseziConceloziIgnis_mainzuf1_info, .-DatabaseziConceloziIgnis_mainzuf1_info
+.data
+	.align 4
+.align 1
+.globl DatabaseziConceloziIgnis_main1_closure
+.type DatabaseziConceloziIgnis_main1_closure, @object
+DatabaseziConceloziIgnis_main1_closure:
+	.long	DatabaseziConceloziIgnis_main1_info
+	.long	0
+.section .rodata
+	.align 4
+.align 1
+c3jf_str:
+	.byte	105
+	.byte	103
+	.byte	110
+	.byte	105
+	.byte	115
+	.byte	0
+.text
+	.align 4,0x90
+	.long	196623
+	.long	65536
+	.long	11
+s3fI_info:
+.Lc3jA:
+	addl $12,%edi
+	movl 16(%ebx),%eax
+	movl 8(%ebx),%ecx
+	cmpl 856(%ebx),%edi
+	ja .Lc3jE
+.Lc3jD:
+	movl $DatabaseziConceloziIgnis_Ignis_con_info,-8(%edi)
+	movl %ecx,-4(%edi)
+	movl %eax,(%edi)
+	leal -7(%edi),%esi
+	jmp *(%ebp)
+.Lc3jE:
+	movl $12,904(%ebx)
+	movl %eax,16(%ebx)
+	movl %ecx,8(%ebx)
+	jmp *-8(%ebx)
+	.size s3fI_info, .-s3fI_info
+.text
+	.align 4,0x90
+	.long	S3ku_srt-(DatabaseziConceloziIgnis_main1_info)+0
+	.long	65539
+	.long	0
+	.long	196623
+.globl DatabaseziConceloziIgnis_main1_info
+.type DatabaseziConceloziIgnis_main1_info, @object
+DatabaseziConceloziIgnis_main1_info:
+.Lc3jF:
+	leal -12(%ebp),%eax
+	cmpl 840(%ebx),%eax
+	jb .Lc3jR
+.Lc3jS:
+	movl $c3jg_info,-4(%ebp)
+	movl $c3jf_str,8(%ebx)
+	addl $-4,%ebp
+	jmp ghczmprim_GHCziCString_unpackCStringzh_info
+.text
+	.align 4,0x90
+	.long	S3ku_srt-(c3jg_info)+0
+	.long	0
+	.long	65568
+c3jg_info:
+.Lc3jg:
+	movl $c3jk_info,(%ebp)
+	jmp toJSStr
+.text
+	.align 4,0x90
+	.long	S3ku_srt-(c3jk_info)+0
+	.long	0
+	.long	65568
+c3jk_info:
+.Lc3jk:
+	addl $8,%edi
+	cmpl 856(%ebx),%edi
+	ja .Lc3jW
+.Lc3jV:
+	movl $ghczmprim_GHCziTypes_Izh_con_info,-4(%edi)
+	movl %esi,(%edi)
+	leal -3(%edi),%eax
+.Lc3js:
+	addl $8,%edi
+	cmpl 856(%ebx),%edi
+	ja .Lc3jZ
+.Lc3jY:
+	movl 3(%eax),%eax
+	movl $s3fI_info,-4(%edi)
+	movl $c3jO_info,-4(%ebp)
+	movl %eax,(%ebp)
+	addl $-4,%ebp
+	movl 2(%edi),%eax
+	movl 872(%ebx),%ecx
+	movl 20(%ecx),%edx
+	movl %ebp,12(%edx)
+	movl 888(%ebx),%edx
+	movl %eax,220(%esp)
+	leal 4(%edi),%eax
+	movl %eax,8(%edx)
+	movl 100(%ecx),%eax
+	movl %eax,232(%esp)
+	movl 104(%ecx),%eax
+	movl %eax,244(%esp)
+	leal 4(%edi),%eax
+	subl (%edx),%eax
+	xorl %edx,%edx
+	movl %edx,256(%esp)
+	movl 232(%esp),%edx
+	subl %eax,%edx
+	movl 244(%esp),%eax
+	movl %edx,268(%esp)
+	movl 256(%esp),%edx
+	sbbl %edx,%eax
+	movl 268(%esp),%edx
+	movl %edx,100(%ecx)
+	movl %eax,104(%ecx)
+	subl $4,%esp
+	pushl $0
+	pushl %ebx
+	call suspendThread
+	addl $12,%esp
+	subl $4,%esp
+	movl 224(%esp),%ecx
+	pushl %ecx
+	pushl $3
+	movl %eax,292(%esp)
+	call __createJSFunc
+	addl $12,%esp
+	subl $8,%esp
+	movl 288(%esp),%ecx
+	pushl %ecx
+	movl %eax,304(%esp)
+	call resumeThread
+	addl $12,%esp
+	movl %eax,%ebx
+	movl 872(%ebx),%eax
+	movl 20(%eax),%ecx
+	movl 12(%ecx),%ebp
+	addl $104,%ecx
+	movl %ecx,840(%ebx)
+	movl $0,904(%ebx)
+	movl 888(%ebx),%ecx
+	movl 8(%ecx),%edx
+	leal -4(%edx),%edi
+	movl %eax,304(%esp)
+	movl (%ecx),%eax
+	movl 48(%ecx),%ecx
+	shll $12,%ecx
+	decl %ecx
+	movl %ecx,316(%esp)
+	movl %eax,%ecx
+	movl %edx,328(%esp)
+	movl 316(%esp),%edx
+	addl %edx,%ecx
+	movl %ecx,856(%ebx)
+	movl 304(%esp),%ecx
+	movl 100(%ecx),%edx
+	movl 104(%ecx),%ecx
+	movl %ecx,340(%esp)
+	movl 328(%esp),%ecx
+	subl %eax,%ecx
+	xorl %eax,%eax
+	addl %ecx,%edx
+	movl 340(%esp),%ecx
+	adcl %eax,%ecx
+	movl 304(%esp),%eax
+	movl %edx,100(%eax)
+	movl %ecx,104(%eax)
+	movl 292(%esp),%eax
+	movl %eax,%esi
+	jmp *(%ebp)
+.text
+	.align 4,0x90
+	.long	S3ku_srt-(c3jr_info)+0
+	.long	0
+	.long	65568
+c3jr_info:
+.Lc3jr:
+	movl %esi,%eax
+	jmp .Lc3js
+.text
+	.align 4,0x90
+	.long	S3ku_srt-(c3jO_info)+0
+	.long	65
+	.long	65568
+c3jO_info:
+.Lc3jO:
+	movl $c3jQ_info,-4(%ebp)
+	movl %esi,%eax
+	movl $DatabaseziConceloziIgnis_mainzuf1_closure,%esi
+	movl %eax,(%ebp)
+	addl $-4,%ebp
+	testw $7,%si
+	jne .Lc3jQ
+.Lc3k2:
+	jmp *(%esi)
+.text
+	.align 4,0x90
+	.long	194
+	.long	32
+c3jQ_info:
+.Lc3jQ:
+	movl 8(%ebp),%eax
+	movl $c3kb_info,8(%ebp)
+	movl 4(%ebp),%ecx
+	addl $8,%ebp
+	movl 3(%esi),%edx
+	movl %edx,64(%esp)
+	movl 872(%ebx),%edx
+	movl %eax,76(%esp)
+	movl 20(%edx),%eax
+	movl %ebp,12(%eax)
+	movl 888(%ebx),%eax
+	movl %ecx,88(%esp)
+	leal 4(%edi),%ecx
+	movl %ecx,8(%eax)
+	movl 100(%edx),%ecx
+	movl %ecx,100(%esp)
+	movl 104(%edx),%ecx
+	movl %ecx,112(%esp)
+	leal 4(%edi),%ecx
+	subl (%eax),%ecx
+	xorl %eax,%eax
+	movl %eax,124(%esp)
+	movl 100(%esp),%eax
+	subl %ecx,%eax
+	movl 112(%esp),%ecx
+	movl %eax,136(%esp)
+	movl 124(%esp),%eax
+	sbbl %eax,%ecx
+	movl 136(%esp),%eax
+	movl %eax,100(%edx)
+	movl %ecx,104(%edx)
+	subl $4,%esp
+	pushl $0
+	pushl %ebx
+	call suspendThread
+	addl $12,%esp
+	movl 88(%esp),%ecx
+	pushl %ecx
+	movl 80(%esp),%ecx
+	pushl %ecx
+	movl 72(%esp),%ecx
+	pushl %ecx
+	movl %eax,160(%esp)
+	call __app2
+	addl $12,%esp
+	subl $8,%esp
+	movl 156(%esp),%ecx
+	pushl %ecx
+	movl %eax,172(%esp)
+	call resumeThread
+	addl $12,%esp
+	movl %eax,%ebx
+	movl 872(%ebx),%eax
+	movl 20(%eax),%ecx
+	movl 12(%ecx),%ebp
+	addl $104,%ecx
+	movl %ecx,840(%ebx)
+	movl $0,904(%ebx)
+	movl 888(%ebx),%ecx
+	movl 8(%ecx),%edx
+	leal -4(%edx),%edi
+	movl %eax,172(%esp)
+	movl (%ecx),%eax
+	movl 48(%ecx),%ecx
+	shll $12,%ecx
+	decl %ecx
+	movl %ecx,184(%esp)
+	movl %eax,%ecx
+	movl %edx,196(%esp)
+	movl 184(%esp),%edx
+	addl %edx,%ecx
+	movl %ecx,856(%ebx)
+	movl 172(%esp),%ecx
+	movl 100(%ecx),%edx
+	movl 104(%ecx),%ecx
+	movl %ecx,208(%esp)
+	movl 196(%esp),%ecx
+	subl %eax,%ecx
+	xorl %eax,%eax
+	addl %ecx,%edx
+	movl 208(%esp),%ecx
+	adcl %eax,%ecx
+	movl 172(%esp),%eax
+	movl %edx,100(%eax)
+	movl %ecx,104(%eax)
+	movl 160(%esp),%eax
+	movl %eax,%esi
+	jmp *(%ebp)
+.Lc3jR:
+	movl $DatabaseziConceloziIgnis_main1_closure,%esi
+	jmp *-8(%ebx)
+.Lc3jW:
+	movl $8,904(%ebx)
+	jmp stg_gc_unbx_r1
+.Lc3jZ:
+	movl $8,904(%ebx)
+	movl $c3jr_info,(%ebp)
+	movl %eax,%esi
+	jmp stg_gc_unpt_r1
+.text
+	.align 4,0x90
+	.long	0
+	.long	32
+c3kb_info:
+.Lc3kb:
+	addl $4,%ebp
+	jmp FCVXqd0TlAfBcy3r4nbDij_HasteziPrimziAny_zdfFromAnyZLZR4_info
+	.size DatabaseziConceloziIgnis_main1_info, .-DatabaseziConceloziIgnis_main1_info
+.data
+	.align 4
+.align 1
+.globl DatabaseziConceloziIgnis_main_closure
+.type DatabaseziConceloziIgnis_main_closure, @object
+DatabaseziConceloziIgnis_main_closure:
+	.long	DatabaseziConceloziIgnis_main_info
+	.long	0
+.text
+	.align 4,0x90
+	.long	S3ku_srt-(DatabaseziConceloziIgnis_main_info)+4
+	.long	65539
+	.long	0
+	.long	65551
+.globl DatabaseziConceloziIgnis_main_info
+.type DatabaseziConceloziIgnis_main_info, @object
+DatabaseziConceloziIgnis_main_info:
+.Lc3lb:
+	jmp DatabaseziConceloziIgnis_main1_info
+	.size DatabaseziConceloziIgnis_main_info, .-DatabaseziConceloziIgnis_main_info
+.data
+	.align 4
+.align 1
+.globl DatabaseziConceloziIgnis_Ignis_closure
+.type DatabaseziConceloziIgnis_Ignis_closure, @object
+DatabaseziConceloziIgnis_Ignis_closure:
+	.long	DatabaseziConceloziIgnis_Ignis_info
+.text
+	.align 4,0x90
+	.long	131087
+	.long	0
+	.long	15
+DatabaseziConceloziIgnis_Ignis_info:
+.Lc3ln:
+	addl $12,%edi
+	movl 16(%ebx),%eax
+	movl 8(%ebx),%ecx
+	cmpl 856(%ebx),%edi
+	ja .Lc3lr
+.Lc3lq:
+	movl $DatabaseziConceloziIgnis_Ignis_con_info,-8(%edi)
+	movl %ecx,-4(%edi)
+	movl %eax,(%edi)
+	leal -7(%edi),%esi
+	jmp *(%ebp)
+.Lc3lr:
+	movl $12,904(%ebx)
+	movl %eax,16(%ebx)
+	movl %ecx,8(%ebx)
+	movl $DatabaseziConceloziIgnis_Ignis_closure,%esi
+	jmp *-8(%ebx)
+	.size DatabaseziConceloziIgnis_Ignis_info, .-DatabaseziConceloziIgnis_Ignis_info
+.data
+	.align 4
+.align 1
+.globl DatabaseziConceloziIgnis_Auth_closure
+.type DatabaseziConceloziIgnis_Auth_closure, @object
+DatabaseziConceloziIgnis_Auth_closure:
+	.long	DatabaseziConceloziIgnis_Auth_info
+.text
+	.align 4,0x90
+	.long	196631
+	.long	0
+	.long	15
+DatabaseziConceloziIgnis_Auth_info:
+.Lc3lB:
+	addl $16,%edi
+	movl 24(%ebx),%eax
+	movl 16(%ebx),%ecx
+	movl 8(%ebx),%edx
+	cmpl 856(%ebx),%edi
+	ja .Lc3lF
+.Lc3lE:
+	movl $DatabaseziConceloziIgnis_Auth_con_info,-12(%edi)
+	movl %edx,-8(%edi)
+	movl %ecx,-4(%edi)
+	movl %eax,(%edi)
+	leal -11(%edi),%esi
+	jmp *(%ebp)
+.Lc3lF:
+	movl $16,904(%ebx)
+	movl %eax,24(%ebx)
+	movl %ecx,16(%ebx)
+	movl %edx,8(%ebx)
+	movl $DatabaseziConceloziIgnis_Auth_closure,%esi
+	jmp *-8(%ebx)
+	.size DatabaseziConceloziIgnis_Auth_info, .-DatabaseziConceloziIgnis_Auth_info
+.section .rodata
+	.align 4
+.align 1
+i3lM_str:
+	.byte	109
+	.byte	97
+	.byte	105
+	.byte	110
+	.byte	58
+	.byte	68
+	.byte	97
+	.byte	116
+	.byte	97
+	.byte	98
+	.byte	97
+	.byte	115
+	.byte	101
+	.byte	46
+	.byte	67
+	.byte	111
+	.byte	110
+	.byte	99
+	.byte	101
+	.byte	108
+	.byte	111
+	.byte	46
+	.byte	73
+	.byte	103
+	.byte	110
+	.byte	105
+	.byte	115
+	.byte	46
+	.byte	73
+	.byte	103
+	.byte	110
+	.byte	105
+	.byte	115
+	.byte	0
+.text
+	.align 4,0x90
+	.long	i3lM_str-(DatabaseziConceloziIgnis_Ignis_con_info)+0
+	.long	2
+	.long	4
+.globl DatabaseziConceloziIgnis_Ignis_con_info
+.type DatabaseziConceloziIgnis_Ignis_con_info, @object
+DatabaseziConceloziIgnis_Ignis_con_info:
+.Lc3lK:
+	incl %esi
+	jmp *(%ebp)
+	.size DatabaseziConceloziIgnis_Ignis_con_info, .-DatabaseziConceloziIgnis_Ignis_con_info
+.section .rodata
+	.align 4
+.align 1
+i3lN_str:
+	.byte	109
+	.byte	97
+	.byte	105
+	.byte	110
+	.byte	58
+	.byte	68
+	.byte	97
+	.byte	116
+	.byte	97
+	.byte	98
+	.byte	97
+	.byte	115
+	.byte	101
+	.byte	46
+	.byte	67
+	.byte	111
+	.byte	110
+	.byte	99
+	.byte	101
+	.byte	108
+	.byte	111
+	.byte	46
+	.byte	73
+	.byte	103
+	.byte	110
+	.byte	105
+	.byte	115
+	.byte	46
+	.byte	73
+	.byte	103
+	.byte	110
+	.byte	105
+	.byte	115
+	.byte	0
+.text
+	.align 4,0x90
+	.long	i3lN_str-(DatabaseziConceloziIgnis_Ignis_static_info)+0
+	.long	2
+	.long	7
+.globl DatabaseziConceloziIgnis_Ignis_static_info
+.type DatabaseziConceloziIgnis_Ignis_static_info, @object
+DatabaseziConceloziIgnis_Ignis_static_info:
+.Lc3lL:
+	incl %esi
+	jmp *(%ebp)
+	.size DatabaseziConceloziIgnis_Ignis_static_info, .-DatabaseziConceloziIgnis_Ignis_static_info
+.section .rodata
+	.align 4
+.align 1
+i3lW_str:
+	.byte	109
+	.byte	97
+	.byte	105
+	.byte	110
+	.byte	58
+	.byte	68
+	.byte	97
+	.byte	116
+	.byte	97
+	.byte	98
+	.byte	97
+	.byte	115
+	.byte	101
+	.byte	46
+	.byte	67
+	.byte	111
+	.byte	110
+	.byte	99
+	.byte	101
+	.byte	108
+	.byte	111
+	.byte	46
+	.byte	73
+	.byte	103
+	.byte	110
+	.byte	105
+	.byte	115
+	.byte	46
+	.byte	65
+	.byte	117
+	.byte	116
+	.byte	104
+	.byte	0
+.text
+	.align 4,0x90
+	.long	i3lW_str-(DatabaseziConceloziIgnis_Auth_con_info)+0
+	.long	3
+	.long	1
+.globl DatabaseziConceloziIgnis_Auth_con_info
+.type DatabaseziConceloziIgnis_Auth_con_info, @object
+DatabaseziConceloziIgnis_Auth_con_info:
+.Lc3lU:
+	incl %esi
+	jmp *(%ebp)
+	.size DatabaseziConceloziIgnis_Auth_con_info, .-DatabaseziConceloziIgnis_Auth_con_info
+.section .rodata
+	.align 4
+.align 1
+i3lX_str:
+	.byte	109
+	.byte	97
+	.byte	105
+	.byte	110
+	.byte	58
+	.byte	68
+	.byte	97
+	.byte	116
+	.byte	97
+	.byte	98
+	.byte	97
+	.byte	115
+	.byte	101
+	.byte	46
+	.byte	67
+	.byte	111
+	.byte	110
+	.byte	99
+	.byte	101
+	.byte	108
+	.byte	111
+	.byte	46
+	.byte	73
+	.byte	103
+	.byte	110
+	.byte	105
+	.byte	115
+	.byte	46
+	.byte	65
+	.byte	117
+	.byte	116
+	.byte	104
+	.byte	0
+.text
+	.align 4,0x90
+	.long	i3lX_str-(DatabaseziConceloziIgnis_Auth_static_info)+0
+	.long	3
+	.long	7
+.globl DatabaseziConceloziIgnis_Auth_static_info
+.type DatabaseziConceloziIgnis_Auth_static_info, @object
+DatabaseziConceloziIgnis_Auth_static_info:
+.Lc3lV:
+	incl %esi
+	jmp *(%ebp)
+	.size DatabaseziConceloziIgnis_Auth_static_info, .-DatabaseziConceloziIgnis_Auth_static_info
+.section .data
+	.align 4
+.align 1
+S3ku_srt:
+	.long	DatabaseziConceloziIgnis_mainzuf1_closure
+	.long	DatabaseziConceloziIgnis_main1_closure
+.section .note.GNU-stack,"",@progbits
+.ident "GHC 7.10.3"
+
