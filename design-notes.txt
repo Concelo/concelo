@@ -53,4 +53,7 @@ consistency
 
 Server enforces a global order for updates, and each update has a prerequisite such that it is only accepted if it immediately follows its prerequisite in the global order.  This make every update atomic.  Clients trust but verify by checking that updates have arrived in an order consistent with the prerequisite chain.
 
-The server is free to choose any order that creates a valid prerequisite chain, but it can't change its mind later without clients detecting it.  If it's sneaky, it can send different orders to different consumers by forking when there's more than one "simultaneous" write, but that just amounts to creating an artificial partition, which is already possible via selective delivery of updates.
+The server should send all valid (from its perspective, based on the prerequisite chain) orderings, leaving the clients to apply the rules and weed out bad updates.  If more than one valid update remains, the first to arrive according to the order the server sent them will win.
+
+If the server is sneaky, it can send different orders to different consumers by forking when there's more than one "simultaneous" write, but that just amounts to creating an artificial partition, which is already possible via selective delivery of updates.
+
