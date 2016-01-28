@@ -150,7 +150,8 @@ function Ignis (url, connection) {
     
     Ignis.prototype.authWithPassword =
         function (credentials, onComplete, options) {
-            Haste.connect(this.shared.state, credentials, onComplete, options);
+            Haste.authenticate(this.shared.state, credentials, onComplete,
+                               options);
         }
     
     Ignis.prototype.authAnonymously = function (onComplete, options) {
@@ -170,7 +171,7 @@ function Ignis (url, connection) {
     }
 
     Ignis.prototype.unauth = function () {
-        Haste.setAuth(this.shared.state, null);
+        Haste.unauth(this.shared.state);
     }
 
     Ignis.prototype.child = function (path) {

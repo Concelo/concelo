@@ -44,6 +44,8 @@ write request #n complete (server acknowledged) or error
 
 transaction request #n result (peer acknowledged, possible error, snapshot of result regardless of success)
 
+need new value for transaction request #n
+
 query #n diff (from local or remote write) or error (e.g. permission)
 
 onDisconnect write patch request #n complete (server acknowledged) or error
@@ -51,9 +53,12 @@ onDisconnect write patch request #n complete (server acknowledged) or error
 
 consistency
 
-Server enforces a global order for updates, and each update has a prerequisite such that it is only accepted if it immediately follows its prerequisite in the global order.  This make every update atomic.  Clients trust but verify by checking that updates have arrived in an order consistent with the prerequisite chain.
+The server chooses a global order for updates, and each update has a prerequisite such that it is only accepted if it immediately follows its prerequisite in the global order.  This makes every update atomic.  Clients trust but verify by checking that updates have arrived in an order consistent with the prerequisite chain.
 
-The server should send all valid (from its perspective, based on the prerequisite chain) orderings, leaving the clients to apply the rules and weed out bad updates.  If more than one valid update remains, the first to arrive according to the order the server sent them will win.
+The server should send all updates it receives (minus those that are obsoleted by the same writer), leaving the clients to apply the rules and weed out bad updates.  If more than one valid update remains that satisifies both the rules and a common space in the prereq chain, the first to arrive according to the order the server sent them will win.
+
+Note the server can't even throw out an update that seems to fail the prerequisite ordering, since a whole sequence in front of it may be invalid according to the rules.  This means the prerequisite field should probably be hidden (encrypted) from the server, since it can't do anything with it.
 
 If the server is sneaky, it can send different orders to different consumers by forking when there's more than one "simultaneous" write, but that just amounts to creating an artificial partition, which is already possible via selective delivery of updates.
 
+A prerequisite consists of a list of update hashes, one for every other writer besides the writer of the given update.
