@@ -13,19 +13,12 @@ data Ignis = Ignis
   { }
 
 data Credentials
-  = Anonymous
-  | PrivateKey { privateKey :: ByteString }
+  = PrivateKey { privateKey :: ByteString }
   | EmailPassword { email :: Text, password :: Text }
 
 ignis = Ignis
 
 privateKeySizeInBytes = 32
-
-anonymousKey =
-  C.derivePrivate privateKeySizeInBytes "secret" "anonymous@example.com"
-
-authenticate ignis Anonymous =
-  authenticateWithPrivateKey ignis anonymousKey
 
 authenticate ignis (PrivateKey private) =
   authenticateWithPrivateKey ignis private
@@ -46,10 +39,12 @@ maybeAuthenticate ignis =
     
     send challenge auth =
       ignis { ignisPRNG = prng
-            , ignisAuthMessage = Just message } } where
+            , ignisAuthMessage = Just message } where
         
         private = authPrivate auth
+
         (raw, prng) = C.sign (ignisPRNG ignis) private challenge
+
         message =
           P.serialize $ P.Auth (authRequest auth) (C.derivePublic private) raw
 
@@ -58,48 +53,113 @@ getAuth = C.derivePublic . ignisPrivate
 unauth ignis = ignis { ignisAuth = Nothing }
 
 update ignis update atomicUpdate =
-  next $ send ignis head atomicHead where
-    head = transform $ ignisHead ignis
-    atomicHead = atomicUpdate head
+  makeDiff ignis head atomicHead
+  >>= \(ignis, diff) -> diff
+    $>> obsoleteChunks ignis
+    >>> newChunks ignis
+    >>> todo
+    >>> next
+    >>> Right where
+      head = transform $ ignisHead ignis
+      atomicHead = atomicUpdate head
 
-send ignis head atomicHead =
-  either Left (Right . sendChunks ignis { ignisHead = head }) diff where
+makeDiff ignis head atomicHead =
+  diff >>= Right . (ignis { ignisHead = head }, ) where
     
-    foldDiff (T.Add key value) (removed, added) =
-      if ACL.writer (ignisID ignis) acl then
-        Right (removed, T.insert key value { valueACL = acl } added) else
+    apply operation key value (obsolete, new) =
+      if Access.writer (ignisID ignis) access (ignisBase ignis) key then
+        
+        Right case operation of
+          T.Remove -> (T.insert key value obsolete, new)
+          T.Add -> (obsolete,
+                    T.insert key value { valueAccess = access } new) else
+        
         Left "permission denied for update to " ++ toString key where
-          -- todo: intern ACLs for memory efficiency
-          acl = ACL.make (ignisRules ignis) (ignisBase ignis) key
+          access = Access.find key (ignisAccess ignis)
 
-    foldDiff (T.Remove key value) (removed, added) =
-      Right (T.insert key value removed, added)
+    diff = T.foldrDiff
+           (\op key value result -> result >>= apply op key value)
+           (Right (T.empty, T.empty))
+           (ignisBase ignis)
+           atomicHead
+
+obsoleteChunks obsoleteValues newValues =
+  foldr find (T.empty, newValues) obsoleteValues where
+    find =
+      findObsolete (Just . valueChunk) chunkKey chunkMembers obsoleteValues
+  
+-- attempt to combine the most empty existing chunk with the most
+-- empty new chunk to minimize fragmentation
+combineVacant new old =
+  fromMaybe (T.empty, new) do
+    oldFirst <- T.first old
+    newFirst <- T.first new
+        
+    if T.twoOrMore combination then
+      Nothing else
+      Just (T.singleton (chunkKey oldFirst) oldFirst,
+            T.union combination $ T.delete (chunkKey newFirst) new) where
+
+        combination =
+          makeChunks (chunkMembers oldFirst) (chunkMembers newFirst)
+
+newChunksForAccess newValues oldChunks =
+  combineVacant (T.foldrTrees makeNew T.empty newValues) oldChunks where
+
+    access = valueAccess $ T.unsafeFirst newValues
       
-    diff = T.foldDiff foldDiff (T.empty, T.empty) (ignisBase ignis) atomicHead
+    makeNew orphan result =
+      case T.first result of
+        Nothing ->
+          makeChunks orphan
+        
+        Just chunk ->
+          if T.twoOrMore new then
+            T.union (makeChunks orphan) result else
+            T.union new $ T.delete (chunkKey chunk) result where
+              
+              new = makeChunks $ T.union orphan $ chunkMembers chunk
 
-groupBy getKey insert empty map = foldr fold M.empty map where
-  fold item result = M.insert key (insert item group) result where
-    key = getKey item
-    group = fromMaybe empty $ M.lookup key result
+newChunks ignis obsoleteChunks newValues =
+  T.foldrChildren makeNewByAccess (obsoleteChunks, T.empty)
+  newValuesByAccess where
+    
+    newValuesByAccess = T.groupBy valueAccess newValues
 
-sendChunks ignis (removed, added) = where
-  fold value result@(chunks, added) =
-    if M.member name then
-      (M.remove name, T.union added orphans) else
-      result where
-        chunk = valueChunk value
-        name = chunkName chunk
-        orphans = T.difference (chunkMembers chunk) removed
-                                         
-  (chunks, addedAndOrphans) =
-    foldr fold ((ignisBaseChunks ingis), added) removed
+    makeNewByAccess newValues (obsoleteChunks, newChunks) =
+      (T.union obsolete obsoleteChunks,
+       T.set access new newChunks) where
 
-  chunksByACL = groupBy chunkACL (M.insert =<< chunkName) M.empty chunks
-  addedByACL = groupBy valueACL (T.insert =<< valueKey) T.empty addedAndOrphans
+        (obsolete, new) =
+          newChunksForAccess newValues
+          $ T.subtract obsoleteChunks
+          $ T.descend access
+          $ ignisChunks ignis
 
-  fold' acl added result = where
-    chunks = fromMaybe M.empty $ M.lookup acl chunksByACL
-    -- tbc
+findObsolete itemContainer containerKey containerMembers obsoleteItems
+  item result@(obsoleteContainers, newItems) =
+    case itemContainer item of
+      Nothing -> result
+      Just container ->
+        if T.member key obsoleteContainers then
+          result else
+          (T.insert key obsoleteContainers, T.union orphans newItems) where
+
+            key = containerKey container
+            orphans = T.difference (containerMembers container) obsoleteItems
+              findObsolete groupParent groupKey groupMembers obsoleteGroups
+  
+obsoleteGroups obsoleteChunks newChunks =
+  foldr find (T.empty, newChunks) obsoleteChunks
+  where
+    find' = findObsolete groupParent groupKey groupMembers obsoleteChunks
+    
+    find group result =
+      find' group $ fromMaybe result (flip find result) $ groupParent group
+
+newGroups newGroups =
+  
+
   
 -- 1. compute diff (as sets of removes and adds)
   
@@ -119,4 +179,4 @@ sendChunks ignis (removed, added) = where
 
 -- NB: subscriber should send the last complete root it received periodically to ensure we're in sync
 
--- NB: each writer must segregate values into chunks according to permissions (i.e. all values in a given chunk must share the exact same read and write ACL).  However, groups may contain chunks with various ACLs.
+-- NB: each writer must segregate values into chunks according to permissions (i.e. all values in a given chunk must share the exact same read and write Access).  However, groups may contain chunks with various Accesses.

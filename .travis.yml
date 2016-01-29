@@ -3,3 +3,7 @@ language: haskell
 ghc: 7.10
 notifications:
   email: true
+
+branches:
+  only:
+    - master
