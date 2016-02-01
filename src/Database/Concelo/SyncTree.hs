@@ -4,8 +4,13 @@ module SyncTree
 type Key = ByteString
 
 class Serializer a where
-  serialize :: a -> Trie b -> [ByteString]
+  serialize :: a -> Int -> Trie b -> [ByteString]
   encrypt :: a -> ByteString -> (a, ByteString)
+
+date Environment a b = Environment { _envTree :: SyncTree a
+                                   , _envSerializer :: b
+                                   , _envObsolete :: Trie Key (Chunk a)
+                                   , _envNew :: Trie Key (Chunk a) }
 
 data Chunk a = Group { groupName :: Key
                      , groupHeight :: Key
@@ -15,27 +20,38 @@ data Chunk a = Group { groupName :: Key
 
 data ChunkKey = GroupKey | LeafKey
 
-data SyncTree a = SyncTree { treeRoot :: Maybe Key
-                           , treeByReverseKeyMember :: Trie Key (Chunk a)
-                           , treeByHeightVacancy :: Trie Key (Chunk a) }
+data SyncTree a = SyncTree { _treeByReverseKeyMember :: Trie Key (Chunk a)
+                           , _treeByHeightVacancy :: Trie Key (Chunk a) }
+
+envTree = L.lens _envTree (\e v -> e { _envTree = v })
+envSerializer = L.lens _envSerializer (\e v -> e { _envSerializer = v })
+envObsolete = L.lens _envObsolete (\e v -> e { _envObsolete = v })
+envNew = L.lens _envNew (\e v -> e { _envNew = v })
+
+treeByReverseKeyMember = L.lens _treeByReverseKeyMember
+                         (\t v -> t { _treeByReverseKeyMember = v })
+
+treeByHeightVacancy = L.lens _treeByHeightVacancy
+                      (\t v -> t { _treeByHeightVacancy = v })
 
 empty = SyncTree Nothing T.empty T.empty
 
-findObsolete tree chunk result@(obsolete, new) =
-  case T.find (byKey chunk) $ treeByReverseKeyMember tree of
-    Nothing -> error "unable to find group containing chunk"
+findObsolete chunk = do
+  maybeGroup <- get (treeByReverseKeyMember . envTree) >>= T.find (byKey chunk)
+  case maybeGroup of
+    Nothing -> return ()
     Just group ->
       if T.member path obsolete then
-        result else
-        findObsolete tree group newResult where
-          path = byHeightVacancy group
-          newResult = (T.union path obsolete,
-                       T.union (T.index byHeightVacancy
-                                $ groupMembers group) new)
+        return () else
+        update envObsolete $ T.union (byHeightVacancy group)
+        update envNew
+        $ T.union . (T.index byHeightVacancy $ groupMembers group)
+        findObsolete group
 
-findObsoleteGroups tree result@(obsolete, new) =
-  (obsolete', T.subtract obsolete' new') where
-    (obsolete', new') = foldr (findObsolete tree) result obsolete
+findObsoleteGroups = do
+  get envObsolete >>= mapM_ findObsolete
+  obsolete <- get envObsolete
+  update envNew (T.subtract obsolete)
 
 groupTrie (Leaf _ _) _ = T.empty
 groupTrie _ trie = trie
@@ -60,102 +76,117 @@ byVacancy chunk =
 
 -- attempt to combine the most empty existing group with the most
 -- empty new group to minimize fragmentation
-combineVacant serializer new old =
-  fromMaybe (T.empty, new) do
-    oldFirst <- T.first old
-    newFirst <- T.first new
-        
-    (serializer', combination) <-
-      makeGroup serializer
-      $ T.union (groupMembers oldFirst) (groupMembers newFirst)
+combineVacant new old =
+  case (,) <$> T.first old <*> T.first new of
+    Nothing -> (T.empty, new)
+    Just (oldFirst, newFirst) -> do
+      combination <- makeGroup
+                     $ T.union (groupMembers oldFirst) (groupMembers newFirst)
 
-    Just (serializer',
-          T.singleton (groupKey oldFirst) oldFirst,
-          T.union (byVacancy combination) $ T.delete (groupKey newFirst) new)
+      return (byVacancy oldFirst,
+              T.union (byVacancy combination)
+              $ T.subtract (byVacancy newFirst) new)
 
-head x:_ = Just x
-head [] = Nothing
+oneExactly [x] = Just x
+oneExactly _ = Nothing
 
-twoOrMore _:_:_ = True
-twoOrMore _ = False
+serialize' trie =
+  get envSerializer >>= flip serialize trie
 
-makeGroup serializer members =
-  T.first members >>= fromChunks where
+encrypt' text = do
+  serializer <- get envSerializer
+  let (serializer', ciphertext) = encrypt serializer text
+  set envSerializer serializer'
+  return ciphertext
+
+makeGroup members =
+  return (T.first members >>= fromChunks) where
     fromChunks (List _ _) = fromLeaves
     fromChunks (Group _ _ _) = fromGroups
     
     fromLeaves = do
-      (serializer', ciphertext) <- encrypt serializer =<<
-        if twoOrMore strings then Nothing else head strings
+      plaintext <- serialize' $ T.index leafPath members >>= oneExactly
 
-      Just (serializer',
-            Group (hash serializer ciphertext) 1 members ciphertext) where
-        
-        strings = serialize serializer $ T.index leafPath members
+      case plaintext of
+        Nothing -> return Nothing
+        Just text ->
+          ciphertext <- encrypt' text
+          return $ Just $ Group (hash' ciphertext) 1 members ciphertext
 
     fromGroups = do
-      (height, count, body) <-
-        foldr fold (Just (undefined, 0, BS.empty)) members
+      serializer <- get envSerializer
+      return do
+        (height, count, body) <-
+          foldr fold (Just (undefined, 0, BS.empty)) members
 
-      Just (serializer,
-            Group (hash serializer body) (height + 1) members body) where
+        Just $ Group (hash serializer body) (height + 1) members body where
         
-        fold member (Just (_, count, string)) =
-          if count > maxSize then
-            Nothing else
-            Just (groupHeight member,
-                  count + BS.length name,
-                  BS.append string name) where
-              name = groupName member
+          fold member (Just (_, count, string)) =
+            if count > maxSize then
+              Nothing else
+              Just (groupHeight member,
+                    count + BS.length name,
+                    BS.append string name) where
+                name = groupName member
 
-        fold member Nothing = Nothing
+          fold member Nothing = Nothing
 
--- todo: stop before creating a group with only one (non-leaf) member
-addNewGroupsForHeight tree height (serializer, obsolete, new) =
-  (serializer'',
-   T.union (T.super above obsoleteGroups) obsolete,
-   T.union (T.super above newGroups) new) where
-    group orphan (serializer, groups) =
-      case T.first groups of
-        Nothing ->
-          (serializer', byHeightVacancy orphanGroup)
-        Just group ->
-          case makeGroup $ T.union orphan $ groupMembers group of
-            Nothing ->
-              (serializer', T.union (byHeightVacancy orphanGroup) groups)
-            Just (serializer', newGroup) ->
-              (serializer', T.union (byHeightVacancy newGroup)
-                            $ T.subtract (byHeightVacancy group) groups where
-          (serializer', orphanGroup) =
-            fromMaybe (error "could not make a single-member group")
-            $ makeGroup serializer orphan
+addNewGroupsForHeight height =
+  do
+    new <- get envNew >>= return . T.isolate height
+    if height == 0 || twoOrMore new then
+      newGroups <- foldM group T.empty $ T.paths new
+      oldGroups <- T.subtract obosolete . T.sub above
+                   <$> get (treeByHeightVacancy . envTree)
+                   <*> get envObsolete >>= T.sub above
+                   
+      (newGroups', obsoleteGroups') <- combineVacant newGroups oldGroups
 
-    above = height + 1
+      update envObsolete (T.union . T.super above obsoleteGroups')
+      update envNew (T.union . T.super above newGroups') else
+      return () where
 
-    (serializer', groups) =
-      T.foldrPaths group (serializer, T.empty) $ T.isolate height new
+  above = height + 1
+          
+  group groups ophan =
+    case T.first groups of
+      Nothing ->
+        return $ byHeightVacancy orphanGroup
+      Just group -> do
+        maybeCombined <- makeGroup $ T.union orphan $ groupMembers group
+        case maybeCombined of
+          Nothing ->
+            orphanGroup <- makeGroup orphan
+            return $ T.union
+            (byHeightVacancy 
+             $ fromMaybe (error "could not make a single-member group")
+             orphanGroup) groups
+          Just combined ->
+            return
+            $ T.union (byHeightVacancy combined)
+            $ T.subtract (byHeightVacancy group) groups
 
-    (serializer'', obsoleteGroups, newGroups) =
-      combineVacant serializer' groups
-      $ T.subtract (T.sub above obsolete)
-      $ T.sub above
-      $ treeByHeightVacancy tree
+addNewGroups =
+  get envNew >>= mapM_ addNewGroupsForHeight . T.keys
 
-addNewGroups tree result@(_, _, new) =
-  T.foldrKeys (addNewGroupsForHeight tree) result new
+get lens =
+  S.get >>= return $ L.view lens
 
-updateIndex trie index (obsolete, new) =
-  T.add (T.index index new) $ T.subtract (T.index index obsolete) trie
+set lens value =
+  S.get >>= return $ L.set lens value >>= S.set
 
-apply tree result@(serializer, obsolete, new) =
-  (tree { treeRoot = T.last new >>= Just . groupName
-        , treeByReverseKeyMember =
-          updateIndex (treeByReverseKeyMember tree) byReverseKeyMember result
-        , treeByHeightVacancy =
-          updateIndex (treeByHeightVacancy tree) byHeightVacancy result },
-   serializer,
-   obsolete,
-   new)
+update lens state =
+  get lens >>= state >>= set lens
+
+updateIndex index trie = do
+  new <- get envNew
+  obsolete <- get envObsolete
+  
+  return $ T.add (T.index index new) $ T.subtract (T.index index obsolete) trie
+
+updateTree = do
+  update (treeByReverseKeyMember . envTree) (updateIndex byReverseKeyMember)
+  update (treeByHeightVacancy . envTree) (updateIndex byHeightVacancy)
 
 split serializer path =
   foldr fold (0, T.empty) $ serialize serializer path where
@@ -163,11 +194,19 @@ split serializer path =
       (count + 1, T.union (fmap (const Leaf string path') path') trie) where
         path' = T.super count path
 
-update serializer tree obsolete new =
-  (apply tree .
-   addNewGroups tree .
-   uncurry (serializer,,) .
-   findObsoleteGroups tree)
-  (T.mapPaths toLeaves obsolete,
-   T.mapPaths toLeaves new) where
+update tree serializer obsolete new =
+  runState do
+    findObsoleteGroups
+    addNewGroups
+    updateTree
+    
+    (,,,)
+      <$> get envTree
+      <*> get envSerializer
+      <*> get envObsolete
+      <*> get envNew
+
+  $ Environment tree serializer
+  (T.mapPaths toLeaves obsolete)
+  (T.mapPaths toLeaves new) where
     toLeaves path = T.super 0 $ split serializer path
