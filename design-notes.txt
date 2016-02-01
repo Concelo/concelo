@@ -62,3 +62,13 @@ Note the server can't even throw out an update that seems to fail the prerequisi
 If the server is sneaky, it can send different orders to different consumers by forking when there's more than one "simultaneous" write, but that just amounts to creating an artificial partition, which is already possible via selective delivery of updates.
 
 A prerequisite consists of a list of update hashes, one for every other writer besides the writer of the given update.
+
+Addendums:
+
+Actually, the server should still throw out misordered updates, since the writer can/should at least acknowledge an invalid write in its revised update.  Syncing and signing the whole top-level tree (including everyone's latest writes) in write order might be the most natural way to do this.
+
+The grouping from the top should be by writer, then ACL, then values, so it's easy/efficient for the server to censor unreadable data for each reader.
+
+Every chunk should be signed by the writer and annotated with the encryption key used for all chunks at or below so they can be forwarded before the entire sync has arrived.
+
+If the server fails and forgets everything, it should grab the most recent snapshot from the persistent store and rely on users to push their updated view of the state as they can.  (Provide API option to indicate when an update is synced to the persistent store.)
