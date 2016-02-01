@@ -100,7 +100,7 @@ encrypt' text = do
   return ciphertext
 
 makeGroup members =
-  return (T.first members >>= fromChunks) where
+  T.first members >>= fromChunks where
     fromChunks (List _ _) = fromLeaves
     fromChunks (Group _ _ _) = fromGroups
     

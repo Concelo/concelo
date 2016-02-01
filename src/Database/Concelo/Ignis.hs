@@ -5,162 +5,87 @@ import qualified Data.ByteString as BS
 import qualified Database.Concelo.Crypto as C
 import qualified Database.Concelo.Protocol as P
 
-data Auth = Auth
-  { authPrivate :: ByteString
-  , authRequest :: Int }
+data Auth = Auth { _authPrivate :: ByteString
+                 , _authPublic :: ByteString
+                 , _authRequest :: Int }
 
-data Ignis = Ignis
-  { }
+data Ignis = Ignis { }
 
-data Credentials
-  = PrivateKey { privateKey :: ByteString }
-  | EmailPassword { email :: Text, password :: Text }
+data Credentials = PrivateKey { _privateKey :: ByteString }
+                 | EmailPassword { _email :: Text
+                                 , _password :: Text }
 
 ignis = Ignis
 
 privateKeySizeInBytes = 32
 
-authenticate ignis (PrivateKey private) =
-  authenticateWithPrivateKey ignis private
+authenticate (PrivateKey private) =
+  authenticateWithPrivateKey private
 
-authenticate ignis (EmailPassword email password) =
-  authenticateWithPrivateKey ignis private
+authenticate (EmailPassword email password) =
+  authenticateWithPrivateKey
   $ C.derivePrivate privateKeySizeInBytes password email
 
-authenticateWithPrivateKey ignis private =
-  next $ maybeAuthenticate ignis
-    { ignisAuth = Just $ Auth private (ignisNextRequest ingis) }
+authenticateWithPrivateKey private =
+  request <- get ignisNextRequest
+  set ignisAuth $ Just $ Auth private (C.derivePublic private) request
+  nextRequest
 
-next ignis =
-  (n, ignis { ignisNextRequest = n + 1 }) where n = ignisNextRequest ignis
+nextRequest = do
+  n <- get ignisNextRequest
+  update ignisNextRequest (+1)
+  return n
 
-maybeAuthenticate ignis =
-  fromMaybe ignis $ liftA2 send (ignisChallenge ignis) (ignisAuth ignis) where
-    
-    send challenge auth =
-      ignis { ignisPRNG = prng
-            , ignisAuthMessage = Just message } where
-        
-        private = authPrivate auth
+sign private challenge = do
+  prng <- get ignisPRNG
+  let (raw, prng') = C.sign prng private challenge
+  set ignisPRNG prng'
+  return raw
 
-        (raw, prng) = C.sign (ignisPRNG ignis) private challenge
+maybeAuthenticate = do
+  challenge <- get ignisChallenge
+  auth <- get ignisAuth
 
-        message =
-          P.serialize $ P.Auth (authRequest auth) (C.derivePublic private) raw
-
-getAuth = C.derivePublic . ignisPrivate
-
-unauth ignis = ignis { ignisAuth = Nothing }
-
-update ignis update atomicUpdate =
-  makeDiff ignis head atomicHead
-  >>= \(ignis, diff) -> diff
-    $>> obsoleteChunks ignis
-    >>> newChunks ignis
-    >>> todo
-    >>> next
-    >>> Right where
-      head = transform $ ignisHead ignis
-      atomicHead = atomicUpdate head
-
-makeDiff ignis head atomicHead =
-  diff >>= Right . (ignis { ignisHead = head }, ) where
-    
-    apply operation key value (obsolete, new) =
-      if Access.writer (ignisID ignis) access (ignisBase ignis) key then
-        
-        Right case operation of
-          T.Remove -> (T.insert key value obsolete, new)
-          T.Add -> (obsolete,
-                    T.insert key value { valueAccess = access } new) else
-        
-        Left "permission denied for update to " ++ toString key where
-          access = Access.find key (ignisAccess ignis)
-
-    diff = T.foldrDiff
-           (\op key value result -> result >>= apply op key value)
-           (Right (T.empty, T.empty))
-           (ignisBase ignis)
-           atomicHead
-
-obsoleteChunks obsoleteValues newValues =
-  foldr find (T.empty, newValues) obsoleteValues where
-    find =
-      findObsolete (Just . valueChunk) chunkKey chunkMembers obsoleteValues
-  
--- attempt to combine the most empty existing chunk with the most
--- empty new chunk to minimize fragmentation
-combineVacant new old =
-  fromMaybe (T.empty, new) do
-    oldFirst <- T.first old
-    newFirst <- T.first new
-        
-    if T.twoOrMore combination then
-      Nothing else
-      Just (T.singleton (chunkKey oldFirst) oldFirst,
-            T.union combination $ T.delete (chunkKey newFirst) new) where
-
-        combination =
-          makeChunks (chunkMembers oldFirst) (chunkMembers newFirst)
-
-newChunksForAccess newValues oldChunks =
-  combineVacant (T.foldrTrees makeNew T.empty newValues) oldChunks where
-
-    access = valueAccess $ T.unsafeFirst newValues
+  authenticate <$> challenge <*> auth where
       
-    makeNew orphan result =
-      case T.first result of
-        Nothing ->
-          makeChunks orphan
+    authenticate challenge auth =
+      sign (get' authPrivate auth) challenge
+      >>= P.serialize
+      . P.Auth (get' authRequest auth) (get' authPublic auth)
+
+getAuth = get (authPublic . ignisAuth)
+
+unAuth = set ignisAuth Nothing
+
+update update atomicUpdate = do
+  head <- get ignisHead >>= return . update
+  let atomicHead = atomicUpdate head
         
-        Just chunk ->
-          if T.twoOrMore new then
-            T.union (makeChunks orphan) result else
-            T.union new $ T.delete (chunkKey chunk) result where
-              
-              new = makeChunks $ T.union orphan $ chunkMembers chunk
+  diff <- makeDiff head atomicHead
+  
+  error "todo: index diff according to ACL, update sync trees, serialize groups, and sort them into acked and nacked messages"
 
-newChunks ignis obsoleteChunks newValues =
-  T.foldrChildren makeNewByAccess (obsoleteChunks, T.empty)
-  newValuesByAccess where
+validUpdate path head = do
+  me <- getAuth
+  base <- get ignisBase
+  rules <- get ignisBase rules    
+
+  error "todo: apply rules and determine validity"
+
+makeDiff head atomicHead = do
+  base <- get ignisBase
+  foldM apply (Right (T.empty, T.empty)) $ T.diff base atomicHead where
+
+    apply (operation, path, value) result =
+      return $ result >>= apply' operation path value
     
-    newValuesByAccess = T.groupBy valueAccess newValues
+    apply' operation path value (obsolete, new) =
+      return $ validateUpdate path atomicHead
+      >> Right case operation of
+        T.Remove -> (T.union path obsolete, new)
+        T.Add -> (obsolete, T.union path new)
 
-    makeNewByAccess newValues (obsoleteChunks, newChunks) =
-      (T.union obsolete obsoleteChunks,
-       T.set access new newChunks) where
 
-        (obsolete, new) =
-          newChunksForAccess newValues
-          $ T.subtract obsoleteChunks
-          $ T.descend access
-          $ ignisChunks ignis
-
-findObsolete itemContainer containerKey containerMembers obsoleteItems
-  item result@(obsoleteContainers, newItems) =
-    case itemContainer item of
-      Nothing -> result
-      Just container ->
-        if T.member key obsoleteContainers then
-          result else
-          (T.insert key obsoleteContainers, T.union orphans newItems) where
-
-            key = containerKey container
-            orphans = T.difference (containerMembers container) obsoleteItems
-              findObsolete groupParent groupKey groupMembers obsoleteGroups
-  
-obsoleteGroups obsoleteChunks newChunks =
-  foldr find (T.empty, newChunks) obsoleteChunks
-  where
-    find' = findObsolete groupParent groupKey groupMembers obsoleteChunks
-    
-    find group result =
-      find' group $ fromMaybe result (flip find result) $ groupParent group
-
-newGroups newGroups =
-  
-
-  
 -- 1. compute diff (as sets of removes and adds)
   
 -- 2. remove chunks from base for each remove in diff and add orphans (any value that's in a removed chunk but not in the set of removes) to set of adds
