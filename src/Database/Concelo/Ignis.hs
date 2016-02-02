@@ -7,7 +7,8 @@ import qualified Database.Concelo.Protocol as P
 
 data Auth = Auth { _authPrivate :: ByteString
                  , _authPublic :: ByteString
-                 , _authRequest :: Int }
+                 , _authRequest :: Int
+                 , _authSent :: Bool }
 
 data Ignis = Ignis { }
 
@@ -43,15 +44,18 @@ sign private challenge = do
   return raw
 
 maybeAuthenticate = do
-  challenge <- get ignisChallenge
   auth <- get ignisAuth
 
-  authenticate <$> challenge <*> auth where
+  if get' authSent auth then
+    Nothing else
+    challenge <- get ignisChallenge
+
+    authenticate <$> challenge <*> auth where
       
-    authenticate challenge auth =
-      sign (get' authPrivate auth) challenge
-      >>= P.serialize
-      . P.Auth (get' authRequest auth) (get' authPublic auth)
+      authenticate challenge auth =
+        sign (get' authPrivate auth) challenge
+        >>= P.serialize
+        . P.Auth (get' authRequest auth) (get' authPublic auth)
 
 getAuth = get (authPublic . ignisAuth)
 
@@ -61,8 +65,29 @@ update update atomicUpdate = do
   head <- get ignisHead >>= return . update
   let atomicHead = atomicUpdate head
         
-  diff <- makeDiff head atomicHead
-  
+  eitherDiff <- makeDiff head atomicHead
+
+  case eitherDiff of
+    Right diff ->
+      set ignisHead head
+      set ignisDiff diff
+      return $ Right ()
+      
+    Left error ->
+      return $ Left error
+
+nextMessage = do
+  maybeMessage <- maybeAuthenticate
+
+  case maybeMessage of
+    Just message ->
+      return $ Just message
+
+    Nothing ->
+      maybeUpdateSync
+      get ignisNacks >>= return . T.first
+
+maybeUpdateSync =
   error "todo: index diff according to ACL, update sync trees, serialize groups, and sort them into acked and nacked messages"
 
 validUpdate path head = do
@@ -78,7 +103,7 @@ makeDiff head atomicHead = do
 
     apply (operation, path) diff = do
       acl <- validateUpdate path atomicHead
-      return $ apply' <$> diff <*> acl where
+      return (apply' <$> diff <*> acl) where
     
         apply' (obsolete, new) acl =
           Right case operation of
