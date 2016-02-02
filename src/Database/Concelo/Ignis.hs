@@ -70,20 +70,20 @@ validUpdate path head = do
   base <- get ignisBase
   rules <- get ignisBase rules    
 
-  error "todo: apply rules and determine validity"
+  error "todo: apply rules and return Right ACL if valid or Left error otherwise"
 
 makeDiff head atomicHead = do
   base <- get ignisBase
   foldM apply (Right (T.empty, T.empty)) $ T.diff base atomicHead where
 
-    apply (operation, path, value) result =
-      return $ result >>= apply' operation path value
+    apply (operation, path) diff = do
+      acl <- validateUpdate path atomicHead
+      return $ apply' <$> diff <*> acl where
     
-    apply' operation path value (obsolete, new) =
-      return $ validateUpdate path atomicHead
-      >> Right case operation of
-        T.Remove -> (T.union path obsolete, new)
-        T.Add -> (obsolete, T.union path new)
+        apply' (obsolete, new) acl =
+          Right case operation of
+            T.Remove -> (T.union path obsolete, new)
+            T.Add -> (obsolete, T.union (fmap (set' valueACL acl) path) new)
 
 
 -- 1. compute diff (as sets of removes and adds)
