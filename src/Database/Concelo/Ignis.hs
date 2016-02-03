@@ -29,7 +29,7 @@ authenticate (EmailPassword email password) =
 
 authenticateWithPrivateKey private =
   request <- get ignisNextRequest
-  set ignisAuth $ Just $ Auth private (C.derivePublic private) request
+  set ignisAuth $ Just $ Auth private (C.derivePublic private) request False
   nextRequest
 
 nextRequest = do
@@ -37,25 +37,41 @@ nextRequest = do
   update ignisNextRequest (+1)
   return n
 
-sign private challenge = do
-  prng <- get ignisPRNG
-  let (raw, prng') = C.sign prng private challenge
-  set ignisPRNG prng'
-  return raw
+with lens f =
+  (result, new) <- get lens >>= f
+  set lens new
+  return result
 
-maybeAuthenticate = do
-  auth <- get ignisAuth
+sign private challenge =
+  with ignisPRNG $ C.sign private challenge
 
-  if get' authSent auth then
-    Nothing else
-    challenge <- get ignisChallenge
+bind f x = do
+  x' <- x
+  case x' of
+    Nothing -> return Nothing
+    Just x'' -> f x''
 
-    authenticate <$> challenge <*> auth where
+bind2 f x y = do
+  x' <- x
+  y' <- y
+  case x' of
+    Nothing -> return Nothing
+    Just x'' ->
+      case y' of
+        Nothing -> return Nothing
+        Just y'' ->
+          f x'' y''
+
+maybeAuthenticate =
+  bind2 try (get ignisAuth) (get ignisChallenge) where
       
-      authenticate challenge auth =
+    try auth challenge =
+      if get' authSent auth then return Nothing else do
+        set ignisAuth $ Just $ set' authSent True auth
+        
         sign (get' authPrivate auth) challenge
-        >>= P.serialize
-        . P.Auth (get' authRequest auth) (get' authPublic auth)
+          >>= P.serialize
+          . P.Auth (get' authRequest auth) (get' authPublic auth)
 
 getAuth = get (authPublic . ignisAuth)
 
@@ -68,7 +84,7 @@ update update atomicUpdate = do
   eitherDiff <- makeDiff head atomicHead
 
   case eitherDiff of
-    Right diff ->
+    Right diff -> do
       set ignisHead head
       set ignisDiff diff
       return $ Right ()
@@ -77,18 +93,76 @@ update update atomicUpdate = do
       return $ Left error
 
 nextMessage = do
-  maybeMessage <- maybeAuthenticate
+  maybeAuth <- get ignisAuth
+  case maybeAuth of
+    Nothing -> return Nothing
+    Just _ -> do
+      maybeMessage <- maybeAuthenticate
 
-  case maybeMessage of
-    Just message ->
-      return $ Just message
+      case maybeMessage of
+        Just message ->
+          return $ Just message
 
-    Nothing ->
-      maybeUpdateSync
-      get ignisNacks >>= return . T.first
+        Nothing -> do
+          maybeUpdateSync
+      
+          maybeNack <- get ignisNacks >>= return . T.firstPath
+      
+          case maybeNack of
+            Just nack -> do
+              update ignisNacks $ T.subtract nack
+              update ignisAcks $ T.union nack
+              return $ T.first nack
 
-maybeUpdateSync =
-  error "todo: index diff according to ACL, update sync trees, serialize groups, and sort them into acked and nacked messages"
+            Nothing -> return Nothing
+
+mapPair f (x, y) = (f x, f y)
+
+byACL path value = T.super (get' valueACL value) path
+
+withSerializer f = do
+  maybeAuth <- ignisAuth
+  case maybeAuth of
+    Nothing -> error "cannot encrypt without private key"
+    Just auth -> 
+      with ignisPRNG (f . MySerializer (get' authPrivate auth))
+
+updateACLSyncTrees (obsolete, new) = do
+  with ignisACLSyncTrees \trees ->
+    withSerializer \serializer ->
+      foldr update (((T.empty, T.empty), trees), serializer)
+            $ T.union (T.keys obsolete) (T.keys new) where
+    
+    update acl (((obsoletes, news), trees), serializer) =
+      (((T.union obsolete' obsoletes,
+         T.union new' news),
+        if ST.null tree' then
+          T.delete acl trees else
+          T.insert acl tree' trees),
+       serializer') where
+        (tree', serializer', obsolete', new') =
+          ST.update (fromMaybe ST.empty $ T.find acl trees) serializer
+          (T.sub acl obsolete) (T.sub acl new)
+
+updateMySyncTree (obsolete, new) = do
+  with ignisMySyncTree \tree ->
+    withSerializer \serializer ->
+      let (tree', serializer', obsolete', new') =
+            ST.update tree serializer ? ? in
+      (((T.union obsolete' obsolete,
+         T.union new' new),
+        tree'),
+       serializer')
+
+maybeUpdateSync = do
+  maybeDiff <- get ignisDiff
+  case maybeDiff of
+    Nothing -> return ()
+    Just diff ->
+      updateACLSyncTrees $ mapPair (T.indexPaths byACL) diff
+      >>= updateMySyncTree
+      >>= updateRootSyncTree
+      >>= updateAcksAndNacks
 
 validUpdate path head = do
   me <- getAuth

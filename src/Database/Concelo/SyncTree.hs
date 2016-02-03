@@ -1,4 +1,4 @@
-module SyncTree
+module Database.Concelo.SyncTree
   ( empty ) where
 
 type Key = ByteString
