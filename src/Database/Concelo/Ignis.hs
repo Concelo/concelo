@@ -33,9 +33,7 @@ authenticateWithPrivateKey private =
   nextRequest
 
 nextRequest = do
-  n <- get ignisNextRequest
-  update ignisNextRequest (+1)
-  return n
+  getThenUpdate ignisNextRequest (+1)
 
 with lens f =
   (result, new) <- get lens >>= f
@@ -66,18 +64,22 @@ maybeAuthenticate =
   bind2 try (get ignisAuth) (get ignisChallenge) where
       
     try auth challenge =
-      if get' authSent auth then return Nothing else do
-        set ignisAuth $ Just $ set' authSent True auth
+      if getAuthSent auth then return Nothing else do
+        set ignisAuth $ Just $ L.set authSent True auth
         
-        sign (get' authPrivate auth) challenge
+        sign (getAuthPrivate auth) challenge
           >>= P.serialize
-          . P.Auth (get' authRequest auth) (get' authPublic auth)
+          . P.Auth (getAuthRequest auth) (getAuthPublic auth)
 
-getAuth = get (authPublic . ignisAuth)
+getAuth = do
+  maybeAuth <- get ignisAuth
+  case maybeAuth of
+    Nothing -> return Nothing
+    Just auth -> return $ getAuthPublic auth
 
 unAuth = set ignisAuth Nothing
 
-update update atomicUpdate = do
+update now update atomicUpdate = do
   head <- get ignisHead >>= return . update
   let atomicHead = atomicUpdate head
         
@@ -85,6 +87,7 @@ update update atomicUpdate = do
 
   case eitherDiff of
     Right diff -> do
+      set ignisUpdateTime now      
       set ignisHead head
       set ignisDiff diff
       return $ Right ()
@@ -118,41 +121,89 @@ nextMessage = do
 
 mapPair f (x, y) = (f x, f y)
 
-byACL path value = T.super (get' valueACL value) path
+byACL path value = T.super (getValueACL value) path
 
-withSerializer f = do
+withSerializer constructor f = do
   maybeAuth <- ignisAuth
   case maybeAuth of
     Nothing -> error "cannot encrypt without private key"
     Just auth -> 
-      with ignisPRNG (f . MySerializer (get' authPrivate auth))
+      with ignisPRNG (f . constructor (getAuthPrivate auth))
 
-updateACLSyncTrees (obsolete, new) = do
-  with ignisACLSyncTrees \trees ->
-    withSerializer \serializer ->
-      foldr update (((T.empty, T.empty), trees), serializer)
-            $ T.union (T.keys obsolete) (T.keys new) where
+updateACLSyncTrees (obsoleteValues, newValues) = do
+  with ignisACLTrees \trees ->
+    withSerializer ValueSerializer \serializer ->
+      foldr update (((T.empty, T.empty, T.empty, T.empty), trees), serializer)
+            $ T.union (T.keys obsoleteValues) (T.keys newValues) where
     
-    update acl (((obsoletes, news), trees), serializer) =
-      (((T.union obsolete' obsoletes,
-         T.union new' news),
+    update acl (((allObsolete, allNew, obsoleteTrees, newTrees),
+                 trees), serializer) =
+      
+      (((T.union obsolete' allObsolete,
+         T.union new' allNew,
+         
+         if ST.null (getAnnotatedValue tree) then
+           obsoleteTrees else
+           T.insert acl tree obsoleteTrees,
+         
+         if ST.null tree' then
+           newTrees else
+           T.insert acl (Annotated tree' acl) newTrees),
+        
         if ST.null tree' then
           T.delete acl trees else
           T.insert acl tree' trees),
+       
        serializer') where
+        
+        tree = fromMaybe ST.empty $ T.find (T.key acl) trees
+        
         (tree', serializer', obsolete', new') =
-          ST.update (fromMaybe ST.empty $ T.find acl trees) serializer
-          (T.sub acl obsolete) (T.sub acl new)
+          ST.update (annotatedValue tree) serializer
+          (T.sub acl obsoleteValues) (T.sub acl newValues)
 
-updateMySyncTree (obsolete, new) = do
-  with ignisMySyncTree \tree ->
-    withSerializer \serializer ->
+updateMySyncTree (allObsolete, allNew, obsoleteTrees, newTrees) = do
+  let whoAmI = fromMaybe $ error "I don't know who I am!"
+  auth <- get ignisAuth >>= return . whoAmI
+  challenge <- get ignisChallenge >>= return . whoAmI
+  
+  let key = T.super (getIgnisPublic auth) (T.key challenge)
+  tree <- get ignisWriterTrees >>= return . fromMaybe ST.empty . T.find key
+  revision <- updateThenGet ignisRevision (+1)
+  time <- get ignisUpdateTime
+   -- all trees from other writers using the same keypair we're using
+   -- except for the most recent published revision, if applicable:
+  obsoleteTrees <- get ignisObsoleteTrees
+
+  withSerializer ACLTreeSerializer \serializer ->
+    let (tree', serializer', obsolete', new') =
+          ST.update tree serializer obsoleteTrees newTrees in
+    ((T.union obsolete' allObsolete,
+      T.union new' allNew,
+      
+      if ST.isEmpty (getAnnotatedValue tree) then
+        obsoleteTrees else
+        T.insert key tree obsoleteTrees,
+      
+      if ST.isEmpty tree' then
+        T.empty else
+        T.singleton key (Annotate tree' (Stamp revision time))),
+     
+     serializer')
+
+updateRootSyncTree (allObsolete, allNew, obsoleteTrees, newTrees) = do
+  with ignisRootTree \tree ->
+    withSerializer WriterTreeSerializer \serializer ->
       let (tree', serializer', obsolete', new') =
-            ST.update tree serializer ? ? in
-      (((T.union obsolete' obsolete,
-         T.union new' new),
+            ST.update tree serializer obsoleteTrees newTrees in
+      (((T.union obsolete' allObsolete,
+         T.union new' allNew),
         tree'),
        serializer')
+
+updateAcksAndNacks (allObsolete, allNew) = do
+  acks <- updateThenGet ignisAcks $ T.intersect allNew . T.subtract allObsolete
+  update ignisNacks T.union (T.subract acks allNew) . T.subtract allObsolete
 
 maybeUpdateSync = do
   maybeDiff <- get ignisDiff
@@ -182,7 +233,7 @@ makeDiff head atomicHead = do
         apply' (obsolete, new) acl =
           Right case operation of
             T.Remove -> (T.union path obsolete, new)
-            T.Add -> (obsolete, T.union (fmap (set' valueACL acl) path) new)
+            T.Add -> (obsolete, T.union (fmap (L.set valueACL acl) path) new)
 
 
 -- 1. compute diff (as sets of removes and adds)

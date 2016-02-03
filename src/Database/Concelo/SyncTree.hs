@@ -7,32 +7,33 @@ class Serializer a where
   serialize :: a -> Int -> Trie b -> [ByteString]
   encrypt :: a -> ByteString -> (a, ByteString)
 
-date Environment a b = Environment { _envTree :: SyncTree a
-                                   , _envSerializer :: b
-                                   , _envObsolete :: Trie Key (Chunk a)
-                                   , _envNew :: Trie Key (Chunk a) }
+date Environment a b = Environment { getEnvTree :: SyncTree a
+                                   , getEnvSerializer :: b
+                                   , getEnvObsolete :: Trie Key (Chunk a)
+                                   , getEnvNew :: Trie Key (Chunk a) }
+
+envTree = L.lens getEnvTree (\e v -> e { getEnvTree = v })
+envSerializer = L.lens getEnvSerializer (\e v -> e { getEnvSerializer = v })
+envObsolete = L.lens getEnvObsolete (\e v -> e { getEnvObsolete = v })
+envNew = L.lens getEnvNew (\e v -> e { getEnvNew = v })
 
 data Chunk a = Group { groupName :: Key
                      , groupHeight :: Key
-                     , groupMembers :: Trie Key (Chunk a) }
+                     , groupMembers :: Trie Key (Chunk a)
+                     , groupBody :: ByteString }
              | Leaf { leafSerialized :: ByteString
                     , leafPath :: Trie a }
 
 data ChunkKey = GroupKey | LeafKey
 
-data SyncTree a = SyncTree { _treeByReverseKeyMember :: Trie Key (Chunk a)
-                           , _treeByHeightVacancy :: Trie Key (Chunk a) }
+data SyncTree a = SyncTree { getTreeByReverseKeyMember :: Trie Key (Chunk a)
+                           , getTreeByHeightVacancy :: Trie Key (Chunk a) }
 
-envTree = L.lens _envTree (\e v -> e { _envTree = v })
-envSerializer = L.lens _envSerializer (\e v -> e { _envSerializer = v })
-envObsolete = L.lens _envObsolete (\e v -> e { _envObsolete = v })
-envNew = L.lens _envNew (\e v -> e { _envNew = v })
+treeByReverseKeyMember = L.lens getTreeByReverseKeyMember
+                         (\t v -> t { getTreeByReverseKeyMember = v })
 
-treeByReverseKeyMember = L.lens _treeByReverseKeyMember
-                         (\t v -> t { _treeByReverseKeyMember = v })
-
-treeByHeightVacancy = L.lens _treeByHeightVacancy
-                      (\t v -> t { _treeByHeightVacancy = v })
+treeByHeightVacancy = L.lens getTreeByHeightVacancy
+                      (\t v -> t { getTreeByHeightVacancy = v })
 
 empty = SyncTree Nothing T.empty T.empty
 
