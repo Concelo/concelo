@@ -4,8 +4,8 @@ module Database.Concelo.SyncTree
 type Key = ByteString
 
 class Serializer a where
-  serialize :: a -> Int -> Trie b -> [ByteString]
-  encrypt :: a -> ByteString -> (a, ByteString)
+  serialize :: Int -> Trie b -> a -> [ByteString]
+  encrypt :: ByteString -> a -> (a, ByteString)
 
 date Environment a b = Environment { getEnvTree :: SyncTree a
                                    , getEnvSerializer :: b
@@ -92,24 +92,24 @@ oneExactly [x] = Just x
 oneExactly _ = Nothing
 
 serialize' trie =
-  get envSerializer >>= flip serialize trie
+  get envSerializer >>= serialize maxSize trie
 
-encrypt' text = do
-  serializer <- get envSerializer
-  let (serializer', ciphertext) = encrypt serializer text
-  set envSerializer serializer'
-  return ciphertext
+encrypt' text =
+  with envSerializer $ encrypt text
 
 makeGroup members =
   T.first members >>= fromChunks where
-    fromChunks (List _ _) = fromLeaves
+    fromChunks (Leaf serialized _) = fromLeaves serialized
     fromChunks (Group _ _ _) = fromGroups
     
-    fromLeaves = do
+    fromLeaves first = do
       plaintext <- serialize' $ T.index leafPath members >>= oneExactly
+      let fragment = if T.single members then Just first else Nothing
 
-      case plaintext of
-        Nothing -> return Nothing
+      case plaintext <|> fragment of
+        Nothing ->
+          return Nothing
+        
         Just text ->
           ciphertext <- encrypt' text
           return $ Just $ Group (hash' ciphertext) 1 members ciphertext
@@ -190,7 +190,7 @@ updateTree = do
   update (treeByHeightVacancy . envTree) (updateIndex byHeightVacancy)
 
 split serializer path =
-  foldr fold (0, T.empty) $ serialize serializer path where
+  foldr fold (0, T.empty) $ serialize maxSize path serializer where
     fold string (count, trie) =
       (count + 1, T.union (fmap (const Leaf string path') path') trie) where
         path' = T.super count path

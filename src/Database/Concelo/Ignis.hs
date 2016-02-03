@@ -5,10 +5,10 @@ import qualified Data.ByteString as BS
 import qualified Database.Concelo.Crypto as C
 import qualified Database.Concelo.Protocol as P
 
-data Auth = Auth { _authPrivate :: ByteString
-                 , _authPublic :: ByteString
-                 , _authRequest :: Int
-                 , _authSent :: Bool }
+data Cred = Cred { _credPrivate :: ByteString
+                 , _credPublic :: ByteString
+                 , _credRequest :: Int
+                 , _credSent :: Bool }
 
 data Ignis = Ignis { }
 
@@ -29,7 +29,7 @@ authenticate (EmailPassword email password) =
 
 authenticateWithPrivateKey private =
   request <- get ignisNextRequest
-  set ignisAuth $ Just $ Auth private (C.derivePublic private) request False
+  set ignisCred $ Just $ Cred private (C.derivePublic private) request False
   nextRequest
 
 nextRequest = do
@@ -61,23 +61,23 @@ bind2 f x y = do
           f x'' y''
 
 maybeAuthenticate =
-  bind2 try (get ignisAuth) (get ignisChallenge) where
+  bind2 try (get ignisCred) (get ignisChallenge) where
       
-    try auth challenge =
-      if getAuthSent auth then return Nothing else do
-        set ignisAuth $ Just $ L.set authSent True auth
+    try cred challenge =
+      if getCredSent cred then return Nothing else do
+        set ignisCred $ Just $ L.set credSent True cred
         
-        sign (getAuthPrivate auth) challenge
+        sign (getCredPrivate cred) challenge
           >>= P.serialize
-          . P.Auth (getAuthRequest auth) (getAuthPublic auth)
+          . P.Cred (getCredRequest cred) (getCredPublic cred)
 
-getAuth = do
-  maybeAuth <- get ignisAuth
-  case maybeAuth of
+getPublic = do
+  maybeCred <- get ignisCred
+  case maybeCred of
     Nothing -> return Nothing
-    Just auth -> return $ getAuthPublic auth
+    Just cred -> return $ getCredPublic cred
 
-unAuth = set ignisAuth Nothing
+unAuth = set ignisCred Nothing
 
 update now update atomicUpdate = do
   head <- get ignisHead >>= return . update
@@ -96,8 +96,8 @@ update now update atomicUpdate = do
       return $ Left error
 
 nextMessage = do
-  maybeAuth <- get ignisAuth
-  case maybeAuth of
+  maybeCred <- get ignisCred
+  case maybeCred of
     Nothing -> return Nothing
     Just _ -> do
       maybeMessage <- maybeAuthenticate
@@ -107,7 +107,7 @@ nextMessage = do
           return $ Just message
 
         Nothing -> do
-          maybeUpdateSync
+          maybeUpdateTrees
       
           maybeNack <- get ignisNacks >>= return . T.firstPath
       
@@ -124,13 +124,13 @@ mapPair f (x, y) = (f x, f y)
 byACL path value = T.super (getValueACL value) path
 
 withSerializer constructor f = do
-  maybeAuth <- ignisAuth
-  case maybeAuth of
+  maybeCred <- ignisCred
+  case maybeCred of
     Nothing -> error "cannot encrypt without private key"
-    Just auth -> 
-      with ignisPRNG (f . constructor (getAuthPrivate auth))
+    Just cred -> 
+      with ignisPRNG (f . constructor (getCredPrivate cred))
 
-updateACLSyncTrees (obsoleteValues, newValues) = do
+updateACLTrees (obsoleteValues, newValues) = do
   with ignisACLTrees \trees ->
     withSerializer ValueSerializer \serializer ->
       foldr update (((T.empty, T.empty, T.empty, T.empty), trees), serializer)
@@ -162,36 +162,41 @@ updateACLSyncTrees (obsoleteValues, newValues) = do
           ST.update (annotatedValue tree) serializer
           (T.sub acl obsoleteValues) (T.sub acl newValues)
 
-updateMySyncTree (allObsolete, allNew, obsoleteTrees, newTrees) = do
-  let whoAmI = fromMaybe $ error "I don't know who I am!"
-  auth <- get ignisAuth >>= return . whoAmI
-  challenge <- get ignisChallenge >>= return . whoAmI
-  
-  let key = T.super (getIgnisPublic auth) (T.key challenge)
-  tree <- get ignisWriterTrees >>= return . fromMaybe ST.empty . T.find key
-  revision <- updateThenGet ignisRevision (+1)
+whoAmI = return . (fromMaybe $ error "I don't know who I am!")
+
+updateMyTree (allObsolete, allNew, obsoleteTrees, newTrees) = do
+  cred <- get ignisCred >>= whoAmI
+  challenge <- get ignisChallenge >>= whoAmI
+  revision <- getThenUpdate ignisNextRevision (+1)
   time <- get ignisUpdateTime
    -- all trees from other writers using the same keypair we're using
    -- except for the most recent published revision, if applicable:
-  obsoleteTrees <- get ignisObsoleteTrees
+  obsoleteTrees <- get ignisPeerTrees
 
-  withSerializer ACLTreeSerializer \serializer ->
-    let (tree', serializer', obsolete', new') =
-          ST.update tree serializer obsoleteTrees newTrees in
-    ((T.union obsolete' allObsolete,
-      T.union new' allNew,
+  with ignisMyTree \tree ->
+    -- NB: the acl serializer will enumerate the key encrypted for all authorized readers
+    withSerializer ACLTreeSerializer \serializer ->
+      let (tree', serializer', obsolete', new') =
+            ST.update (annotatedValue tree) serializer obsoleteTrees
+            newTrees
+          annotated = (Annotate tree'
+                       (Stamp
+                        (getIgnisPublic cred) challenge revision time)) in
+      (((T.union obsolete' allObsolete,
+         T.union new' allNew,
       
-      if ST.isEmpty (getAnnotatedValue tree) then
-        obsoleteTrees else
-        T.insert key tree obsoleteTrees,
+         if ST.isEmpty (getAnnotatedValue tree) then
+           obsoleteTrees else
+           T.insert key tree obsoleteTrees,
       
-      if ST.isEmpty tree' then
-        T.empty else
-        T.singleton key (Annotate tree' (Stamp revision time))),
-     
-     serializer')
+         if ST.isEmpty tree' then
+           T.empty else
+           T.singleton revision annotated),
+        
+        annotated),
+       serializer')
 
-updateRootSyncTree (allObsolete, allNew, obsoleteTrees, newTrees) = do
+updateRootTree (allObsolete, allNew, obsoleteTrees, newTrees) = do
   with ignisRootTree \tree ->
     withSerializer WriterTreeSerializer \serializer ->
       let (tree', serializer', obsolete', new') =
@@ -205,36 +210,42 @@ updateAcksAndNacks (allObsolete, allNew) = do
   acks <- updateThenGet ignisAcks $ T.intersect allNew . T.subtract allObsolete
   update ignisNacks T.union (T.subract acks allNew) . T.subtract allObsolete
 
-maybeUpdateSync = do
+maybeUpdateTrees = do
   maybeDiff <- get ignisDiff
   case maybeDiff of
     Nothing -> return ()
     Just diff ->
-      updateACLSyncTrees $ mapPair (T.indexPaths byACL) diff
-      >>= updateMySyncTree
-      >>= updateRootSyncTree
+      updateACLTrees $ mapPair (T.indexPaths byACL) diff
+      >>= updateMyTree
+      >>= updateRootTree
       >>= updateAcksAndNacks
 
-validUpdate path head = do
-  me <- getAuth
+getACL obsoletePath newPath = do
   base <- get ignisBase
-  rules <- get ignisBase rules    
+  error "todo: efficiently calculate the ACL for this update, reusing an existing one if possible"  
 
-  error "todo: apply rules and return Right ACL if valid or Left error otherwise"
+validUpdate obsoletePath newPath = do
+  me <- getPublic >>= whoAmI
+  base <- get ignisBase
+  valid <- get ignisValid
+  if valid obsoletePath newPath base then do
+    acl <- getACL obsoletePath newPath
+    if writer acl me then
+      return $ Right acl else
+      return $ Left "write access denied" else
+    return $ Left "validation failed"
 
 makeDiff head atomicHead = do
   base <- get ignisBase
   foldM apply (Right (T.empty, T.empty)) $ T.diff base atomicHead where
 
-    apply (operation, path) diff = do
-      acl <- validateUpdate path atomicHead
+    apply (obsoletePath, newPath) diff = do
+      acl <- validateUpdate obsoletePath newPath
       return (apply' <$> diff <*> acl) where
     
-        apply' (obsolete, new) acl =
-          Right case operation of
-            T.Remove -> (T.union path obsolete, new)
-            T.Add -> (obsolete, T.union (fmap (L.set valueACL acl) path) new)
-
+        apply' (obsoletePaths, newPaths, newACLs) acl =
+          (T.union obsoletePath obsoletePaths,
+           T.union (fmap (L.set valueACL acl) newPath) newPaths)
 
 -- 1. compute diff (as sets of removes and adds)
   
