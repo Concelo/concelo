@@ -18,14 +18,11 @@ data Credentials = PrivateKey { _privateKey :: ByteString }
 
 ignis = Ignis
 
-privateKeySizeInBytes = 32
-
 authenticate (PrivateKey private) =
   authenticateWithPrivateKey private
 
 authenticate (EmailPassword email password) =
-  authenticateWithPrivateKey
-  $ C.derivePrivate privateKeySizeInBytes password email
+  authenticateWithPrivateKey $ C.derivePrivate password email
 
 authenticateWithPrivateKey private =
   request <- get ignisNextRequest
@@ -220,16 +217,80 @@ maybeUpdateTrees = do
       >>= updateRootTree
       >>= updateAcksAndNacks
 
-getACL obsoletePath newPath = do
+data Context = Context { getContextMe :: PublicKey
+                       , getContextRevision :: Integer
+                       , getContextRoot :: Trie Key (Value a)
+                       , getContextEnv :: Trie Key Key
+                       , getContextBase :: Trie Key (Value a)
+                       , getContextHead :: Trie Key (Value a) }
+
+updateACL context acl acls rules =
+  if (getRulesValid rules) context then
+    Right $ intern
+    (L.over aclWrite ((getRulesWrite rules) context)
+     $ L.over aclRead ((getRulesRead rules) context) acl) acls else
+    Left "validation failed"
+
+validate context rules diff path acl
+  result@(tries@(obsoleteTrie, newTrie), acls) =
+    (if T.empty diff then
+       result else
+       case fromMaybe (Right (acl, acls))
+            (T.value rules >>= Just $ updateACL context acl acls) of
+         Right (acl', acls') ->
+           Right $ foldr fold
+           (maybe (tries, acls')
+            (\(obsoleteValue, newValue) ->
+              ((maybe obsoleteTrie \v ->
+                 T.union (singleton path v) obsoleteTrie,
+                
+                maybe newTrie \v ->
+                T.union (singleton path $ L.set valueACL acl' v) newTrie),
+         
+               acls'))
+
+            $ T.value diff)
+           $ T.keys diff
+      
+         Left error -> Left error) where
+    
+      fold key result =
+        let rules' = T.sub key rules
+            context' = L.over contextBase (T.sub key)
+                       $ L.over contextHead (T.sub key)
+            diff' = T.sub key diff
+            path' = key : path
+            result' = validate context' rules' diff' path' acl result in
+      
+        if T.null rules' then
+          case T.value rules >>= getRulesWildCard of
+            Just (name, rules') ->
+              validate (L.over contextEnv (T.insert name key) context') rules'
+              diff' path' acl result
+            
+            Nothing ->
+              result' else
+          result'
+
+makeDiff head = do
+  me <- getPublic >>= whoAmI
   base <- get ignisBase
-  error "todo: efficiently calculate the ACL for this update, reusing an existing one if possible"  
+  rules <- get ignisRules
+  revision <- get ignisNextRevision
+  emptyACL <- get ignisEmptyACL
+  
+  with ignisACLs \acls ->
+    validate (Context me revision base T.empty base head) rules
+    (T.diff base head) [] emptyACL ((T.empty, T.empty), acls)
 
 validUpdate obsoletePath newPath = do
   me <- getPublic >>= whoAmI
   base <- get ignisBase
   valid <- get ignisValid
-  if valid obsoletePath newPath base then do
-    acl <- getACL obsoletePath newPath
+  if valid obsoletePath newPath base me then do
+    readWrite <- get ignisReadWrite
+    trees <- get ignisACLTrees
+    let acl = readWrite obsoletePath newPath base trees
     if writer acl me then
       return $ Right acl else
       return $ Left "write access denied" else
