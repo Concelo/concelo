@@ -16,7 +16,7 @@ data Credentials = PrivateKey { _privateKey :: ByteString }
                  | EmailPassword { _email :: Text
                                  , _password :: Text }
 
-ignis = Ignis
+ignis rules = R.parse rules >>= Right . Ignis
 
 authenticate (PrivateKey private) =
   authenticateWithPrivateKey private
@@ -238,19 +238,21 @@ validate context rules diff path acl
        case fromMaybe (Right (acl, acls))
             (T.value rules >>= Just $ updateACL context acl acls) of
          Right (acl', acls') ->
-           Right $ foldr fold
-           (maybe (tries, acls')
-            (\(obsoleteValue, newValue) ->
-              ((maybe obsoleteTrie \v ->
-                 T.union (singleton path v) obsoleteTrie,
+           case T.value diff of
+             Just (obsoleteValue, newValue) ->
+               if aclWriter (getContextMe context) acl' then
+                 Right $ foldr fold
+                 ((maybe obsoleteTrie \v ->
+                     T.union (singleton path v) obsoleteTrie,
                 
-                maybe newTrie \v ->
-                T.union (singleton path $ L.set valueACL acl' v) newTrie),
-         
-               acls'))
+                   maybe newTrie \v ->
+                     T.union (singleton path $ L.set valueACL acl' v) newTrie),
+                  
+                  acls')
+                 $ T.keys diff else
+                 Left "write access denied"
 
-            $ T.value diff)
-           $ T.keys diff
+             Nothing -> Right foldr fold (tries, acls') $ T.keys diff
       
          Left error -> Left error) where
     
