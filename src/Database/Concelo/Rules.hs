@@ -127,7 +127,8 @@ characterSet = do
   negate <- (optional $ prefix "^") >>= isJust
   atoms <- zeroOrMore (atom >>| interval)
   prefix "]"
-  return $ CharacterSet negate atoms
+  return $ if negate then Neg else id $ foldr fold Fail atoms where
+    fold atom alternative = Alternative atom alternative
 
 suffix s = do
   a <- patternElement
@@ -154,7 +155,7 @@ pattern ignoreCase = do
 regex = do
   p <- stringLiteral' '/'
   ignoreCase <- (optional $ terminal 'i') >>= return . isJust
-  case runParser (pattern >>= eos) (Fields T.empty p False) of
+  case runParser (pattern >>= eos) (RegexState p) of
     Right result -> return result
     Left error -> throwError error
 
@@ -352,36 +353,111 @@ hasValueOfType trie type' =
       Number -> return true
       _ -> return false)
 
+test parser p = parser >>= \x -> if p x then return x else throwError ()
+
+evalMatch m =
+  case m of
+    Character c -> prefix [c]
+    Alternative a b -> evalMatch a >>| evalMatch b
+    Space -> test character isSpace
+    WordCharacter -> test character \c -> (isAlphaNum c) || c == '_'
+    Digit -> test character isDigit
+    Neg a -> do
+      result <- evalMatch a >> return True >>| return False
+      if result then throwError() else return ()
+    Interval a b -> test character \c -> ord c >= ord a && ord c <= ord b
+    ZeroOrMore a -> zeroOrMore $ evalMatch a
+    OneOrMore a -> evalMatch a >>= zeroOrMore (evalMatch a)
+    ZeroOrOne a -> optional $ evalMatch a
+    WildCard -> character
+    Fail -> throwError ()
+     
+tryMatch = do
+  m <- get matchStateMatchers
+  case m of
+    [] -> return ()
+    m:ms -> do
+      set matchStateMatchers ms
+      evalMatch m
+
+match anchorStart anchorEnd =
+  again where
+    again
+      =   tryMatch >> if anchorEnd then eos else return ()
+      >>| const if anchorStart then
+                  throwError () else
+                  update position (drop 1) >> again
+
 matches string (Pattern ignoreCase anchorStart anchorEnd elements) =
-  error "todo"
-    
-      
+  case runParser (match anchorStart anchorEnd)
+       (MatchState string elements ignoreCase) of
+    Right _ -> True
+    Left _ -> False
 
 eval expression context =
   case expression of
     And a b -> eval a && eval b
     Or a b -> eval a || eval b
     Not a -> not $ eval a
-    HasChild trie key -> not $ null $ T.sub key trie
+    HasChild trie key -> not $ null $ T.sub (eval key) $ eval trie
     
-    HasChildren trie (Just keys) -> foldr fold True keys where
-      fold key result = (not $ null $ T.sub key trie) && result
+    HasChildren trie (Just keys) -> foldr fold True $ eval keys where
+      fold key result = (not $ null $ T.sub key $ eval trie) && result
       
-    HasChildren trie Nothing -> not $ null $ T.keys trie
+    HasChildren trie Nothing -> not $ null $ T.keys $ eval trie
     
-    Exists trie -> not $ null trie
-    IsNumber trie -> trie `hasValueOfType` NumberType
-    IsString trie -> trie `hasValueOfType` StringType
-    IsBoolean trie -> trie `hasValueOfType` BooleanType
-    Contains string substring -> substring `isInfixOf` string
-    BeginsWith string substring -> substring `isPrefixOf` string
-    EndsWith string substring -> substring `isSuffixOf` string
-    Matches string pattern -> matches string pattern
+    Exists trie -> not $ null $ eval trie
+    -- todo: use pattern matching instead:
+    IsNumber trie -> eval trie `hasValueOfType` NumberType
+    IsString trie -> eval trie `hasValueOfType` StringType
+    IsBoolean trie -> eval trie `hasValueOfType` BooleanType
+    
+    Contains string substring -> eval substring `isInfixOf` eval string
+    BeginsWith string substring -> eval substring `isPrefixOf` eval string
+    EndsWith string substring -> eval substring `isSuffixOf` eval string
+    Matches string pattern -> eval string `matches` eval pattern
+    NumberEqual a b -> eval a == eval b
+    NumberLessThan a b -> eval a < eval b
+    NumberGreaterThan a b -> eval a > eval b
+    NumberIfElse a b c -> if eval a then eval b else eval c
+    StringEqual a b -> eval a == eval b
+    StringLessThan a b -> eval a < eval b
+    StringGreaterThan a b -> eval a > eval b
+    StringIfElse a b c -> if eval a then eval b else eval c    
+    BooleanEqual a b -> eval a == eval b
+    BooleanLessThan a b -> eval a < eval b
+    BooleanGreaterThan a b -> eval a > eval b
+    BooleanIfElse a b c -> if eval a then eval b else eval c
+    Add a b -> eval a + eval b
+    Subtract a b -> eval a - eval b
+    Multiply a b -> eval a - eval b
+    Divide a b -> eval a / eval b
+    Modulo a b -> eval a `mod` eval b
+    Negate a b -> 0.0 - eval a
+    NumberVal trie -> fromMaybe 0 (T.value (eval trie) >>= valueNumber)
+    StringVal trie -> fromMaybe 0 (T.value (eval trie) >>= valueString)
+    BooleanVal trie -> fromMaybe 0 (T.value (eval trie) >>= valueBoolean)
+    Priority trie -> fromMaybe 0 (T.value (eval trie) >>= valuePriority)
+    Length a -> length $ eval a
+    StringLiteral a -> a
+    StringReference a -> fromJust $ T.find a $ getContextEnv context
+    Concatenate a b -> eval a ++ eval b
+    Replace string substring replacement ->
+      replace (eval substring) (eval replacement) (eval string)
+    ToLowerCase a -> toLower $ eval a
+    ToUpperCase a -> toUpper $ eval a
+    Uid _ -> getContextMe context
+    Auth -> ()
+    Root -> getContextRoot context
+    Data -> getContextData context
+    NewData -> getContextNewData context
+    Child trie key -> T.sub (eval key) (eval trie)
+    Parent trie -> error "todo: track ancestors as list for each trie we walk"
 
 parseRule evaluate value env =
   case value of
     J.String s -> do
-      runParser (boolean >>= eos >>= annotate) (Fields env xs False)
+      runParser (boolean >>= eos >>= annotate) (ParseState env xs False)
         >>= return . evaluate
     _ -> Left "unexpected type in rule"
 

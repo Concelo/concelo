@@ -136,6 +136,7 @@ addNewGroupsForHeight height =
   do
     new <- get envNew >>= return . T.isolate height
     if height == 0 || twoOrMore new then
+      -- todo: group paths in a (psuedo)random order
       newGroups <- foldM group T.empty $ T.paths new
       oldGroups <- T.subtract obosolete . T.sub above
                    <$> get (treeByHeightVacancy . envTree)
