@@ -177,25 +177,25 @@ booleanCall
   >>| call1 string "matches" regex Matches
 
 comparison
-  =   binary number "===" NumberEqual
-  >>| binary number "!==" \a b -> Not $ NumberEqual a b
-  >>| binary number "<" NumberLessThan
-  >>| binary number ">" NumberGreaterThan
-  >>| binary number "<=" \a b -> Not $ NumberGreaterThan
-  >>| binary string "===" StringEqual
-  >>| binary string "!==" \a b -> Not $ StringEqual a b
-  >>| binary string "<" StringLessThan
-  >>| binary string ">" StringGreaterThan
-  >>| binary string "<=" \a b -> Not $ StringGreaterThan
-  >>| binary string ">=" \a b -> Not $ StringLessThan
-  >>| binary boolean "===" BooleanEqual
-  >>| binary boolean "!==" \a b -> Not $ BooleanEqual a b
-  >>| binary boolean "<" BooleanLessThan
-  >>| binary boolean ">" BooleanGreaterThan
-  >>| binary boolean "<=" \a b -> Not $ BooleanGreaterThan
-  >>| binary boolean ">=" \a b -> Not $ BooleanLessThan
+  =   binary number "===" Equal
+  >>| binary number "!==" \a b -> Not $ Equal a b
+  >>| binary number "<" LessThan
+  >>| binary number ">" GreaterThan
+  >>| binary number "<=" \a b -> Not $ GreaterThan
+  >>| binary string "===" Equal
+  >>| binary string "!==" \a b -> Not $ Equal a b
+  >>| binary string "<" LessThan
+  >>| binary string ">" GreaterThan
+  >>| binary string "<=" \a b -> Not $ GreaterThan
+  >>| binary string ">=" \a b -> Not $ LessThan
+  >>| binary boolean "===" Equal
+  >>| binary boolean "!==" \a b -> Not $ Equal a b
+  >>| binary boolean "<" LessThan
+  >>| binary boolean ">" GreaterThan
+  >>| binary boolean "<=" \a b -> Not $ GreaterThan
+  >>| binary boolean ">=" \a b -> Not $ LessThan
 
-booleanTernary = ternary boolean BooleanIfElse
+booleanTernary = ternary boolean IfElse
 
 void = return ()
 
@@ -252,7 +252,7 @@ field object field expression = do
 
 numberField = field string "length" Length
 
-numberTernary = ternary number NumberIfElse
+numberTernary = ternary number IfElse
 
 stringLiteralBody delimiter =
   character >>= unescaped where
@@ -290,7 +290,7 @@ stringField = do
   set fieldUsingUid True
   return a
 
-stringTernary = ternary string StringIfElse
+stringTernary = ternary string IfElse
 
 auth = terminal "auth" >> return Auth
 
@@ -340,12 +340,17 @@ annotate expression = do
 evalACL lens (UsingUid expression) context acl =
   foldr fold acl $ acListsBlackList $ L.get lens acl where
     fold uid acl
-      | eval expression (L.set contextMe uid) = whiteList lens uid acl
+      | evalRule expression (L.set contextMe uid) = whiteList lens uid acl
       | otherwise = acl
 
 evalACL lens expression context acl
-  | eval expression context = whiteListAll lens acl
+  | evalRule expression context = whiteListAll lens acl
   | otherwise = blackListAll lens acl
+
+evalRule expression context =
+  case runErrorT $ evalBoolean expression context of
+    Right v -> v
+    Left _ -> False
 
 hasValueOfType trie type' =
   fromMaybe false
@@ -394,65 +399,91 @@ matches string (Pattern ignoreCase anchorStart anchorEnd elements) =
     Right _ -> True
     Left _ -> False
 
+lift3 f a b c = liftM3 f (eval a) (eval b) (eval c)
+lift2 f a b = liftM2 f (eval a) (eval b)
+lift1 f a = fmap f $ eval a
+
 eval expression context =
   case expression of
-    And a b -> eval a && eval b
-    Or a b -> eval a || eval b
-    Not a -> not $ eval a
-    HasChild trie key -> not $ null $ T.sub (eval key) $ eval trie
+    And a b -> lift2 (&&) a b
+    Or a b -> lift2 (||) a b
+    Not a -> lift1 not a
     
-    HasChildren trie (Just keys) -> foldr fold True $ eval keys where
-      fold key result = (not $ null $ T.sub key $ eval trie) && result
+    HasChild v key -> lift2 hasChild v key where
+      hasChild v key = not $ null $ T.sub key $ getVisitorTrie v
+    
+    HasChildren v (Just keys) -> lift2 hasChildren v keys where
+      hasChildren v keys = foldr fold True keys
+      fold key result = (not $ null $ T.sub key $ getVisitorTrie v) && result
       
-    HasChildren trie Nothing -> not $ null $ T.keys $ eval trie
+    HasChildren v Nothing -> lift1 hasChildren v where
+      hasChildren v = not $ null $ T.keys $ getVisitorTrie v
     
-    Exists trie -> not $ null $ eval trie
-    -- todo: use pattern matching instead:
-    IsNumber trie -> eval trie `hasValueOfType` NumberType
-    IsString trie -> eval trie `hasValueOfType` StringType
-    IsBoolean trie -> eval trie `hasValueOfType` BooleanType
+    Exists v -> lift1 exists v where
+      exists v = not $ null $ getVisitorTrie v
+
+    IsNumber v -> lift1 isNumber v where
+      isNumber v = maybe False (const True)
+                   $ (T.value $ getVisitorTrie v) >>= valueNumber
+
+    IsString v -> lift1 isString v where
+      isString v = maybe False (const True)
+                   $ (T.value $ getVisitorTrie v) >>= valueString
+
+    IsBoolean v -> lift1 isBoolean v where
+      isBoolean v = maybe False (const True)
+                    $ (T.value $ getVisitorTrie v) >>= valueBoolean
     
-    Contains string substring -> eval substring `isInfixOf` eval string
-    BeginsWith string substring -> eval substring `isPrefixOf` eval string
-    EndsWith string substring -> eval substring `isSuffixOf` eval string
-    Matches string pattern -> eval string `matches` eval pattern
-    NumberEqual a b -> eval a == eval b
-    NumberLessThan a b -> eval a < eval b
-    NumberGreaterThan a b -> eval a > eval b
-    NumberIfElse a b c -> if eval a then eval b else eval c
-    StringEqual a b -> eval a == eval b
-    StringLessThan a b -> eval a < eval b
-    StringGreaterThan a b -> eval a > eval b
-    StringIfElse a b c -> if eval a then eval b else eval c    
-    BooleanEqual a b -> eval a == eval b
-    BooleanLessThan a b -> eval a < eval b
-    BooleanGreaterThan a b -> eval a > eval b
-    BooleanIfElse a b c -> if eval a then eval b else eval c
-    Add a b -> eval a + eval b
-    Subtract a b -> eval a - eval b
-    Multiply a b -> eval a - eval b
-    Divide a b -> eval a / eval b
-    Modulo a b -> eval a `mod` eval b
-    Negate a b -> 0.0 - eval a
-    NumberVal trie -> fromMaybe 0 (T.value (eval trie) >>= valueNumber)
-    StringVal trie -> fromMaybe 0 (T.value (eval trie) >>= valueString)
-    BooleanVal trie -> fromMaybe 0 (T.value (eval trie) >>= valueBoolean)
-    Priority trie -> fromMaybe 0 (T.value (eval trie) >>= valuePriority)
-    Length a -> length $ eval a
-    StringLiteral a -> a
-    StringReference a -> fromJust $ T.find a $ getContextEnv context
-    Concatenate a b -> eval a ++ eval b
+    Contains string substring -> lift2 isInfixOf substring string
+    BeginsWith string substring -> lift2 isPrefixOf substring string
+    EndsWith string substring -> lift2 isSuffixOf substring string
+    Matches string pattern -> lift2 matches string pattern
+    
+    Equal a b -> lift2 (==) a b
+    LessThan a b -> lift2 (<) a b
+    GreaterThan a b -> lift2 (>) a b
+    IfElse a b c -> lift3 (\a b c -> if a then b else c) a b c
+    
+    Add a b -> lift2 (+) a b
+    Subtract a b -> lift2 (-) a b
+    Multiply a b -> lift2 (*) a b
+    Divide a b -> lift2 (/) a b
+    Modulo a b -> lift2 mod a b
+    Negate a b -> lift1 (0.0-) a
+    
+    NumberVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
+                                     >>= valueNumber)
+
+    StringVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
+                                     >>= valueString)
+
+    BooleanVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
+                                      >>= valueBoolean)
+
+    Priority v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
+                                    >>= valuePriority)
+                     
+    Length a -> lift1 length a
+    StringLiteral a -> return a
+    StringReference a -> maybeToEither () T.find a $ getContextEnv context
+    Concatenate a b -> lift2 (++) a b
+    
     Replace string substring replacement ->
-      replace (eval substring) (eval replacement) (eval string)
-    ToLowerCase a -> toLower $ eval a
-    ToUpperCase a -> toUpper $ eval a
-    Uid _ -> getContextMe context
-    Auth -> ()
-    Root -> getContextRoot context
-    Data -> getContextData context
-    NewData -> getContextNewData context
-    Child trie key -> T.sub (eval key) (eval trie)
-    Parent trie -> error "todo: track ancestors as list for each trie we walk"
+      lift3 substring replacement string
+      
+    ToLowerCase a -> lift1 toLower a
+    ToUpperCase a -> lift1 toUpper a
+    
+    Uid _ -> return $ getContextMe context
+    Auth -> return ()
+    Root -> return $ getContextRoot context
+    Data -> return $ getContextData context
+    NewData -> return $ getContextNewData context
+    
+    Child v key -> lift2 child v key where
+      child v key = T.sub key $ getVisitorTrie v
+
+    Parent v -> eval v >>= maybeToEither () . getVisitorParent
 
 parseRule evaluate value env =
   case value of
