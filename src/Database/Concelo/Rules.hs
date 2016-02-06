@@ -4,10 +4,12 @@ module Database.Concelo.Rules
 data Fields = Fields { getFieldEnv :: Trie Key ()
                      , getFieldString :: String }
 
-type Parser a = StateT Fields (ErrorT () Identity) a
+-- type Parser a = StateT Fields (ErrorT () Identity) a
 
-runParser grammar fields =
-  runIdentity $ runErrorT $ evalStateT (Parser grammar) fields
+-- todo: enforce operator precedence and associativity
+
+runParser parser fields =
+  runIdentity $ runErrorT $ evalStateT parser fields
 
 eos expression = do
   s <- get fieldString >>= skipSpace
@@ -25,12 +27,20 @@ subtractPrefix [] cs = Just cs
 subtractPrefix _ _ = Nothing
 
 terminal t = do
-  s <- get fieldString >>= skipSpace
+  update fieldString skipSpace
+  prefix t
+
+prefix t = do
+  s <- get fieldString
   case subtractPrefix t s of
     Just s' -> do
       set fieldString s'
-      return ()
+      return t
     Nothing -> throwError ()
+
+optional parser
+  =   parser >>= return . Just
+  >>| return Nothing
 
 ternary parser expression = do
   a <- boolean
@@ -61,6 +71,93 @@ call0 object method argument expression = do
   group void
   return $ expression a
 
+intersperse delimiter parser = do
+  first <- optional parser
+  case first of
+    Just a ->
+      delimiter >> intersperse delimiter parser >>= return . (a:)
+      >>| [a]
+    Nothing -> return []
+
+stringArray = do
+  terminal "["
+  a <- intersperse (terminal ",") string
+  terminal "]"
+  return a
+
+element code expression =
+  prefix code >> return . expression
+
+alternative = do
+  a <- patternElement
+  prefix "|"
+  patternElement >>= return . Alternative a
+
+escaped = prefix "\\" >> character >>= return . Character
+
+atom
+  =   element "\s" Space
+  >>| element "\w" WordCharacter
+  >>| element "\d" Digit
+  >>| element "\S" (Neg . Space)
+  >>| element "\w" (Neg . WordCharacter)
+  >>| element "\d" (Neg . Digit)
+  >>| escaped
+  >>| unescaped
+
+unescaped =
+  character >>= \c -> case c of
+    ']' -> throwError ()
+    '$' -> throwError ()    
+    _ -> return $ Character c
+
+interval = do
+  a <- unescaped
+  prefix "-"
+  unescaped >>= return . Interval a
+
+zeroOrMore parser = do
+  first <- optional parser
+  case first of
+    Just a -> parser >>= return . (a:) >>| [a]
+    Nothing -> return []
+
+characterSet = do
+  prefix "["
+  negate <- (optional $ prefix "^") >>= isJust
+  atoms <- zeroOrMore (atom >>| interval)
+  prefix "]"
+  return $ CharacterSet negate atoms
+
+suffix s = do
+  a <- patternElement
+  prefix s
+  return a
+
+patternElement
+  =   group pattern
+  >>| suffix "*" ZeroOrMore
+  >>| suffix "+" OneOrMore
+  >>| suffix "?" ZeroOrOne
+  >>| alternative
+  >>| characterSet
+  >>| element "." Wildcard
+  >>| atom
+  >>| element "]" (Character ']')
+
+pattern ignoreCase = do
+  anchorStart <- (optional $ prefix "^") >>= return . isJust
+  elements <- zeroOrMore patternElement
+  anchorEnd <- (optional $ prefix "$") >>= return . isJust
+  return $ Pattern ignoreCase anchorStart anchorEnd elements
+  
+regex = do
+  p <- stringLiteral' '/'
+  ignoreCase <- (optional $ terminal 'i') >>= return . isJust
+  case runParser (pattern >>= eos) (Fields T.empty p False) of
+    Right result -> return result
+    Left error -> throwError error
+
 booleanOperation
   =   binary boolean "&&" And
   >>| binary boolean "||" Or
@@ -76,7 +173,7 @@ booleanCall
   >>| call1 string "contains" string Contains
   >>| call1 string "beginsWith" string BeginsWith
   >>| call1 string "endsWith" string EndsWith
-  >>| call1 string "matches" string Matches
+  >>| call1 string "matches" regex Matches
 
 comparison
   =   binary number "===" NumberEqual
@@ -156,31 +253,29 @@ numberField = field string "length" Length
 
 numberTernary = ternary number NumberIfElse
 
-stringLiteralPrefix c:cs
-  | c == '"' = unquoted [c] cs where
-    unquoted acc c:cs
-      | c == '"' = Just (reverse (c : acc), cs)
-      | c == '\\' = quoted acc cs
-      | otherwise = unquoted (c : acc) cs
-    unquoted _ [] = Nothing
+stringLiteralBody delimiter =
+  character >>= unescaped where
+    unescaped c
+      | c == delimiter = return []
+      | c == '\\' = character >>= escaped
+      | otherwise = character >>= unescaped >>= return . (c:)
 
-    quoted acc c:cs
-      | c == '"' = unquoted (c : acc) cs
-      | otherwise = unquoted ('\\' : c : acc) cs
+    escaped c
+      | c == delimiter = character >>= unescaped >>= return . (c:)
+      | otherwise = character >>= unescaped >>= return . ('\\':c:)
 
-    quoted _ [] = Nothing
+stringLiteral' delimiter = do
+  terminal [delimiter]
+  s <- stringLiteralBody delimiter
+  return s
 
-  | otherwise = Nothing
-                
-stringLiteralPrefix [] = Nothing
+stringLiteral = stringLiteral' '"' >>= return . StringLiteral
 
-stringLiteral = do
-  s <- get fieldString >>= skipSpace
-  case stringLiteralPrefix s of
-    (p, s') -> do
-      set fieldString s'
-      return $ StringLiteral p
-    Nothing -> throwError ()  
+stringReference =
+  get fieldEnv >>= foldr fold (throwError ()) where
+    fold key alternative =
+      terminal key >>= return . StringReference
+      >>| alternative
 
 stringOperation = binary string "+" Concatenate
 
@@ -222,6 +317,7 @@ number
 
 string
   =   stringLiteral
+  >>| stringReference
   >>| stringOperation
   >>| stringCall
   >>| stringField  
@@ -240,11 +336,47 @@ annotate expression = do
   usingUid <- get fieldUsingUid
   return if usingUid then UsingUid expression else expression
 
-evalACL expression context acl =
-  error "todo"
+evalACL lens (UsingUid expression) context acl =
+  foldr fold acl $ acListsBlackList $ L.get lens acl where
+    fold uid acl
+      | eval expression (L.set contextMe uid) = whiteList lens uid acl
+      | otherwise = acl
 
-evalBoolean expression context acl =
+evalACL lens expression context acl
+  | eval expression context = whiteListAll lens acl
+  | otherwise = blackListAll lens acl
+
+hasValueOfType trie type' =
+  fromMaybe false
+  (T.value trie >>= \v -> case valueType v of
+      Number -> return true
+      _ -> return false)
+
+matches string (Pattern ignoreCase anchorStart anchorEnd elements) =
   error "todo"
+    
+      
+
+eval expression context =
+  case expression of
+    And a b -> eval a && eval b
+    Or a b -> eval a || eval b
+    Not a -> not $ eval a
+    HasChild trie key -> not $ null $ T.sub key trie
+    
+    HasChildren trie (Just keys) -> foldr fold True keys where
+      fold key result = (not $ null $ T.sub key trie) && result
+      
+    HasChildren trie Nothing -> not $ null $ T.keys trie
+    
+    Exists trie -> not $ null trie
+    IsNumber trie -> trie `hasValueOfType` NumberType
+    IsString trie -> trie `hasValueOfType` StringType
+    IsBoolean trie -> trie `hasValueOfType` BooleanType
+    Contains string substring -> substring `isInfixOf` string
+    BeginsWith string substring -> substring `isPrefixOf` string
+    EndsWith string substring -> substring `isSuffixOf` string
+    Matches string pattern -> matches string pattern
 
 parseRule evaluate value env =
   case value of
@@ -271,9 +403,9 @@ parseTrie value env =
             Right $ L.set T.value (L.set ruleRead value rule) trie
       
       case key of
-        ".read" -> parseRule evalACL value env >>= update ruleRead
-        ".write" -> parseRule evalACL value env >>= update ruleWrite
-        ".validate" -> parseRule evalBoolean value env >>= update ruleValidate
+        ".read" -> parseACLRule aclReadLists value env >>= update ruleRead
+        ".write" -> parseACLRule aclWriteLists value env >>= update ruleWrite
+        ".validate" -> parseBooleanRule value env >>= update ruleValidate
         ".indexOn" -> parseIndexOn value >>= update ruleIndexOn
         
         name@('$' : _) ->
