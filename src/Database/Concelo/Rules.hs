@@ -127,8 +127,7 @@ characterSet = do
   negate <- (optional $ prefix "^") >>= isJust
   atoms <- zeroOrMore (atom >>| interval)
   prefix "]"
-  return $ if negate then Neg else id $ foldr fold Fail atoms where
-    fold atom alternative = Alternative atom alternative
+  return $ if negate then Neg else id $ foldr Alternative Fail atoms
 
 suffix s = do
   a <- patternElement
@@ -150,7 +149,8 @@ pattern ignoreCase = do
   anchorStart <- (optional $ prefix "^") >>= return . isJust
   elements <- zeroOrMore patternElement
   anchorEnd <- (optional $ prefix "$") >>= return . isJust
-  return $ Pattern ignoreCase anchorStart anchorEnd elements
+  return $ Pattern ignoreCase anchorStart anchorEnd
+    $ foldr Sequence Success elements
   
 regex = do
   p <- stringLiteral' '/'
@@ -363,7 +363,8 @@ test parser p = parser >>= \x -> if p x then return x else throwError ()
 evalMatch m =
   case m of
     Character c -> prefix [c]
-    Alternative a b -> evalMatch a >>| evalMatch b
+    Sequence a b -> evalMatch a >> evalMatch b
+    Alternative a b -> evalMatch a >>| const evalMatch b
     Space -> test character isSpace
     WordCharacter -> test character \c -> (isAlphaNum c) || c == '_'
     Digit -> test character isDigit
@@ -376,6 +377,7 @@ evalMatch m =
     ZeroOrOne a -> optional $ evalMatch a
     WildCard -> character
     Fail -> throwError ()
+    Success -> return ()
      
 tryMatch = do
   m <- get matchStateMatchers
