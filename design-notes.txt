@@ -55,61 +55,14 @@ consistency
 
 The server chooses a global order for updates, and each update has a prerequisite such that it is only accepted if it immediately follows its prerequisite in the global order.  This makes every update atomic.  Clients trust but verify by checking that updates have arrived in an order consistent with the prerequisite chain.
 
-The server should send all updates it receives (minus those that are obsoleted by the same writer), leaving the clients to apply the rules and weed out bad updates.  If more than one valid update remains that satisifies both the rules and a common space in the prereq chain, the first to arrive according to the order the server sent them will win.
+To post an update, the writer posts a single trie with the hash of the previously published trie as a prequisite.  The server accepts the trie iff the prequisite matches and each ACL-specific subtrie is signed by an authorized writer and is the newest available revision for that ACL, according to the revision number.  A reader accepts all or part of the trie depending on what it considers to be the newest revision for each ACL and sanitizes the result by eliminating values which fail to validate (or picking an alternative if available).
 
-Note the server can't even throw out an update that seems to fail the prerequisite ordering, since a whole sequence in front of it may be invalid according to the rules.  This means the prerequisite field should probably be hidden (encrypted) from the server, since it can't do anything with it.
-
-If the server is sneaky, it can send different orders to different consumers by forking when there's more than one "simultaneous" write, but that just amounts to creating an artificial partition, which is already possible via selective delivery of updates.
-
-A prerequisite consists of a list of update hashes, one for every other writer besides the writer of the given update.
-
-Addendums:
-
-Actually, the server should still throw out misordered updates, since the writer can/should at least acknowledge an invalid write in its revised update.  Syncing and signing the whole top-level tree (including everyone's latest writes) in write order might be the most natural way to do this.
-
-The grouping from the top should be by writer, then ACL, then values, so it's easy/efficient for the server to censor unreadable data for each reader.
-
-Every chunk should be signed by the writer and annotated with the encryption key used for all chunks at or below so they can be forwarded before the entire sync has arrived.
-
-If the server fails and forgets everything, it should grab the most recent snapshot from the persistent store and rely on users to push their updated view of the state as they can.  (Provide API option to indicate when an update is synced to the persistent store.)  This may lead to accidental (or even intentional) forks due to users connecting during the window of time after the server restores from persistence and before anyone can push the latest state, in which case merging is necessary, and the merged tree must reference all of the inputs to the merge so that it can be independently validated.
-
-Each write consists of the writer's latest updates (in the form of a trie) plus the signed tries of any other writers' which are referenced (these are implicitly asserted to be the latest tries the writer has received from those other writers).  Validation involves applying the rules JSON to the new trie, verifying that each write is signed by an appropriate party and that write appears in the latest referenced trie signed by that party (in addition to the new trie).  If the receiver happens to have a newer tries than those referenced (which could be due to a fail/restore scenario as described above, a misbehaving server, or a misbehaving user), it should merge them and publish the result.
-
-Note that users (and misbehaving servers) may have opportunities to fork the database and thereby suppress writes or deletes they don't like, and this may fool users who don't (yet) have access to newer information, but this can be eventually rectified once someone publishes the newer tries.  The server always has the power to partition and/or deny service, but it can't decode that data to make fine-grained decisions unless a user cooperates, and the user can't prevent the server from publishing what it doesn't like unless the server cooperates with it.
-
-Because newly-connected users will not generally have enough information to validate rules which depend on the previous state of the database (we do not keep a complete chain of writes from the beginning, nor do we prohibit combining writes into a single operation), rules must only be written in terms of the current state of the database (i.e. the "root" and "data" fields in Firebase's model are not available, only the "newData" field).
-
-Each signed trie should include a hash of the database URL to prevent replays in different contexts.
-
-Each chunk should include a signature, the key used to encrypt it (or all its children), if applicable, and the revision number when it was introduced.
-
-A write should consist of the latest known writes from everyone (valid or invalid), including the new trie the writer is publishing, the set of tries that trie builds upon (one for a fast-forward, two or more for a merge), and the sets of tries they build upon, etc, ending only at any trie which has been superceded higher in the chain.  The trie(s) the writer has built upon will normally be among the latest writes from others, but may include older writes if the writer considers one or more of the latest writes to be invalid, and may even be empty if the writer has never seen a write from anyone else which it considers valid.
-
-The revision number for a write is one more than the highest revision number among its dependencies.  Note that a revision number does not uniquely identify a revision due to accidental or in; only a hash does that.
-
-A writer may omit another writer's write if the other writer is/was using the same key (e.g. same user logged in on multiple devices or disconnected and later reconnected), but should not do so until that session has clearly been abandoned (e.g. hasn't pinged for ten minutes or more by the local clock).  "Should" being the operative word since no-one else will try to enforce this.  Pings consist of re-publishing the latest trie periodically if no other activity occurs.
-
-A write is considered valid if (and only if) it validates.  If it validates but is not based on the most recent valid predecessors known (meaning either the server has not properly rejected an outdated write or has rebooted with an older snapshot), merge it such that writes from a higher version number beat those with a lower one, using the last snapshot received from the server prior to reboot as the base.  Note that "higher version number" doesn't necessarily mean newer in an absolute sense (a writer starting from a fresh device might not have the history necessary to ensure writes from that device supercede those from a device used ealier), but it's the only tool we have available to order writes according to the intentions of the writers, and the window for forking should be only as wide as the difference between the snapshot and head revison.
-
-The above implies that the server always publishes both the latest snapshot written to persistent store as well as the head revision.
-
-A signature should only be considered valid if/while the key is part of the DB's write ACL and there is a valid trie available from that user.  In the event that an invalid write is later signed with that key, prior signatures can only be replay-checked against the last available valid write, so this must be preserved as long those signatures are in use or until a new valid write is available.
-
-
-whoa whoa whoa, that's complicated
-
-OK, here's plan B: a writer posts a single trie with the hash of the previously published trie as a prequisite.  The server accepts the trie iff the prequisite matches and each ACL-specific subtrie is signed by an authorized writer and is the newest available revision for that ACL, according to the revision number.  A reader accepts all or part of the trie depending on what it considers to be the newest revision for each ACL and sanitizes the result by eliminating values which fail to validate (or picking an alternative if available).
-
-For now, let's assume there's no merging of forks; the highest revision wins, or the one with the lexographically lesser hash in case of a tie.  To prevent gaming this, a writer must always use a revision number that's exactly one greater than the one in a (revision number, URL hash) tuple signed by the server.
-
-Or perhaps we should disallow forks entirely by insisting that each write must incrementally build on the last, and un-persisted writes must either be discarded or merged locally if the server reboots.  Then we won't need the signed tuple described above.  A merge is only possible if all the data to be merged is writable by the writer, so it may be best to limit expectations and just always discard.
+We should disallow forks entirely by insisting that each write must incrementally build on the last, which means un-persisted writes must either be discarded or merged locally if the server reboots.  A merge is only possible if all the data to be merged is writable by the writer, so it may be best to limit expectations and just always discard.
 
 A receiver should never accept an update from the server that's older in any way than the last persisted revision.
 
-Sanitizing a trie incrementally may involve re-validating unchanged values due to changes elsewhere in the database, which could cause efficiency problems unless at least common cases are optimized, e.g. with foreign key constraints.
+Sanitizing a trie incrementally: Use the rules and diff elements to update a dependency DAG.  Then, using the diff elements to create a spanning forest which includes all values directly or indirectly depending on or depended on.  Next, use the rules to uniquely choose among available alternatives, starting with the least dependent and finishing with the most dependent, breaking ties lexographically.  Finally, collect any changes and apply them to the sanitized trie.
 
- - Use the rules and diff elements to update a dependency DAG, then, using the diff elements to create a spanning forest, collect all values touched directly or indirectly and use the rules to uniquely choose among available alternatives, starting with the least dependent and finishing with the most dependent, breaking ties lexographically.  Finally, collect any changes and apply them to the sanitized trie.
-
-Prohibit cyclical dependencies when parsing rules.json.
+Prohibit cyclical dependencies when parsing rules.json to ensure that the dependency graph is acyclic.
 
 Each chunk should include the hash of the ACL it belongs to so it can't be replayed in a different context.  If an ACL trie later becomes empty, it should remain in the top level trie as a tombstone to prevent replays.  The server should verify both of these things before accepting a new trie.
