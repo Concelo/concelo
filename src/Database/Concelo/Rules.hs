@@ -8,6 +8,10 @@ data Fields = Fields { getFieldEnv :: Trie Key ()
 
 -- todo: enforce operator precedence and associativity
 
+-- todo: use a custom error type which distinguishes between recoverable (i.e. try the next alternative) and unrecoverable (i.e. return an error even if there's an alternative) errors
+
+-- todo: perhaps the parser should just create an Error/State monad instead of an explicit AST
+
 runParser parser fields =
   runIdentity $ runErrorT $ evalStateT parser fields
 
