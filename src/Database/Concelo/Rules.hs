@@ -34,9 +34,8 @@ terminal t = do
   update fieldString skipSpace
   prefix t
 
-prefix t = do
-  s <- get fieldString
-  case subtractPrefix t s of
+prefix t =
+  get fieldString >>= return . subtractPrefix t >>= \case
     Just s' -> do
       set fieldString s'
       return t
@@ -75,9 +74,8 @@ call0 object method argument expression = do
   group void
   return $ expression a
 
-intersperse delimiter parser = do
-  first <- optional parser
-  case first of
+intersperse delimiter parser =
+  optional parser >>= \case
     Just a ->
       delimiter >> intersperse delimiter parser >>= return . (a:)
       >>| [a]
@@ -110,7 +108,7 @@ atom
   >>| unescaped
 
 unescaped =
-  character >>= \c -> case c of
+  character >>= \case
     ']' -> throwError ()
     '$' -> throwError ()    
     _ -> return $ Character c
@@ -120,9 +118,8 @@ interval = do
   prefix "-"
   unescaped >>= return . Interval a
 
-zeroOrMore parser = do
-  first <- optional parser
-  case first of
+zeroOrMore parser =
+  optional parser >>= \case
     Just a -> parser >>= return . (a:) >>| [a]
     Nothing -> return []
 
@@ -227,9 +224,8 @@ numberLiteralPrefix c:cs
 
 numberLiteralPrefix [] = Nothing
 
-numberLiteral = do
-  s <- get fieldString >>= skipSpace
-  case numberLiteralPrefix s of
+numberLiteral =
+  get fieldString >>= skipSpace >>= return . numberLiteralPrefix >>= \case
     Just (n, s') -> do
       set fieldString s'
       return $ NumberLiteral n
@@ -358,34 +354,32 @@ evalRule expression context =
 
 hasValueOfType trie type' =
   fromMaybe false
-  (T.value trie >>= \v -> case valueType v of
+  (T.value trie >>= return . valueType >>= \case
       Number -> return true
       _ -> return false)
 
 test parser p = parser >>= \x -> if p x then return x else throwError ()
 
-evalMatch m =
-  case m of
-    Character c -> prefix [c]
-    Sequence a b -> evalMatch a >> evalMatch b
-    Alternative a b -> evalMatch a >>| const evalMatch b
-    Space -> test character isSpace
-    WordCharacter -> test character \c -> (isAlphaNum c) || c == '_'
-    Digit -> test character isDigit
-    Neg a -> do
-      result <- evalMatch a >> return True >>| return False
-      if result then throwError() else return ()
-    Interval a b -> test character \c -> ord c >= ord a && ord c <= ord b
-    ZeroOrMore a -> zeroOrMore $ evalMatch a
-    OneOrMore a -> evalMatch a >>= zeroOrMore (evalMatch a)
-    ZeroOrOne a -> optional $ evalMatch a
-    WildCard -> character
-    Fail -> throwError ()
-    Success -> return ()
+evalMatch = \case
+  Character c -> prefix [c]
+  Sequence a b -> evalMatch a >> evalMatch b
+  Alternative a b -> evalMatch a >>| const evalMatch b
+  Space -> test character isSpace
+  WordCharacter -> test character \c -> (isAlphaNum c) || c == '_'
+  Digit -> test character isDigit
+  Neg a -> do
+    result <- evalMatch a >> return True >>| return False
+    if result then throwError() else return ()
+  Interval a b -> test character \c -> ord c >= ord a && ord c <= ord b
+  ZeroOrMore a -> zeroOrMore $ evalMatch a
+  OneOrMore a -> evalMatch a >>= zeroOrMore (evalMatch a)
+  ZeroOrOne a -> optional $ evalMatch a
+  WildCard -> character
+  Fail -> throwError ()
+  Success -> return ()
      
-tryMatch = do
-  m <- get matchStateMatchers
-  case m of
+tryMatch =
+  get matchStateMatchers >>= \case
     [] -> return ()
     m:ms -> do
       set matchStateMatchers ms
@@ -409,100 +403,97 @@ lift3 f a b c = liftM3 f (eval a) (eval b) (eval c)
 lift2 f a b = liftM2 f (eval a) (eval b)
 lift1 f a = fmap f $ eval a
 
-eval expression context =
-  case expression of
-    And a b -> lift2 (&&) a b
-    Or a b -> lift2 (||) a b
-    Not a -> lift1 not a
+eval = \case
+  And a b -> lift2 (&&) a b
+  Or a b -> lift2 (||) a b
+  Not a -> lift1 not a
     
-    HasChild v key -> lift2 hasChild v key where
-      hasChild v key = not $ null $ T.sub key $ getVisitorTrie v
+  HasChild v key -> lift2 hasChild v key where
+    hasChild v key = not $ null $ T.sub key $ getVisitorTrie v
     
-    HasChildren v (Just keys) -> lift2 hasChildren v keys where
-      hasChildren v keys = foldr fold True keys
-      fold key result = (not $ null $ T.sub key $ getVisitorTrie v) && result
+  HasChildren v (Just keys) -> lift2 hasChildren v keys where
+    hasChildren v keys = foldr fold True keys
+    fold key result = (not $ null $ T.sub key $ getVisitorTrie v) && result
       
-    HasChildren v Nothing -> lift1 hasChildren v where
-      hasChildren v = not $ null $ T.keys $ getVisitorTrie v
+  HasChildren v Nothing -> lift1 hasChildren v where
+    hasChildren v = not $ null $ T.keys $ getVisitorTrie v
     
-    Exists v -> lift1 exists v where
-      exists v = not $ null $ getVisitorTrie v
+  Exists v -> lift1 exists v where
+    exists v = not $ null $ getVisitorTrie v
 
-    IsNumber v -> lift1 isNumber v where
-      isNumber v = maybe False (const True)
+  IsNumber v -> lift1 isNumber v where
+    isNumber v = maybe False (const True)
                    $ (T.value $ getVisitorTrie v) >>= valueNumber
 
-    IsString v -> lift1 isString v where
-      isString v = maybe False (const True)
-                   $ (T.value $ getVisitorTrie v) >>= valueString
+  IsString v -> lift1 isString v where
+    isString v = maybe False (const True)
+                 $ (T.value $ getVisitorTrie v) >>= valueString
 
-    IsBoolean v -> lift1 isBoolean v where
-      isBoolean v = maybe False (const True)
-                    $ (T.value $ getVisitorTrie v) >>= valueBoolean
+  IsBoolean v -> lift1 isBoolean v where
+    isBoolean v = maybe False (const True)
+                  $ (T.value $ getVisitorTrie v) >>= valueBoolean
     
-    Contains string substring -> lift2 isInfixOf substring string
-    BeginsWith string substring -> lift2 isPrefixOf substring string
-    EndsWith string substring -> lift2 isSuffixOf substring string
-    Matches string pattern -> lift2 matches string pattern
+  Contains string substring -> lift2 isInfixOf substring string
+  BeginsWith string substring -> lift2 isPrefixOf substring string
+  EndsWith string substring -> lift2 isSuffixOf substring string
+  Matches string pattern -> lift2 matches string pattern
     
-    Equal a b -> lift2 (==) a b
-    LessThan a b -> lift2 (<) a b
-    GreaterThan a b -> lift2 (>) a b
-    IfElse a b c -> lift3 (\a b c -> if a then b else c) a b c
+  Equal a b -> lift2 (==) a b
+  LessThan a b -> lift2 (<) a b
+  GreaterThan a b -> lift2 (>) a b
+  IfElse a b c -> lift3 (\a b c -> if a then b else c) a b c
     
-    Add a b -> lift2 (+) a b
-    Subtract a b -> lift2 (-) a b
-    Multiply a b -> lift2 (*) a b
-    Divide a b -> lift2 (/) a b
-    Modulo a b -> lift2 mod a b
-    Negate a b -> lift1 (0.0-) a
+  Add a b -> lift2 (+) a b
+  Subtract a b -> lift2 (-) a b
+  Multiply a b -> lift2 (*) a b
+  Divide a b -> lift2 (/) a b
+  Modulo a b -> lift2 mod a b
+  Negate a b -> lift1 (0.0-) a
     
-    NumberVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
-                                     >>= valueNumber)
+  NumberVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
+                                   >>= valueNumber)
 
-    StringVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
-                                     >>= valueString)
+  StringVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
+                                   >>= valueString)
 
-    BooleanVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
-                                      >>= valueBoolean)
+  BooleanVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
+                                    >>= valueBoolean)
 
-    Priority v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
-                                    >>= valuePriority)
+  Priority v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
+                                  >>= valuePriority)
                      
-    Length a -> lift1 length a
-    StringLiteral a -> return a
-    StringReference a -> maybeToEither () T.find a $ getContextEnv context
-    Concatenate a b -> lift2 (++) a b
+  Length a -> lift1 length a
+  StringLiteral a -> return a
+  StringReference a -> maybeToEither () T.find a $ getContextEnv context
+  Concatenate a b -> lift2 (++) a b
     
-    Replace string substring replacement ->
-      lift3 substring replacement string
+  Replace string substring replacement ->
+    lift3 substring replacement string
       
-    ToLowerCase a -> lift1 toLower a
-    ToUpperCase a -> lift1 toUpper a
+  ToLowerCase a -> lift1 toLower a
+  ToUpperCase a -> lift1 toUpper a
+  
+  Uid _ -> return $ getContextMe context
+  Auth -> return ()
+  Root -> return $ getContextRoot context
+  Data -> return $ getContextData context
+  NewData -> return $ getContextNewData context
     
-    Uid _ -> return $ getContextMe context
-    Auth -> return ()
-    Root -> return $ getContextRoot context
-    Data -> return $ getContextData context
-    NewData -> return $ getContextNewData context
-    
-    Child v key -> lift2 child v key where
-      child v key = T.sub key $ getVisitorTrie v
+  Child v key -> lift2 child v key where
+    child v key = T.sub key $ getVisitorTrie v
 
-    Parent v -> eval v >>= maybeToEither () . getVisitorParent
+  Parent v -> eval v >>= maybeToEither () . getVisitorParent
 
-parseRule evaluate value env =
-  case value of
-    J.String s -> do
-      runParser (boolean >>= eos >>= annotate) (ParseState env xs False)
-        >>= return . evaluate
-    _ -> Left "unexpected type in rule"
+parseRule evaluate env = \case
+  J.String s -> do
+    runParser (boolean >>= eos >>= annotate) (ParseState env xs False)
+      >>= return . evaluate
+  _ -> Left "unexpected type in rule"
 
-parseIndexOn value =
-  case value of
-    J.Array names -> Right $ foldr T.insert T.empty names
-    J.String name -> T.singleton name
-    _ -> Left "unexpected type in index"
+parseIndexOn = \case
+  J.Array names -> Right $ foldr T.insert T.empty names
+  J.String name -> T.singleton name
+  _ -> Left "unexpected type in index"
 
 parseTrie value env =
   (case value of
@@ -516,9 +507,9 @@ parseTrie value env =
             Right $ L.set T.value (L.set ruleRead value rule) trie
       
       case key of
-        ".read" -> parseACLRule aclReadLists value env >>= update ruleRead
-        ".write" -> parseACLRule aclWriteLists value env >>= update ruleWrite
-        ".validate" -> parseBooleanRule value env >>= update ruleValidate
+        ".read" -> parseACLRule aclReadLists env value >>= update ruleRead
+        ".write" -> parseACLRule aclWriteLists env value >>= update ruleWrite
+        ".validate" -> parseBooleanRule env value >>= update ruleValidate
         ".indexOn" -> parseIndexOn value >>= update ruleIndexOn
         
         name@('$' : _) ->

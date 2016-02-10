@@ -40,22 +40,17 @@ with lens f =
 sign private challenge =
   with ignisPRNG $ C.sign private challenge
 
-bind f x = do
-  x' <- x
-  case x' of
+bind f x =
+  x >>= \case
     Nothing -> return Nothing
-    Just x'' -> f x''
+    Just x' -> f x'
 
-bind2 f x y = do
-  x' <- x
-  y' <- y
-  case x' of
+bind2 f x y =
+  x >>= \case
     Nothing -> return Nothing
-    Just x'' ->
-      case y' of
-        Nothing -> return Nothing
-        Just y'' ->
-          f x'' y''
+    Just x' -> y >>= \case
+      Nothing -> return Nothing
+      Just y' -> f x' y'
 
 maybeAuthenticate =
   bind2 try (get ignisCred) (get ignisChallenge) where
@@ -68,9 +63,8 @@ maybeAuthenticate =
           >>= P.serialize
           . P.Cred (getCredRequest cred) (getCredPublic cred)
 
-getPublic = do
-  maybeCred <- get ignisCred
-  case maybeCred of
+getPublic =
+  get ignisCred >>= \case
     Nothing -> return Nothing
     Just cred -> return $ getCredPublic cred
 
@@ -80,9 +74,7 @@ update now update atomicUpdate = do
   head <- get ignisHead >>= return . update
   let atomicHead = atomicUpdate head
         
-  eitherDiff <- makeDiff head atomicHead
-
-  case eitherDiff of
+  makeDiff head atomicHead >>= \case
     Right diff -> do
       set ignisUpdateTime now      
       set ignisHead head
@@ -92,38 +84,83 @@ update now update atomicUpdate = do
     Left error ->
       return $ Left error
 
-nextMessage = do
-  maybeCred <- get ignisCred
-  case maybeCred of
-    Nothing -> return Nothing
-    Just _ -> do
-      maybeMessage <- maybeAuthenticate
+addMissing group = do
+  received <- get ignisReceived
+  byMember <- get ignisMissingByMember
+  byGroup <- get ignisMissingByGroup
+  
+  let fold member result@(byMember, byGroup) = case T.find member received of
+        Nothing ->
+          (T.insert (T.super member $ T.value group group) byMember,
+           T.insert (T.super group $ T.value member ()) byGroup)
+          
+        Just (P.Group { P.getGroupMembers = members }) ->
+          foldr fold result members
+          
+        Just _ -> result
 
-      case maybeMessage of
+      (byMember', byGroup') = fold group (byMember, byGroup)
+
+  set ignisMissingByMember byMember'
+  set ignisMissingByGroup byGroup'
+
+updateMissing member = do
+  byMember <- getAndUpdate ignisMissingByMember $ T.remove member
+        
+  update ignisMissingByGroup \byGroup ->
+    foldr fold byGroup $ T.sub member byMember where
+      fold group = T.subtract $ T.super group $ T.value member ()
+
+  let updateGroups member = mapM_ map $ T.sub member byMember
+      map group = do
+        addMissing group
+        updateGroups group
+
+receive = \case
+  P.Challenge challenge -> do
+    set ignisChallenge $ Just challenge
+    get ignisCred >>= \case
+      Nothing -> return ()
+      Just cred -> set ignisCred $ Just $ L.set credSent False cred
+
+  leaf@(P.Leaf { P.getLeafName = name }) -> do
+    update ignisReceived $ T.insert name leaf
+    updateMissing name
+
+  group@(P.Group { P.getGroupName = name, P.getGroupMembers = members }) -> do
+    update ignisReceived $ T.insert name group
+    addMissing name
+    updateMissing name
+
+  -- todo: acls, roots, nacks
+
+nextMessage =
+  get ignisCred >>= \case
+    Nothing -> return Nothing
+    Just _ ->
+      maybeAuthenticate >>= \case
         Just message ->
           return $ Just message
 
         Nothing -> do
           maybeUpdateTrees
       
-          maybeNack <- get ignisNacks >>= return . T.firstPath
-      
-          case maybeNack of
+          get ignisNacks >>= return . T.firstPath >>= \case
             Just nack -> do
               update ignisNacks $ T.subtract nack
               update ignisAcks $ T.union nack
               return $ T.first nack
 
             Nothing -> return Nothing
+            -- todo: request missing
 
 mapPair f (x, y) = (f x, f y)
 
 byACL path value = T.super (getValueACL value) path
 
-withSerializer constructor f = do
-  maybeCred <- ignisCred
-  case maybeCred of
-    Nothing -> error "cannot encrypt without private key"
+withSerializer constructor f =
+  ignisCred >>= \case
+    Nothing -> throwError "cannot encrypt without private key"
     Just cred -> 
       with ignisPRNG (f . constructor (getCredPrivate cred))
 
@@ -159,7 +196,7 @@ updateACLTrees (obsoleteValues, newValues) = do
           ST.update (annotatedValue tree) serializer
           (T.sub acl obsoleteValues) (T.sub acl newValues)
 
-whoAmI = return . (fromMaybe $ error "I don't know who I am!")
+whoAmI = return . (fromMaybe $ throwError "I don't know who I am!")
 
 updateMyTree (allObsolete, allNew, obsoleteTrees, newTrees) = do
   cred <- get ignisCred >>= whoAmI
@@ -207,9 +244,8 @@ updateAcksAndNacks (allObsolete, allNew) = do
   acks <- updateThenGet ignisAcks $ T.intersect allNew . T.subtract allObsolete
   update ignisNacks T.union (T.subract acks allNew) . T.subtract allObsolete
 
-maybeUpdateTrees = do
-  maybeDiff <- get ignisDiff
-  case maybeDiff of
+maybeUpdateTrees =
+  get ignisDiff >>= \case
     Nothing -> return ()
     Just diff ->
       updateACLTrees $ mapPair (T.indexPaths byACL) diff

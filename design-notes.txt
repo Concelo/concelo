@@ -61,7 +61,7 @@ We should disallow forks entirely by insisting that each write must incrementall
 
 A receiver should never accept an update from the server that's older in any way than the last persisted revision.
 
-Sanitizing a trie incrementally: Use the rules and diff elements to update a dependency DAG.  Then, using the diff elements to create a spanning forest which includes all values directly or indirectly depending on or depended on.  Next, use the rules to uniquely choose among available alternatives, starting with the least dependent and finishing with the most dependent, breaking ties lexographically.  Finally, collect any changes and apply them to the sanitized trie.
+Sanitizing a trie incrementally: Use the rules and diff elements to update a dependency DAG.  Then, use the diff elements to create a spanning forest which includes all values directly or indirectly depending on those elements or depended on by those elements.  Next, use the rules to uniquely choose among available alternatives, starting with the least dependent and finishing with the most dependent, breaking ties lexographically.  Finally, collect any changes and apply them to the sanitized trie.
 
 Prohibit cyclical dependencies when parsing rules.json to ensure that the dependency graph is acyclic.
 

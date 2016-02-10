@@ -38,8 +38,7 @@ treeByHeightVacancy = L.lens getTreeByHeightVacancy
 empty = SyncTree Nothing T.empty T.empty
 
 findObsolete chunk = do
-  maybeGroup <- get (treeByReverseKeyMember . envTree) >>= T.find (byKey chunk)
-  case maybeGroup of
+  get (treeByReverseKeyMember . envTree) >>= T.find (byKey chunk) >>= \case
     Nothing -> return ()
     Just group ->
       if T.member path obsolete then
@@ -154,9 +153,8 @@ addNewGroupsForHeight height =
     case T.first groups of
       Nothing ->
         return $ byHeightVacancy orphanGroup
-      Just group -> do
-        maybeCombined <- makeGroup $ T.union orphan $ groupMembers group
-        case maybeCombined of
+      Just group ->
+        makeGroup $ T.union orphan $ groupMembers group >>= \case
           Nothing ->
             orphanGroup <- makeGroup orphan
             return $ T.union
