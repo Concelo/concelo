@@ -133,7 +133,7 @@ makeGroup members =
 
 addNewGroupsForHeight height =
   do
-    new <- get envNew >>= return . T.isolate height
+    new <- fmap (T.isolate height) (get envNew)
     if height == 0 || twoOrMore new then
       -- todo: consider (psuedo)randomly inserting new leaves among existing and new groups.  Is there a way to do this that doesn't result in disproportionate network traffic?
       newGroups <- foldM group T.empty $ T.paths new

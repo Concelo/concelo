@@ -65,4 +65,50 @@ Sanitizing a trie incrementally: Use the rules and diff elements to update a dep
 
 Prohibit cyclical dependencies when parsing rules.json to ensure that the dependency graph is acyclic.
 
-Each chunk should include the hash of the ACL it belongs to so it can't be replayed in a different context.  If an ACL trie later becomes empty, it should remain in the top level trie as a tombstone to prevent replays.  The server should verify both of these things before accepting a new trie.
+Each chunk should include the hash of the ACL it belongs to so it can't be replayed in a different context.  If an ACL trie later becomes empty, it should remain in the top level trie as a tombstone to prevent replays.  The server should verify both of these things before accepting a new trie, as well as that each ACL trie only contains chunks signed by writers listed in the ACL.
+
+
+receiving chunks
+
+ * start in a clean, consistent state, containing:
+   * "received", the union of sets of chunks for each revision (e.g. persisted and published) being tracked by the server
+   * "missing", a DAG of groups and the members they are missing directly or indirectly (initially empty).  An element is not considered missing if it belongs to a data element to which I do not have read access.
+   * "incomplete", a set of root chunk names labeled by the server but not yet complete (initially empty)
+   * "roots", the current persisted state for each chunk, including:
+     * "name", the name of the root chunk
+     * "tree", the sync tree of sync trees
+     * "acl", the ACL trie listing readers and writers and signed by a key in the admin list (which is either included as part of the app or provided by the user)
+     * "rules", a trie-ified, somewhat restricted version of a Firebase rules.json, also signed by the admin
+     * "unsanitized", the current data trie, each element being a set of possible values, annotated with 
+     * "dependencies", a DAG of elements and the elements they depend on, derived from the current published rules applied to the unsanitized data 
+     * "base" is the sanitized version of "unsanitized", which a unique (or no) value selected for each element according to the sanitizing algorithm
+
+ * receive chunks and update "received" and "missing" (sending nacks as necessary) until one of the "incomplete" chunks is complete (i.e. has no missing chunks)
+ 
+ * remove the chunk from the "incomplete" set
+ 
+ * if the "new" root is older than the current persisted root, bail out and start again from the clean state.  Do the same if any of the following validation steps fail.
+ 
+ * diff the old ACL chunks with the new ACL chunks, resulting in the tuple (obsoleteACLChunks, newACLChunks)
+ 
+ * apply the above diff to the ACL sync tree, resulting in the tuple (obsoleteACLValues, newACLValues)
+ 
+ * apply the above diff to the ACL trie
+ 
+ * diff the old data chunks with the new data chunks, resulting in the tuple (obsoleteDataChunks, newDataChunks)
+ 
+ * apply the above diff to the data sync tree, resulting in the tuple (obsoleteDataValues, newDataValues)
+
+ * repeat the ACL process above for each element of the data diff, verifying that each resulting local ACL is either a strict subset of the top-level ACL or a tombstone
+
+ * if the ACL contains me as a reader, decrypt the key and use it to decrypt the leaves below.  Otherwise, skip that data element and move on to the next one.
+
+ * validate each element of the data diff, ensuring no element is removed without at least a tombstone (i.e. empty leaf trie) to replace it, that there are no duplicates, that each element is signed by a writer listed in the local ACL, and that each new element is newer than the obsolete one
+
+ * for each element of the data diff, do the chunk->tree->trie diff process on the leaf trees, verifying that each leaf is marked with the hash of the ACL of the data element it belongs to, and that it is signed by a writer in that ACL
+
+ * apply each data diff to its respective data trie
+
+ * tag the new root, and if it's the published one notify the application that it has changed
+
+ * clear the "missing" DAG, add any new chunks to the old (clean) "received" set, and remove any obsolete ones that aren't still part of another tagged root

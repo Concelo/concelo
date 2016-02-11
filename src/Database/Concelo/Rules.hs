@@ -35,14 +35,14 @@ terminal t = do
   prefix t
 
 prefix t =
-  get fieldString >>= return . subtractPrefix t >>= \case
+  fmap (subtractPrefix t) (get fieldString) >>= \case
     Just s' -> do
       set fieldString s'
       return t
     Nothing -> throwError ()
 
 optional parser
-  =   parser >>= return . Just
+  =   fmap Just parser
   >>| return Nothing
 
 ternary parser expression = do
@@ -50,22 +50,22 @@ ternary parser expression = do
   terminal "?"
   b <- parser
   terminal ":"
-  parser >>= return . expression a b
+  fmap (expression a b) parser
 
 binary parser operator expression = do
   a <- parser
   terminal operator
-  parser >>= return . expression a
+  fmap (expression a) parser
 
 unary parser operator expression = do
   terminal operator
-  parser >>= return . expression
+  fmap expression parser
 
 call1 object method argument expression = do
   a <- object
   terminal "."
   terminal method
-  group argument >>= return . expression a
+  fmap (expression a) (group argument)
 
 call0 object method argument expression = do
   a <- object
@@ -77,7 +77,7 @@ call0 object method argument expression = do
 intersperse delimiter parser =
   optional parser >>= \case
     Just a ->
-      delimiter >> intersperse delimiter parser >>= return . (a:)
+      delimiter >> fmap (a:) (intersperse delimiter parser)
       >>| [a]
     Nothing -> return []
 
@@ -88,14 +88,14 @@ stringArray = do
   return a
 
 element code expression =
-  prefix code >> return . expression
+  fmap expression $ prefix code
 
 alternative = do
   a <- patternElement
   prefix "|"
-  patternElement >>= return . Alternative a
+  fmap (Alternative a) patternElement
 
-escaped = prefix "\\" >> character >>= return . Character
+escaped = prefix "\\" >> fmap Character character
 
 atom
   =   element "\s" Space
@@ -116,11 +116,11 @@ unescaped =
 interval = do
   a <- unescaped
   prefix "-"
-  unescaped >>= return . Interval a
+  fmap (Interval a) unescaped
 
 zeroOrMore parser =
   optional parser >>= \case
-    Just a -> parser >>= return . (a:) >>| [a]
+    Just a -> fmap (a:) parser >>| [a]
     Nothing -> return []
 
 characterSet = do
@@ -147,15 +147,15 @@ patternElement
   >>| element "]" (Character ']')
 
 pattern ignoreCase = do
-  anchorStart <- (optional $ prefix "^") >>= return . isJust
+  anchorStart <- fmap isJust $ optional $ prefix "^"
   elements <- zeroOrMore patternElement
-  anchorEnd <- (optional $ prefix "$") >>= return . isJust
+  anchorEnd <- fmap isJust $ optional $ prefix "$"
   return $ Pattern ignoreCase anchorStart anchorEnd
     $ foldr Sequence Success elements
   
 regex = do
   p <- stringLiteral' '/'
-  ignoreCase <- (optional $ terminal 'i') >>= return . isJust
+  ignoreCase <- fmap isJust $ optional $ terminal 'i'
   case runParser (pattern >>= eos) (RegexState p) of
     Right result -> return result
     Left error -> throwError error
@@ -225,7 +225,7 @@ numberLiteralPrefix c:cs
 numberLiteralPrefix [] = Nothing
 
 numberLiteral =
-  get fieldString >>= skipSpace >>= return . numberLiteralPrefix >>= \case
+  get fieldString >>= fmap numberLiteralPrefix skipSpace >>= \case
     Just (n, s') -> do
       set fieldString s'
       return $ NumberLiteral n
@@ -259,23 +259,23 @@ stringLiteralBody delimiter =
     unescaped c
       | c == delimiter = return []
       | c == '\\' = character >>= escaped
-      | otherwise = character >>= unescaped >>= return . (c:)
+      | otherwise = character >>= fmap (c:) unescaped
 
     escaped c
-      | c == delimiter = character >>= unescaped >>= return . (c:)
-      | otherwise = character >>= unescaped >>= return . ('\\':c:)
+      | c == delimiter = character >>= fmap (c:) unescaped
+      | otherwise = character >>= fmap ('\\':c:) unescaped
 
 stringLiteral' delimiter = do
   terminal [delimiter]
   s <- stringLiteralBody delimiter
   return s
 
-stringLiteral = stringLiteral' '"' >>= return . StringLiteral
+stringLiteral = fmap StringLiteral $ stringLiteral' '"'
 
 stringReference =
   get fieldEnv >>= foldr fold (throwError ()) where
     fold key alternative =
-      terminal key >>= return . StringReference
+      fmap StringReference (terminal key)
       >>| alternative
 
 stringOperation = binary string "+" Concatenate
@@ -354,7 +354,7 @@ evalRule expression context =
 
 hasValueOfType trie type' =
   fromMaybe false
-  (T.value trie >>= return . valueType >>= \case
+  (fmap valueType (T.value trie) >>= \case
       Number -> return true
       _ -> return false)
 
@@ -486,8 +486,8 @@ eval = \case
 
 parseRule evaluate env = \case
   J.String s -> do
-    runParser (boolean >>= eos >>= annotate) (ParseState env xs False)
-      >>= return . evaluate
+    fmap evaluate
+      $ runParser (boolean >>= eos >>= annotate) (ParseState env xs False)
   _ -> Left "unexpected type in rule"
 
 parseIndexOn = \case

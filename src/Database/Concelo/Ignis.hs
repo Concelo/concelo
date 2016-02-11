@@ -71,35 +71,91 @@ getPublic =
 unAuth = set ignisCred Nothing
 
 update now update atomicUpdate = do
-  head <- get ignisHead >>= return . update
+  head <- fmap update $ get ignisHead
   let atomicHead = atomicUpdate head
-        
-  makeDiff head atomicHead >>= \case
-    Right diff -> do
-      set ignisUpdateTime now      
-      set ignisHead head
-      set ignisDiff diff
-      return $ Right ()
-      
-    Left error ->
-      return $ Left error
+  makeDiff head atomicHead >>= set ignisDiff
+  set ignisUpdateTime now      
+  set ignisHead head
 
-addMissing group = do
+maybeUpdateForest lens hash sequence = do
+  get lens >>= \case
+    Nothing ->
+      set lens $ Just $ Forest hash sequence
+
+    Just forest@(Forest _ latest) ->
+      if sequence > latest then
+        set lens $ Just
+        $ L.set forestSequence sequence
+        $ L.set forestHash hash forest else
+        return ()
+        
+  checkForests
+
+isComplete hash = fmap (null . T.sub hash) (get ignisMissingByGroup)
+
+fail = throwError Failure
+      
+updateCurrent current latest =
+  get latest >>= \case
+    Nothing -> return ()
+    maybeLatest@(Just (Forest latestHash latestSequence)) ->
+      get current >>= \case
+        Nothing ->
+          ifM (isComplete latestHash)
+          (ifM (isAuthentic latestHash)
+           (set current maybeLatest >> return (Nothing, latestHash))
+           (set latest Nothing >> fail))
+          fail
+          
+        maybeCurrent@(Just (Forest currentHash currentSequence)) ->
+          ifM (return (latestSequence > currentSequence)
+               `andM` (complete latestHash))
+          (ifM (isAuthentic latestHash
+                `andM` (latestHash `isNewerThan` currentHash))
+           (set current maybeLatest >> return (Just currentHash, latestHash))
+           (set latest maybeCurrent >> fail))
+          fail
+
+updateUnsanitized (maybeOldHash, newHash) = do
+  received <- get ignisReceived
+  case T.find newHash received of
+    Just (P.Forest {}) ->
+      case oldNash >>= flip T.find received of
+        Nothing -> foo
+    _ -> throwError $ Error "could not find forest for hash"
+
+    
+
+checkForests = do
+  try (updateCurrent ignisCurrentPersisted ignisLatestPersisted
+       >>= notifyCallbacks)
+
+  try (updateCurrent ignisCurrentPublished ignisLatestPublished
+       >>= updateUnsanitized
+       >>= updateBase
+       >>= mergeHead
+       >>  cleanCaches -- remove obsolete chunks from "received" and "missing" tries
+       >>  notifyHeadChanged) -- request call to update so we can publish head with the latest atomic updates
+
+addMissingToGroups member group (byMember, byGroup) =
+  foldr (addMissingToGroups member) result $ T.sub group byMember where
+    result = (T.insert (T.super member $ T.value group group) byMember,
+              T.insert (T.super group $ T.value member ()) byGroup)
+
+addMissing group members = do
   received <- get ignisReceived
   byMember <- get ignisMissingByMember
   byGroup <- get ignisMissingByGroup
   
   let fold member result@(byMember, byGroup) = case T.find member received of
-        Nothing ->
-          (T.insert (T.super member $ T.value group group) byMember,
-           T.insert (T.super group $ T.value member ()) byGroup)
+        Nothing -> addMissingToGroups member group result
           
         Just (P.Group { P.getGroupMembers = members }) ->
           foldr fold result members
           
         Just _ -> result
 
-      (byMember', byGroup') = fold group (byMember, byGroup)
+      (byMember', byGroup') = foldr fold (byMember, byGroup) members
 
   set ignisMissingByMember byMember'
   set ignisMissingByGroup byGroup'
@@ -111,10 +167,11 @@ updateMissing member = do
     foldr fold byGroup $ T.sub member byMember where
       fold group = T.subtract $ T.super group $ T.value member ()
 
-  let updateGroups member = mapM_ map $ T.sub member byMember
-      map group = do
-        addMissing group
-        updateGroups group
+receiveChunk chunk name members = do
+  update ignisReceived $ T.insert name chunk
+  addMissing name members
+  updateMissing name
+  checkForests
 
 receive = \case
   P.Challenge challenge -> do
@@ -123,16 +180,37 @@ receive = \case
       Nothing -> return ()
       Just cred -> set ignisCred $ Just $ L.set credSent False cred
 
-  leaf@(P.Leaf { P.getLeafName = name }) -> do
-    update ignisReceived $ T.insert name leaf
-    updateMissing name
+  leaf@(P.Leaf { P.getLeafName = name }) ->
+    receiveChunk leaf name []
 
-  group@(P.Group { P.getGroupName = name, P.getGroupMembers = members }) -> do
-    update ignisReceived $ T.insert name group
-    addMissing name
-    updateMissing name
+  group@(P.Group { P.getGroupName = name
+                 , P.getGroupMembers = members }) ->
+    receiveChunk group name members
 
-  -- todo: acls, roots, nacks
+  tree@(P.Tree { P.getTreeName = name
+               , P.getTreeData = data'
+               , P.getTreeACL = acl }) ->
+    receiveChunk tree name [data', acl]
+
+  forest@(P.Forest { P.getForestName = name
+                   , P.getForestTrees = trees
+                   , P.getForestACL = acl }) ->
+    receiveChunk forest name [trees, acl]
+
+  P.Persisted forest sequence ->
+    maybeUpdateForest ignisLatestPersisted forest sequence
+
+  P.Published forest sequence ->
+    maybeUpdateForest ignisLatestPublished forest sequence
+
+  P.Nack path -> do
+    fmap (T.findPath path) (get ignisAcks) >>= \case
+      Just nack -> do
+        update ignisNacks $ T.union nack
+        update ignisAcks $ T.subtract nack
+        return ()
+
+      Nothing -> return ()
 
 nextMessage =
   get ignisCred >>= \case
@@ -145,7 +223,7 @@ nextMessage =
         Nothing -> do
           maybeUpdateTrees
       
-          get ignisNacks >>= return . T.firstPath >>= \case
+          fmap T.firstPath (get ignisNacks) >>= \case
             Just nack -> do
               update ignisNacks $ T.subtract nack
               update ignisAcks $ T.union nack
@@ -153,6 +231,7 @@ nextMessage =
 
             Nothing -> return Nothing
             -- todo: request missing
+            -- todo: send current root periodically
 
 mapPair f (x, y) = (f x, f y)
 
@@ -196,7 +275,7 @@ updateACLTrees (obsoleteValues, newValues) = do
           ST.update (annotatedValue tree) serializer
           (T.sub acl obsoleteValues) (T.sub acl newValues)
 
-whoAmI = return . (fromMaybe $ throwError "I don't know who I am!")
+whoAmI = fromMaybe $ throwError "I don't know who I am!"
 
 updateMyTree (allObsolete, allNew, obsoleteTrees, newTrees) = do
   cred <- get ignisCred >>= whoAmI
