@@ -172,45 +172,116 @@ updateMissing member = do
 isComplete name =
   fmap (null . T.sub name) (get $ ignisMissing . missingByGroup)
 
-resetReceiver = get ignisCleanReceiver >>= set ignisReceiver >> fail
+failReceiver = get ignisCleanReceiver >>= set ignisReceiver >> fail
 
 findNewChunks oldChunks newChunks newRoot =
   visit newRoot (T.empty, T.empty) where
-    visit name (new, found) =
+    visit name (new, newLeaves, found) =
       case M.find name oldChunks of
-        Just chunk -> return (new, M.insert name chunk found)
+        Just chunk -> return (new, newLeaves, M.insert name chunk found)
             
         Nothing -> find name newChunks >>= \chunk ->
-          foldM visit (M.insert name chunk new, found) (chunkMembers chunk)
+          -- we do not allow a given chunk to have more than one
+          -- parent since it confuses the diff algorithm
+          if M.member name new then
+            fail else
+            foldM visit (M.insert name chunk new,
+                         if chunkIsLeaf chunk then
+                           M.insert name chunk newLeaves else
+                           newLeaves,
+                         found) (chunkMembers chunk)
 
 findObsoleteChunks oldChunks oldRoot found =
   visit oldRoot T.empty where
-    visit name obsolete =
+    visit name result@(obsolete, obsoleteLeaves) =
       if M.member name found then
-        obsolete else
+        result else
         find name oldChunks >>= \chunk ->
-          foldM visit (M.insert name chunk obsolete) (chunkMembers chunk)
+          foldM visit (M.insert name chunk obsolete,
+                       if chunkIsLeaf chunk then
+                         M.insert name chunk obsoleteLeaves else
+                         obsoleteLeaves) (chunkMembers chunk)
 
-diffChunks oldChunks oldRoot newChunks newRoot = do
-  (new, found) <- findNewChunks oldChunks newChunks newRoot
-  obsolete <- findObsoleteChunks newChunks oldRoot found
-  return (obsolete, new)
+diffChunks revision oldChunks oldRoot newChunks newRoot = do
+  (new, newLeaves, found) <- findNewChunks oldChunks newChunks newRoot
+  (obsolete, obsoleteLeaves) <- findObsoleteChunks newChunks oldRoot found
+  update (revisionObsolete . revision . ignisReceiver) (T.union obsolete)
+  update (revisionNew . revision . ignisReceiver) (T.union new)
+  return (obsoleteLeaves, newLeaves)
 
-updateForest newName current = do
+updateACL revision (obsoleteLeaves, newLeaves) =
+  updateM (revisionACL . revision . ingisReceiver) \acl -> do
+    acl' <- foldM remove acl obsoleteLeaves
+    foldM add acl' newLeaves where
+      remove leaf acl =
+        case leaf of
+          P.Leaf { P.getLeafBody = body } ->
+            case P.deserializeACLTrie body of
+              Just trie -> return $ T.subtract trie acl
+              Nothing -> fail
+        
+          _ -> error "unexpected leaf value"
+
+      add leaf acl =
+        case leaf of
+          P.Leaf { P.getLeafSignature = signature
+                 , P.getLeafBody = body } -> do
+            get ignisAdministrators >>= verify leaf signature >>| failReceiver
+            case P.deserializeACLTrie body of
+              Just trie -> return $ T.union trie acl
+              Nothing -> fail
+        
+          _ -> error "unexpected leaf value"
+
+updateTrees revision (obsoleteTrees, newTrees)
+  updateM (revisionTrees . revision . ingisReceiver) \result -> do
+    result' <- foldM remove result obsoleteTrees
+    foldM add result' newTrees where
+      remove tree result =
+        case tree of
+          P.Tree { P.getTreeACL = acl } ->
+            -- todo: assert that there is a new (possibly empty) tree with the same ACL to replace this one
+        
+          _ -> error "unexpected tree value"
+
+      add tree result =
+        case tree of
+          tree@(P.Tree { P.getTreeSignature = signature
+                       , P.getTreeACL = acl
+                       , P.getTreeLeaves = leaves }) -> do
+            -- todo
+        
+          _ -> error "unexpected tree value"
+
+updateForest revision newName current = do
   received <- get ignisReceived
   case T.find newName received of
-    Just P.Forest { P.getForestRevision = newRevision
-                  , P.getForestACL = newACL } ->
-      if revision <= getForestRevision current then
-        resetReceiver else
-        diffChunks (getForestChunks current) (getForestACL current) received newACL
-        >>= todo
+    Just forest@(P.Forest { P.getForestRevision = newRevision
+                          , P.getForestSignature = signature
+                          , P.getForestACL = newACL
+                          , P.getForestACLSignature = aclSignature
+                          , P.getForestTrees = newTrees}) -> do
+      
+      get ignisAdministratorACL >>= verify newACL aclSignature >>| failReceiver
+      
+      when (revision <= getForestRevision current) failReceiver
+      
+      diffChunks revision (getForestChunks current) (getForestACL current)
+        received newACL
+        >>= updateACL revision
+        
+      get (receiverACL . ingisReceiver) >>= verify forest signature
+        >>| failReceiver
+
+      diffChunks revision (getForestChunks current) (getForestTrees current)
+        received newTrees
+        >>= updateTrees revision
       
     _ -> error "forest not found"
 
-checkForest lens name = try do
+checkForest revision name = try do
   assert $ isComplete name
-  get lens >>= updateForest name >>= set lens
+  updateM revision $ updateForest revision name
 
 checkIncomplete =
   get ignisIncomplete >>= mapM_ \case
