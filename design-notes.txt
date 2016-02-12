@@ -85,8 +85,6 @@ receiving chunks
 
  * receive chunks and update "received" and "missing" (sending nacks as necessary) until one of the "incomplete" chunks is complete (i.e. has no missing chunks)
  
- * remove the chunk from the "incomplete" set
- 
  * if the "new" root is older than the current persisted root, bail out and start again from the clean state.  Do the same if any of the following validation steps fail.
  
  * diff the old ACL chunks with the new ACL chunks, resulting in the tuple (obsoleteACLChunks, newACLChunks)
@@ -111,4 +109,4 @@ receiving chunks
 
  * tag the new root, and if it's the published one notify the application that it has changed
 
- * clear the "missing" DAG, add any new chunks to the old (clean) "received" set, and remove any obsolete ones that aren't still part of another tagged root
+ * clear the "missing" DAG, add any new chunks to the old (clean) "received" set, remove any obsolete ones that aren't still part of another tagged root (which probably means maintining a set of chunks for each root as well as the union of them all), and clear the "incomplete" set

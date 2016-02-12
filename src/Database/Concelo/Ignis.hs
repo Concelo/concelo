@@ -94,7 +94,9 @@ maybeUpdateForest lens hash sequence = do
 isComplete hash = fmap (null . T.sub hash) (get ignisMissingByGroup)
 
 fail = throwError Failure
-      
+
+error = throwError . Error
+
 updateCurrent current latest =
   get latest >>= \case
     Nothing -> return ()
@@ -122,20 +124,20 @@ updateUnsanitized (maybeOldHash, newHash) = do
     Just (P.Forest {}) ->
       case oldNash >>= flip T.find received of
         Nothing -> foo
-    _ -> throwError $ Error "could not find forest for hash"
+    _ -> error "could not find forest for hash"
 
     
 
 checkForests = do
-  try (updateCurrent ignisCurrentPersisted ignisLatestPersisted
-       >>= notifyCallbacks)
+  try $ updateCurrent ignisCurrentPersisted ignisLatestPersisted
+    >>= notifyCallbacks
 
-  try (updateCurrent ignisCurrentPublished ignisLatestPublished
-       >>= updateUnsanitized
-       >>= updateBase
-       >>= mergeHead
-       >>  cleanCaches -- remove obsolete chunks from "received" and "missing" tries
-       >>  notifyHeadChanged) -- request call to update so we can publish head with the latest atomic updates
+  try $ updateCurrent ignisCurrentPublished ignisLatestPublished
+    >>= updateUnsanitized
+    >>= updateBase
+    >>= mergeHead
+    >>  cleanCaches -- remove obsolete chunks from "received" and "missing" tries
+    >>  notifyHeadChanged -- request call to update so we can publish head with the latest atomic updates
 
 addMissingToGroups member group (byMember, byGroup) =
   foldr (addMissingToGroups member) result $ T.sub group byMember where
@@ -167,11 +169,60 @@ updateMissing member = do
     foldr fold byGroup $ T.sub member byMember where
       fold group = T.subtract $ T.super group $ T.value member ()
 
+isComplete name =
+  fmap (null . T.sub name) (get $ ignisMissing . missingByGroup)
+
+resetReceiver = get ignisCleanReceiver >>= set ignisReceiver >> fail
+
+findNewChunks oldChunks newChunks newRoot =
+  visit newRoot (T.empty, T.empty) where
+    visit name (new, found) =
+      case M.find name oldChunks of
+        Just chunk -> return (new, M.insert name chunk found)
+            
+        Nothing -> find name newChunks >>= \chunk ->
+          foldM visit (M.insert name chunk new, found) (chunkMembers chunk)
+
+findObsoleteChunks oldChunks oldRoot found =
+  visit oldRoot T.empty where
+    visit name obsolete =
+      if M.member name found then
+        obsolete else
+        find name oldChunks >>= \chunk ->
+          foldM visit (M.insert name chunk obsolete) (chunkMembers chunk)
+
+diffChunks oldChunks oldRoot newChunks newRoot = do
+  (new, found) <- findNewChunks oldChunks newChunks newRoot
+  obsolete <- findObsoleteChunks newChunks oldRoot found
+  return (obsolete, new)
+
+updateForest newName current = do
+  received <- get ignisReceived
+  case T.find newName received of
+    Just P.Forest { P.getForestRevision = newRevision
+                  , P.getForestACL = newACL } ->
+      if revision <= getForestRevision current then
+        resetReceiver else
+        diffChunks (getForestChunks current) (getForestACL current) received newACL
+        >>= todo
+      
+    _ -> error "forest not found"
+
+checkForest lens name = try do
+  assert $ isComplete name
+  get lens >>= updateForest name >>= set lens
+
+checkIncomplete =
+  get ignisIncomplete >>= mapM_ \case
+    P.Persisted name -> checkForest ignisPersisted name
+    P.Published name -> checkForest ignisPublished name
+    _ -> error "unexpected message in ignisIncomplete"
+
 receiveChunk chunk name members = do
   update ignisReceived $ T.insert name chunk
   addMissing name members
-  updateMissing name
-  checkForests
+  removeMissing name
+  checkIncomplete
 
 receive = \case
   P.Challenge challenge -> do
@@ -188,20 +239,21 @@ receive = \case
     receiveChunk group name members
 
   tree@(P.Tree { P.getTreeName = name
-               , P.getTreeData = data'
                , P.getTreeACL = acl }) ->
-    receiveChunk tree name [data', acl]
+    receiveChunk tree name [acl]
 
   forest@(P.Forest { P.getForestName = name
                    , P.getForestTrees = trees
                    , P.getForestACL = acl }) ->
     receiveChunk forest name [trees, acl]
 
-  P.Persisted forest sequence ->
-    maybeUpdateForest ignisLatestPersisted forest sequence
+  p@(P.Persisted forest) -> do
+    update ignisIncomplete $ T.insert (T.super PersistedKey $ T.value forest p)
+    checkIncomplete
 
-  P.Published forest sequence ->
-    maybeUpdateForest ignisLatestPublished forest sequence
+  p@(P.Published forest) -> do
+    update ignisIncomplete $ T.insert (T.super PublishedKey $ T.value forest p)
+    checkIncomplete
 
   P.Nack path -> do
     fmap (T.findPath path) (get ignisAcks) >>= \case
@@ -239,7 +291,7 @@ byACL path value = T.super (getValueACL value) path
 
 withSerializer constructor f =
   ignisCred >>= \case
-    Nothing -> throwError "cannot encrypt without private key"
+    Nothing -> error "cannot encrypt without private key"
     Just cred -> 
       with ignisPRNG (f . constructor (getCredPrivate cred))
 
@@ -275,7 +327,7 @@ updateACLTrees (obsoleteValues, newValues) = do
           ST.update (annotatedValue tree) serializer
           (T.sub acl obsoleteValues) (T.sub acl newValues)
 
-whoAmI = fromMaybe $ throwError "I don't know who I am!"
+whoAmI = fromMaybe $ error "I don't know who I am!"
 
 updateMyTree (allObsolete, allNew, obsoleteTrees, newTrees) = do
   cred <- get ignisCred >>= whoAmI
