@@ -218,7 +218,7 @@ updateACL revision (obsoleteLeaves, newLeaves) =
           P.Leaf { P.getLeafBody = body } ->
             case P.deserializeACLTrie body of
               Just trie -> return $ T.subtract trie acl
-              Nothing -> fail
+              Nothing -> failReceiver
         
           _ -> error "unexpected leaf value"
 
@@ -226,62 +226,121 @@ updateACL revision (obsoleteLeaves, newLeaves) =
         case leaf of
           P.Leaf { P.getLeafSignature = signature
                  , P.getLeafBody = body } -> do
+            
             get ignisAdministrators >>= verify leaf signature >>| failReceiver
+
             case P.deserializeACLTrie body of
               Just trie -> return $ T.union trie acl
-              Nothing -> fail
+              Nothing -> failReceiver
         
           _ -> error "unexpected leaf value"
 
-updateTrees revision (obsoleteTrees, newTrees)
-  updateM (revisionTrees . revision . ingisReceiver) \result -> do
-    result' <- foldM remove result obsoleteTrees
-    foldM add result' newTrees where
-      remove tree result =
-        case tree of
-          P.Tree { P.getTreeACL = acl } ->
-            -- todo: assert that there is a new (possibly empty) tree with the same ACL to replace this one
+-- tbc
+updateLeaves leaves (obsoleteLeaves, newLeaves) = do
+    leaves' <- foldM remove leaves obsoleteLeaves
+    foldM add acl' newLeaves where
+      remove leaf acl =
+        case leaf of
+          P.Leaf { P.getLeafBody = body } ->
+            case P.deserializeACLTrie body of
+              Just trie -> return $ T.subtract trie acl
+              Nothing -> failReceiver
         
-          _ -> error "unexpected tree value"
+          _ -> error "unexpected leaf value"
 
-      add tree result =
-        case tree of
-          tree@(P.Tree { P.getTreeSignature = signature
-                       , P.getTreeACL = acl
-                       , P.getTreeLeaves = leaves }) -> do
-            -- todo
+      add leaf acl =
+        case leaf of
+          P.Leaf { P.getLeafSignature = signature
+                 , P.getLeafBody = body } -> do
+            
+            get ignisAdministrators >>= verify leaf signature >>| failReceiver
+
+            case P.deserializeACLTrie body of
+              Just trie -> return $ T.union trie acl
+              Nothing -> failReceiver
         
-          _ -> error "unexpected tree value"
+          _ -> error "unexpected leaf value"
 
-updateForest revision newName current = do
+updateUnsanitized revision (obsoleteTrees, newTrees) = do
+  trees <- get (revisionTrees . revision . ingisReceiver)
+  unsanitized <- get (revisionUnsanitized . revision . ingisReceiver)
+  
+  trees' <-  remove trees obsoleteTrees
+  (trees'', unsanitized') <- foldM add (trees, unsanitized) newTrees
+  
+  set (revisionTrees . revision . ingisReceiver) trees''
+  set (revisionUnsanitized . revision . ingisReceiver) unsanitized' where
+    newByACL = M.index treeByACL newTrees
+      
+    remove tree trees =
+      case tree of
+        P.Tree { P.getTreeACL = acl } -> do
+          when (not $ M.member acl newByACL) failReceiver
+          return $ M.delete acl trees
+        
+        _ -> error "unexpected tree value"
+
+    add tree (trees', unsanitized) =
+      case tree of
+        P.Tree { P.getTreeRevision = newRevision
+               , P.getTreeSignature = signature
+               , P.getTreeACL = newACL
+               , P.getTreeLeaves = newLeaves } -> do
+            
+          let current = fromJust emptyTree $ M.find acl trees
+                
+          when (revision < getTreeRevision current) failReceiver
+
+          received <- get (receiverReceived . ignisReceiver)
+
+          -- kind of silly to do a diff, since the current trie will
+          -- only either be empty or unchanged, but it does the job:
+          newACLTrie <- diffChunks revision (getTreeChunks current)
+                        (getTreeACL current) received newACL
+                        >>= updateACL (getTreeACLTrie current)
+
+          fmap (T.intersect newACLTrie) (get ignisAdministratorACL)
+            >>= verify signature >>| failReceiver
+
+          unsanitized' <- diffChunks revision (getTreeChunks current)
+                          (getTreeLeaves current) received newLeaves
+                          >>= updateLeaves unsanitized
+
+          return (M.insert acl (L.set treeACLTrie newACLTrie current) trees',
+                  unsanitized')
+        
+        _ -> error "unexpected tree value"
+
+updateForest revision newName = do
   received <- get ignisReceived
   case T.find newName received of
-    Just forest@(P.Forest { P.getForestRevision = newRevision
-                          , P.getForestSignature = signature
-                          , P.getForestACL = newACL
-                          , P.getForestACLSignature = aclSignature
-                          , P.getForestTrees = newTrees}) -> do
+    Just (P.Forest { P.getForestRevision = newRevision
+                   , P.getForestSignature = signature
+                   , P.getForestACL = newACL
+                   , P.getForestACLSignature = aclSignature
+                   , P.getForestTrees = newTrees}) -> do
       
-      get ignisAdministratorACL >>= verify newACL aclSignature >>| failReceiver
+      get ignisAdministratorACL >>= verify aclSignature >>| failReceiver
+
+      current <- get revision
       
-      when (revision <= getForestRevision current) failReceiver
+      when (newRevision <= getRevisionNumber current) failReceiver
       
-      diffChunks revision (getForestChunks current) (getForestACL current)
-        received newACL
-        >>= updateACL revision
+      newACLTrie <- diffChunks revision (getForestChunks current)
+                    (getForestACL current) received newACL
+                    >>= updateACL (getForestACLTrie current)
         
-      get (receiverACL . ingisReceiver) >>= verify forest signature
-        >>| failReceiver
+      get (receiverACL . ingisReceiver) >>= verify signature >>| failReceiver
 
       diffChunks revision (getForestChunks current) (getForestTrees current)
         received newTrees
-        >>= updateTrees revision
+        >>= updateUnsanitized revision
       
     _ -> error "forest not found"
 
 checkForest revision name = try do
   assert $ isComplete name
-  updateM revision $ updateForest revision name
+  updateForest revision name
 
 checkIncomplete =
   get ignisIncomplete >>= mapM_ \case
