@@ -186,34 +186,27 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
         
         _ -> patternFailure
 
-updateUnsanitized key acl currentUnsanitized (obsoleteLeaves, newLeaves) = do
-  subset <- foldM remove currentUnsanitized obsoleteLeaves
-  foldM add subset newLeaves where
-    remove leaf unsanitized =
-      case leaf of
-        P.Leaf { P.getLeafBody = body } ->
-          return case P.deserializeTrie (C.decryptSymmetric key body) of
-            Just trie -> subtractUnsanitized trie unsanitized
-            Nothing -> unsanitized
-      
-        _ -> patternFailure
-
-    add leaf unsanitized =
+updateUnsanitizedDiff key acl (obsoleteUnsanitized, newUnsanitized)
+  (obsoleteLeaves, newLeaves) = do
+  obsolete <- foldM (visit False) obsoleteUnsanitized obsoleteLeaves
+  new <- foldM (visit True) newUnsanitized newLeaves
+  return (obsolete, new) where
+    visit needVerify leaf result =
       case leaf of
         P.Leaf { P.getLeafSignature = signature
                , P.getLeafBody = body } -> do
           
-          verify signature acl
+          when needVerify $ verify signature acl
 
           return case P.deserializeTrie (C.decryptSymmetric key body) of
-            Just trie -> unionUnsanitized trie unsanitized
-            Nothing -> unsanitized
+            Just trie -> unionUnsanitized trie result
+            Nothing -> result
         
         _ -> patternFailure
 
-updateTrees (currentTrees, currentUnsanitized) (obsoleteTrees, newTrees) = do
+updateTrees currentTrees (obsoleteTrees, newTrees) = do
   subset <-  remove currentTrees obsoleteTrees
-  foldM add (subset, currentUnsanitized) newTrees where
+  foldM add (subset, (T.empty, T.empty)) newTrees where
     newByACL = M.index treeByACL newTrees
       
     remove tree trees =
@@ -224,7 +217,7 @@ updateTrees (currentTrees, currentUnsanitized) (obsoleteTrees, newTrees) = do
         
         _ -> patternFailure
 
-    add tree (trees, unsanitized) =
+    add tree (trees, (obsoleteUnsanitized, newUnsanitized)) =
       case tree of
         P.Tree { P.getTreeRevision = newRevision
                , P.getTreeSignature = signature
@@ -263,14 +256,14 @@ updateTrees (currentTrees, currentUnsanitized) (obsoleteTrees, newTrees) = do
               addMissing name [newLeaves]
               assertComplete name
               
-              unsanitized' <-
+              unsanitizedDiff' <-
                 diffChunks (getTreeChunks current) (getTreeLeaves current)
                 received newLeaves
-                >>= updateUnsanitized
+                >>= updateUnsanitizedDiff
                 (C.decryptAsymmetric (getCredPrivate cred) encryptedKey)
-                newACLTrie unsanitized
+                newACLTrie unsanitizedDiff
 
-              return (trees', unsanitized')
+              return (trees', unsanitizedDiff')
 
             Nothing ->
               -- we don't have read access to this tree, so we ignore
@@ -278,6 +271,12 @@ updateTrees (currentTrees, currentUnsanitized) (obsoleteTrees, newTrees) = do
               return (trees', unsanitized)
         
         _ -> patternFailure
+
+updateUnsanitized unsanitized (obsolete, new) =
+  foldr addUnsanitized (foldr subtractUnsanitized unsanitized obsolete) new
+
+updateSanitized sanitized unsanitized (obsolete, new) =
+  todo
 
 updateForest current newName = do
   received <- get (receiverReceived . ignisReceiver)
@@ -304,8 +303,8 @@ updateForest current newName = do
         trees
         >>= updateTrees (getForestTreeTrie current)
 
-      unsanitized <-
-        updateUnsanitized (getForestUnsanitized current) unsanitizedDiff
+      let unsanitized =
+            updateUnsanitized (getForestUnsanitized current) unsanitizedDiff
         
       sanitized <-
         updateSanitized (getForestSanitized current) unsanitized
@@ -326,14 +325,14 @@ updateChunks chunks (obsoleteChunks, newChunks) =
 updateReceiver (obsoleteChunks, newChunks) receiver =
   L.set receiverReceived (updateChunks (getReceiverReceived receiver)) receiver
 
-filterDiff (obsoleteChunks, newChunks) =
-  foldM removeLive obsoleteChunks $ M.keys obsoleteChunks where
-    removeLive key result = do
-      persisted <- get (forestChunks . ignisPersisted)
-      published <- get (forestChunks . ignisPublished)
-      if M.member key persisted || M.member key published then
-        M.remove key result else
-        result
+filterDiff (obsoleteChunks, newChunks) = do
+  persisted <- get (forestChunks . ignisPersisted)
+  published <- get (forestChunks . ignisPublished)
+  return (foldr removeLive obsoleteChunks $ M.keys obsoleteChunks, newChunks)
+    where removeLive key result =
+            if M.member key persisted || M.member key published then
+              M.remove key result else
+              result
 
 checkForest revision name =
   let resetDiff = set (receiverDiff . ignisReceiver) (M.empty, M.empty)
