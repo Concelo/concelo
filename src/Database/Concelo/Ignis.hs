@@ -54,11 +54,11 @@ bind2 f x y =
 
 maybeAuthenticate =
   bind2 try (get ignisCred) (get ignisChallenge) where
-      
+
     try cred challenge =
       if getCredSent cred then return Nothing else do
         set ignisCred $ Just $ L.set credSent True cred
-        
+
         sign (getCredPrivate cred) challenge
           >>= P.serialize
           . P.Cred (getCredRequest cred) (getCredPublic cred)
@@ -74,7 +74,7 @@ update now update atomicUpdate = do
   head <- fmap update $ get ignisHead
   let atomicHead = atomicUpdate head
   makeDiff head atomicHead >>= set ignisDiff
-  set ignisUpdateTime now      
+  set ignisUpdateTime now
   set ignisHead head
 
 maybeUpdateForest lens hash sequence = do
@@ -88,11 +88,11 @@ maybeUpdateForest lens hash sequence = do
         $ L.set forestSequence sequence
         $ L.set forestHash hash forest else
         return ()
-        
+
   checkForests
 
 isComplete hash = fmap (null . T.sub hash) (get ignisMissingByGroup)
-    
+
 addMissingToGroups member group (byMember, byGroup) =
   foldr (addMissingToGroups member) result $ T.sub group byMember where
     result = (T.insert (T.super member $ T.value group group) byMember,
@@ -102,13 +102,13 @@ addMissing group members = do
   received <- get ignisReceived
   byMember <- get ignisMissingByMember
   byGroup <- get ignisMissingByGroup
-  
+
   let fold member result@(byMember, byGroup) = case T.find member received of
         Nothing -> addMissingToGroups member group result
-          
+
         Just (P.Group { P.getGroupMembers = members }) ->
           foldr fold result members
-          
+
         Just _ -> result
 
       (byMember', byGroup') = foldr fold (byMember, byGroup) members
@@ -118,20 +118,20 @@ addMissing group members = do
 
 updateMissing member = do
   byMember <- getAndUpdate ignisMissingByMember $ T.remove member
-        
+
   update ignisMissingByGroup \byGroup ->
     foldr fold byGroup $ T.sub member byMember where
       fold group = T.subtract $ T.super group $ T.value member ()
 
 isComplete name =
-  fmap (null . T.sub name) (get $ ignisMissing . missingByGroup)
+  fmap (null . T.sub name) (get $ missingByGroup . ignisMissing)
 
 findNewChunks oldChunks newChunks newRoot =
   visit newRoot (T.empty, T.empty) where
     visit name (new, newLeaves, found) =
       case M.find name oldChunks of
         Just chunk -> return (new, newLeaves, M.insert name chunk found)
-            
+
         Nothing -> find name newChunks >>= \chunk ->
           -- we do not allow a given chunk to have more than one
           -- parent since it confuses the diff algorithm
@@ -170,20 +170,20 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
           return case P.deserializeTrie body of
             Just trie ->T.subtract trie acl
             Nothing -> acl
-        
+
         _ -> patternFailure
 
     add leaf acl =
       case leaf of
         P.Leaf { P.getLeafSignature = signature
                , P.getLeafBody = body } -> do
-            
+
           get ignisAdministrators >>= verify signature
 
           return case P.deserializeTrie body of
             Just trie -> T.union trie acl
             Nothing -> acl
-        
+
         _ -> patternFailure
 
 updateUnsanitizedDiff key acl (obsoleteUnsanitized, newUnsanitized)
@@ -195,73 +195,73 @@ updateUnsanitizedDiff key acl (obsoleteUnsanitized, newUnsanitized)
       case leaf of
         P.Leaf { P.getLeafSignature = signature
                , P.getLeafBody = body } -> do
-          
+
           when needVerify $ verify signature acl
 
           return case P.deserializeTrie (C.decryptSymmetric key body) of
             Just trie -> unionUnsanitized trie result
             Nothing -> result
-        
+
         _ -> patternFailure
 
 updateTrees currentTrees (obsoleteTrees, newTrees) = do
   subset <-  remove currentTrees obsoleteTrees
   foldM add (subset, (T.empty, T.empty)) newTrees where
     newByACL = M.index treeByACL newTrees
-      
+
     remove tree trees =
       case tree of
         P.Tree { P.getTreeACL = acl } -> do
           when (not $ M.member acl newByACL) failReceiver
           return $ M.delete acl trees
-        
+
         _ -> patternFailure
 
     add tree (trees, (obsoleteUnsanitized, newUnsanitized)) =
       case tree of
-        P.Tree { P.getTreeRevision = newRevision
+        P.Tree { P.getTreeRevision = revision
                , P.getTreeSignature = signature
                , P.getTreeName = name
-               , P.getTreeACL = newACL
-               , P.getTreeLeaves = newLeaves } -> do
-            
-          let currentTree = fromJust emptyTree $ M.find newACL currentTrees
-                
-          when (newRevision < getTreeRevision currentTree) badForest
+               , P.getTreeACL = acl
+               , P.getTreeLeaves = leaves } -> do
+
+          let currentTree = fromJust emptyTree $ M.find acl currentTrees
+
+          when (revision < getTreeRevision currentTree) badForest
 
           received <- get (receiverReceived . ignisReceiver)
 
           -- kind of silly to do a diff, since the current trie will
           -- only either be empty or unchanged, but it does the job:
-          newACLTrie <-
+          aclTrie <-
             diffChunks (getTreeChunks currentTree) (getTreeACL currentTree)
-            received newACL
+            received acl
             >>= updateACL (getTreeACLTrie currentTree)
 
           adminACL <- get ignisAdminstratorACL
-          
-          when (not (adminACL `T.isSuperSetOf` newACLTrie)) badForest
-          
-          verify signature newACLTrie
-          
+
+          when (not (adminACL `T.isSuperSetOf` aclTrie)) badForest
+
+          verify signature aclTrie
+
           cred <- get ignisCred >>= whoAmI
 
           let trees' =
-                M.insert newACL (L.set treeACLTrie newACLTrie currentTree)
+                M.insert acl (L.set treeACLTrie aclTrie currentTree)
                 trees
-  
+
           case T.find (T.super WriteKey $ T.key $ getCredPublic cred)
-               newACLTrie of
+               aclTrie of
             Just encryptedKey -> do
-              addMissing name [newLeaves]
+              addMissing name [leaves]
               assertComplete name
-              
+
               unsanitizedDiff' <-
                 diffChunks (getTreeChunks current) (getTreeLeaves current)
-                received newLeaves
+                received leaves
                 >>= updateUnsanitizedDiff
                 (C.decryptAsymmetric (getCredPrivate cred) encryptedKey)
-                newACLTrie unsanitizedDiff
+                aclTrie unsanitizedDiff
 
               return (trees', unsanitizedDiff')
 
@@ -269,53 +269,106 @@ updateTrees currentTrees (obsoleteTrees, newTrees) = do
               -- we don't have read access to this tree, so we ignore
               -- the leaves
               return (trees', unsanitized)
-        
+
         _ -> patternFailure
 
 updateUnsanitized unsanitized (obsolete, new) =
   foldr addUnsanitized (foldr subtractUnsanitized unsanitized obsolete) new
 
-updateSanitized sanitized unsanitized (obsolete, new) =
+updateSanitized sanitized unsanitized rules dependencies (obsolete, new) =
   todo
 
-updateForest current newName = do
+updateForest current name = do
   received <- get (receiverReceived . ignisReceiver)
-  case T.find newName received of
-    Just (P.Forest { P.getForestRevision = newRevision
+  case T.find name received of
+    Just (P.Forest { P.getForestRevision = revision
                    , P.getForestSignature = signature
+                   , P.getForestAdminRevision = adminRevision
+                   , P.getForestAdminSignature = adminSignature
                    , P.getForestACL = acl
-                   , P.getForestACLSignature = aclSignature
+                   , P.getForestRules = rules
                    , P.getForestTrees = trees }) -> do
-      
-      get ignisAdministratorACL >>= verify aclSignature
-      
-      when (newRevision <= getForestRevision current) badForest
-      
+
+      get ignisAdministratorACL >>= verify adminSignature
+
+      when (revision <= getForestRevision current) badForest
+      when (adminRevision <= getForestAdminRevision current) badForest
+
       aclTrie <-
-        diffChunks (getForestChunks current) (getForestACL current) received
-        acl
+        diffChunks (getForestChunks current) (getForestACL current)
+        received rules
         >>= updateACL (getForestACLTrie current)
-        
+
       verify signature aclTrie
 
       (treeTrie, unsanitizedDiff) <-
-        diffChunks (getForestChunks current) (getForestTrees current) received
-        trees
+        diffChunks (getForestChunks current) (getForestTrees current)
+        received trees
         >>= updateTrees (getForestTreeTrie current)
 
       let unsanitized =
-            updateUnsanitized (getForestUnsanitized current) unsanitizedDiff
-        
-      sanitized <-
-        updateSanitized (getForestSanitized current) unsanitized
-        unsanitizedDiff
+            updateUnsanitized (getForestUnsanitized current)
+            unsanitizedDiff
+
+      rulesDiff <-
+        diffChunks (getForestChunks current) (getForestRules current)
+        received rules
 
       chunks <-
         fmap (updateChunks $ getForestChunks current)
         (get (receiverDiff . ignisReceiver))
 
-      return $ Forest chunks acl aclTrie trees treeTrie unsanitized sanitized
-      
+      let forest = Forest chunks adminTree adminTrie trees treeTrie
+
+      if diffEmpty rulesDiff then do
+        let rules = getForestRules current
+
+        dependencies <-
+          updateDependencies (getForestDependencies current) rules
+          unsanitizedDiff
+
+        let sanitized =
+              updateSanitized (getForestSanitized current) unsanitized rules
+              dependencies unsanitizedDiff
+
+            rulesUnsanitized = getForestRulesUnsanitized current
+            rulesSanitized = getForestRulesSanitized current
+
+        return $ forest rulesUnsanitized rulesSanitized dependencies
+          unsanitized sanitized
+
+        else do
+        cred <- get ignisCred >>= whoAmI
+
+        case T.find (T.super WriteKey $ T.key $ getCredPublic cred) aclTrie of
+          Nothing -> badForest
+
+          Just encryptedKey -> do
+            rulesUnsanitizedDiff <-
+              updateUnsanitizedDiff
+              (C.decryptAsymmetric (getCredPrivate cred) encryptedKey)
+              aclTrie (T.empty, T.empty) rulesDiff
+
+            let rulesUnsanitized =
+                  updateUnsanitized (getForestRulesUnsanitized current)
+
+                rulesSanitized =
+                  updateSanitized (getForestRulesSanitized current)
+                  rulesUnsanitized permissiveRules (M.empty, M.empty) diff
+
+            rules <- compileRules $ rulesSanitized
+
+            dependencies <-
+              updateDependencies (M.empty, M.empty) rules
+              (T.empty, unsanitized)
+
+            let sanitized =
+                  updateSanitized T.empty unsanitized rules dependencies
+                  (T.empty, unsanitized)
+
+            return $ forest rulesUnsanitized rulesSanitized dependencies
+              unsanitized sanitized
+
     _ -> patternFailure
 
 updateChunks chunks (obsoleteChunks, newChunks) =
@@ -337,17 +390,17 @@ filterDiff (obsoleteChunks, newChunks) = do
 checkForest revision name =
   let resetDiff = set (receiverDiff . ignisReceiver) (M.empty, M.empty)
       resetReceiver = get ignisCleanReceiver >>= set ignisReceiver in
-  
+
   do assertComplete name
-     
+
      updateM revision $ updateForest name
-     
+
      diff <- get (receiverDiff . ignisReceiver) >>= filterDiff
-       
+
      update ignisCleanReceiver $ updateReceiver diff
-     
+
      resetReceiver
-     
+
   `catchError` \case
     MissingChunks -> resetDiff
     BadForest -> resetReceiver
@@ -385,8 +438,9 @@ receive = \case
 
   forest@(P.Forest { P.getForestName = name
                    , P.getForestTrees = trees
+                   , P.getForestRules = rules
                    , P.getForestACL = acl }) ->
-    receiveChunk forest name [trees, acl]
+    receiveChunk forest name [trees, rules, acl]
 
   p@(P.Persisted forest) -> do
     update ignisIncomplete $ T.insert (T.super PersistedKey $ T.value forest p)
@@ -415,7 +469,7 @@ nextMessage =
 
         Nothing -> do
           maybeUpdateTrees
-      
+
           fmap T.firstPath (get ignisNacks) >>= \case
             Just nack -> do
               update ignisNacks $ T.subtract nack
@@ -433,7 +487,7 @@ byACL path value = T.super (getValueACL value) path
 withSerializer constructor f =
   ignisCred >>= \case
     Nothing -> error "cannot encrypt without private key"
-    Just cred -> 
+    Just cred ->
       with ignisPRNG (f . constructor (getCredPrivate cred))
 
 updateACLTrees (obsoleteValues, newValues) = do
@@ -441,29 +495,29 @@ updateACLTrees (obsoleteValues, newValues) = do
     withSerializer ValueSerializer \serializer ->
       foldr update (((T.empty, T.empty, T.empty, T.empty), trees), serializer)
             $ T.union (T.keys obsoleteValues) (T.keys newValues) where
-    
+
     update acl (((allObsolete, allNew, obsoleteTrees, newTrees),
                  trees), serializer) =
-      
+
       (((T.union obsolete' allObsolete,
          T.union new' allNew,
-         
+
          if ST.null (getAnnotatedValue tree) then
            obsoleteTrees else
            T.insert acl tree obsoleteTrees,
-         
+
          if ST.null tree' then
            newTrees else
            T.insert acl (Annotated tree' acl) newTrees),
-        
+
         if ST.null tree' then
           T.delete acl trees else
           T.insert acl tree' trees),
-       
+
        serializer') where
-        
+
         tree = fromMaybe ST.empty $ T.find (T.key acl) trees
-        
+
         (tree', serializer', obsolete', new') =
           ST.update (annotatedValue tree) serializer
           (T.sub acl obsoleteValues) (T.sub acl newValues)
@@ -490,15 +544,15 @@ updateMyTree (allObsolete, allNew, obsoleteTrees, newTrees) = do
                         (getIgnisPublic cred) challenge revision time)) in
       (((T.union obsolete' allObsolete,
          T.union new' allNew,
-      
+
          if ST.isEmpty (getAnnotatedValue tree) then
            obsoleteTrees else
            T.insert key tree obsoleteTrees,
-      
+
          if ST.isEmpty tree' then
            T.empty else
            T.singleton revision annotated),
-        
+
         annotated),
        serializer')
 
@@ -552,18 +606,18 @@ validate context rules diff path acl
                  Right $ foldr fold
                  ((maybe obsoleteTrie \v ->
                      T.union (singleton path v) obsoleteTrie,
-                
+
                    maybe newTrie \v ->
                      T.union (singleton path $ L.set valueACL acl' v) newTrie),
-                  
+
                   acls')
                  $ T.keys diff else
                  Left "write access denied"
 
              Nothing -> Right foldr fold (tries, acls') $ T.keys diff
-      
+
          Left error -> Left error) where
-    
+
       fold key result =
         let rules' = T.sub key rules
             context' = L.over contextBase (T.sub key)
@@ -571,13 +625,13 @@ validate context rules diff path acl
             diff' = T.sub key diff
             path' = key : path
             result' = validate context' rules' diff' path' acl result in
-      
+
         if T.null rules' then
           case T.value rules >>= getRulesWildCard of
             Just (name, rules') ->
               validate (L.over contextEnv (T.insert name key) context') rules'
               diff' path' acl result
-            
+
             Nothing ->
               result' else
           result'
@@ -588,7 +642,7 @@ makeDiff head = do
   rules <- get ignisRules
   revision <- get ignisNextRevision
   emptyACL <- get ignisEmptyACL
-  
+
   with ignisACLs \acls ->
     validate (Context me revision base T.empty base head) rules
     (T.diff base head) [] emptyACL ((T.empty, T.empty), acls)
@@ -613,19 +667,19 @@ makeDiff head atomicHead = do
     apply (obsoletePath, newPath) diff = do
       acl <- validateUpdate obsoletePath newPath
       return (apply' <$> diff <*> acl) where
-    
+
         apply' (obsoletePaths, newPaths, newACLs) acl =
           (T.union obsoletePath obsoletePaths,
            T.union (fmap (L.set valueACL acl) newPath) newPaths)
 
 -- 1. compute diff (as sets of removes and adds)
-  
+
 -- 2. remove chunks from base for each remove in diff and add orphans (any value that's in a removed chunk but not in the set of removes) to set of adds
 
 -- (2.5.) find remaining chunk with the most space available
-  
+
 -- 3. if there's a remaining chunk into which the entire set of adds will fit, remove that chunk and create a new one with the union of orphans and adds
-  
+
 -- 4. otherwise, add a new chunk and fill it with as many adds as possible, then go back to 3, or go to 5 if no adds remain
 
 -- 5. now we have a set of added chunks and a set of removed chunks.  Start again at 2, except at the level of chunks and groups of chunks.  Repeat this process (for groups of groups, groups of groups of groups, etc.) until the new root is calculated and collect everything that's new in reverse dependency order
