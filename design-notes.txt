@@ -79,22 +79,22 @@ receiving chunks
      * "tree", the sync tree of sync trees
      * "acl", the ACL trie listing readers and writers and signed by a key in the admin list (which is either included as part of the app or provided by the user)
      * "rules", a trie-ified, somewhat restricted version of a Firebase rules.json, also signed by the admin
-     * "unsanitized", the current data trie, each element being a set of possible values, annotated with 
-     * "dependencies", a DAG of elements and the elements they depend on, derived from the current published rules applied to the unsanitized data 
+     * "unsanitized", the current data trie, each element being a set of possible values, annotated with
+     * "dependencies", a DAG of elements and the elements they depend on, derived from the current published rules applied to the unsanitized data
      * "base" is the sanitized version of "unsanitized", which a unique (or no) value selected for each element according to the sanitizing algorithm
 
  * receive chunks and update "received" and "missing" (sending nacks as necessary) until one of the "incomplete" chunks is complete (i.e. has no missing chunks)
- 
+
  * if the "new" root is older than the current persisted root, bail out and start again from the clean state.  Do the same if any of the following validation steps fail.
- 
+
  * diff the old ACL chunks with the new ACL chunks, resulting in the tuple (obsoleteACLChunks, newACLChunks)
- 
+
  * apply the above diff to the ACL sync tree, resulting in the tuple (obsoleteACLValues, newACLValues)
- 
+
  * apply the above diff to the ACL trie
- 
+
  * diff the old data chunks with the new data chunks, resulting in the tuple (obsoleteDataChunks, newDataChunks)
- 
+
  * apply the above diff to the data sync tree, resulting in the tuple (obsoleteDataValues, newDataValues)
 
  * repeat the ACL process above for each element of the data diff, verifying that each resulting local ACL is either a strict subset of the top-level ACL or a tombstone
@@ -110,3 +110,21 @@ receiving chunks
  * tag the new root, and if it's the published one notify the application that it has changed
 
  * clear the "missing" DAG, add any new chunks to the old (clean) "received" set, remove any obsolete ones that aren't still part of another tagged root (which probably means maintining a set of chunks for each root as well as the union of them all), and clear the "incomplete" set
+
+
+sanitizing a trie
+
+ * check to see if the union of the diff contains non-empty ".rules" subtree.  If it does:
+   * sanitize the ".rules" subtree of the updated unsanitized trie, using an empty dependency DAG and a rule function that grants read access to everyone and write access to only the administrators
+   * recompile the rules and dependency DAG based on the sanitized rules generated above and the updated unsanitized trie
+ * otherwise:
+   * reuse the compiled rules from the unupdated forest
+   * update the dependency DAG based on the unsanitized diff
+
+ * fold over the union of paths of the unsanitized diff, looking up the element in the updated unsanitized trie for each path and adding it to a trie ordered by dependency depth, and also adding any elements which depend on that element directly or indirectly according to the dependency DAG.  Note that elements not found in the unsanitized trie must still be added as empty elements to ensure they are deleted later in the sanitized trie.
+
+ * (each element the updated unsanitized trie should already include a rules object attached to it which is specific to that path)
+
+ * fold over the trie generated above, using the old sanitized trie as a seed, and pick a value for each element according to the rules attached to that element (which reference the in-progress-updated sanitized trie as newData).  The first value, sorted lexographically, which validates is chosen and added to the in-progress-updated sanitized trie, or else removed if no value validates.
+
+ * finito!

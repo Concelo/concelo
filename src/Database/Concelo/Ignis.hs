@@ -286,7 +286,6 @@ updateForest current name = do
                    , P.getForestAdminRevision = adminRevision
                    , P.getForestAdminSignature = adminSignature
                    , P.getForestACL = acl
-                   , P.getForestRules = rules
                    , P.getForestTrees = trees }) -> do
 
       get ignisAdministratorACL >>= verify adminSignature
@@ -310,6 +309,7 @@ updateForest current name = do
             updateUnsanitized (getForestUnsanitized current)
             unsanitizedDiff
 
+      -- todo: find admin tree and extract rules from that
       rulesDiff <-
         diffChunks (getForestChunks current) (getForestRules current)
         received rules

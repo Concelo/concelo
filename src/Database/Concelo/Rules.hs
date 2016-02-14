@@ -110,7 +110,7 @@ atom
 unescaped =
   character >>= \case
     ']' -> throwError ()
-    '$' -> throwError ()    
+    '$' -> throwError ()
     _ -> return $ Character c
 
 interval = do
@@ -152,7 +152,7 @@ pattern ignoreCase = do
   anchorEnd <- fmap isJust $ optional $ prefix "$"
   return $ Pattern ignoreCase anchorStart anchorEnd
     $ foldr Sequence Success elements
-  
+
 regex = do
   p <- stringLiteral' '/'
   ignoreCase <- fmap isJust $ optional $ terminal 'i'
@@ -212,12 +212,12 @@ numberLiteralPrefix c:cs
       | isDigit c = digitsOrDot (c : acc) cs
       | c == '.' = digits (c : acc) cs
       | otherwise = Just (reverse acc, all)
-                    
+
     digitsOrDot acc [] = Just (reverse acc, [])
 
     digits acc c:cs
       | isDigit c = digits (c : acc) cs
-                    
+
       | otherwise = Just (reverse acc, all)
 
   | otherwise = Nothing
@@ -229,7 +229,7 @@ numberLiteral =
     Just (n, s') -> do
       set fieldString s'
       return $ NumberLiteral n
-    Nothing -> throwError ()  
+    Nothing -> throwError ()
 
 numberReference = terminal "now" >> return Now
 
@@ -312,7 +312,7 @@ number
   >>| numberReference
   >>| numberOperation
   >>| numberCall
-  >>| numberField  
+  >>| numberField
   >>| numberTernary
   >>| group number
 
@@ -321,7 +321,7 @@ string
   >>| stringReference
   >>| stringOperation
   >>| stringCall
-  >>| stringField  
+  >>| stringField
   >>| stringTernary
   >>| group string
 
@@ -377,7 +377,7 @@ evalMatch = \case
   WildCard -> character
   Fail -> throwError ()
   Success -> return ()
-     
+
 tryMatch =
   get matchStateMatchers >>= \case
     [] -> return ()
@@ -407,17 +407,17 @@ eval = \case
   And a b -> lift2 (&&) a b
   Or a b -> lift2 (||) a b
   Not a -> lift1 not a
-    
+
   HasChild v key -> lift2 hasChild v key where
     hasChild v key = not $ null $ T.sub key $ getVisitorTrie v
-    
+
   HasChildren v (Just keys) -> lift2 hasChildren v keys where
     hasChildren v keys = foldr fold True keys
     fold key result = (not $ null $ T.sub key $ getVisitorTrie v) && result
-      
+
   HasChildren v Nothing -> lift1 hasChildren v where
     hasChildren v = not $ null $ T.keys $ getVisitorTrie v
-    
+
   Exists v -> lift1 exists v where
     exists v = not $ null $ getVisitorTrie v
 
@@ -432,24 +432,24 @@ eval = \case
   IsBoolean v -> lift1 isBoolean v where
     isBoolean v = maybe False (const True)
                   $ (T.value $ getVisitorTrie v) >>= valueBoolean
-    
+
   Contains string substring -> lift2 isInfixOf substring string
   BeginsWith string substring -> lift2 isPrefixOf substring string
   EndsWith string substring -> lift2 isSuffixOf substring string
   Matches string pattern -> lift2 matches string pattern
-    
+
   Equal a b -> lift2 (==) a b
   LessThan a b -> lift2 (<) a b
   GreaterThan a b -> lift2 (>) a b
   IfElse a b c -> lift3 (\a b c -> if a then b else c) a b c
-    
+
   Add a b -> lift2 (+) a b
   Subtract a b -> lift2 (-) a b
   Multiply a b -> lift2 (*) a b
   Divide a b -> lift2 (/) a b
   Modulo a b -> lift2 mod a b
   Negate a b -> lift1 (0.0-) a
-    
+
   NumberVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
                                    >>= valueNumber)
 
@@ -461,24 +461,24 @@ eval = \case
 
   Priority v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
                                   >>= valuePriority)
-                     
+
   Length a -> lift1 length a
   StringLiteral a -> return a
   StringReference a -> maybeToEither () T.find a $ getContextEnv context
   Concatenate a b -> lift2 (++) a b
-    
+
   Replace string substring replacement ->
     lift3 substring replacement string
-      
+
   ToLowerCase a -> lift1 toLower a
   ToUpperCase a -> lift1 toUpper a
-  
+
   Uid _ -> return $ getContextMe context
   Auth -> return ()
   Root -> return $ getContextRoot context
   Data -> return $ getContextData context
   NewData -> return $ getContextNewData context
-    
+
   Child v key -> lift2 child v key where
     child v key = T.sub key $ getVisitorTrie v
 
@@ -505,18 +505,17 @@ parseTrie value env =
       let rule = fromMaybe empty $ T.getValue trie
           update lens value =
             Right $ L.set T.value (L.set ruleRead value rule) trie
-      
+
       case key of
         ".read" -> parseACLRule aclReadLists env value >>= update ruleRead
         ".write" -> parseACLRule aclWriteLists env value >>= update ruleWrite
         ".validate" -> parseBooleanRule env value >>= update ruleValidate
         ".indexOn" -> parseIndexOn value >>= update ruleIndexOn
-        
+
         name@('$' : _) ->
           parseTrie value (T.insert name env) >>= update ruleWildCard
-          
+
           _ -> parseTrie value env >>= Right $ T.super key
 
 parse json =
   parseTrie (decode json) T.empty where
-

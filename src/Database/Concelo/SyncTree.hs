@@ -100,7 +100,7 @@ makeGroup members =
   T.first members >>= fromChunks where
     fromChunks (Leaf serialized _) = fromLeaves serialized
     fromChunks (Group _ _ _) = fromGroups
-    
+
     fromLeaves first = do
       plaintext <- serialize' $ T.index leafPath members >>= oneExactly
       let fragment = if T.single members then Just first else Nothing
@@ -108,7 +108,7 @@ makeGroup members =
       case plaintext <|> fragment of
         Nothing ->
           return Nothing
-        
+
         Just text ->
           ciphertext <- encrypt' text
           return $ Just $ Group (hash' ciphertext) 1 members ciphertext
@@ -120,7 +120,7 @@ makeGroup members =
           foldr fold (Just (undefined, 0, BS.empty)) members
 
         Just $ Group (hash serializer body) (height + 1) members body where
-        
+
           fold member (Just (_, count, string)) =
             if count > maxSize then
               Nothing else
@@ -140,7 +140,7 @@ addNewGroupsForHeight height =
       oldGroups <- T.subtract obosolete . T.sub above
                    <$> get (treeByHeightVacancy . envTree)
                    <*> get envObsolete >>= T.sub above
-                   
+
       (newGroups', obsoleteGroups') <- combineVacant newGroups oldGroups
 
       update envObsolete (T.union . T.super above obsoleteGroups')
@@ -148,7 +148,7 @@ addNewGroupsForHeight height =
       return () where
 
   above = height + 1
-          
+
   group groups ophan =
     case T.first groups of
       Nothing ->
@@ -158,7 +158,7 @@ addNewGroupsForHeight height =
           Nothing ->
             orphanGroup <- makeGroup orphan
             return $ T.union
-            (byHeightVacancy 
+            (byHeightVacancy
              $ fromMaybe (error "could not make a single-member group")
              orphanGroup) groups
           Just combined ->
@@ -181,7 +181,7 @@ update lens state =
 updateIndex index trie = do
   new <- get envNew
   obsolete <- get envObsolete
-  
+
   return $ T.add (T.index index new) $ T.subtract (T.index index obsolete) trie
 
 updateTree = do
@@ -199,7 +199,7 @@ update tree serializer obsolete new =
     findObsoleteGroups
     addNewGroups
     updateTree
-    
+
     (,,,)
       <$> get envTree
       <*> get envSerializer
