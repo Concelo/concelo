@@ -115,16 +115,23 @@ receiving chunks
 sanitizing a trie
 
  * check to see if the union of the diff contains non-empty ".rules" subtree.  If it does:
-   * sanitize the ".rules" subtree of the updated unsanitized trie, using an empty dependency DAG and a rule function that grants read access to everyone and write access to only the administrators
+   * sanitize the ".rules" subtrie of the updated unsanitized trie, using an empty dependency DAG and a rule function that grants read access to everyone and write access to only the administrators
    * recompile the rules and dependency DAG based on the sanitized rules generated above and the updated unsanitized trie
  * otherwise:
    * reuse the compiled rules from the unupdated forest
    * update the dependency DAG based on the unsanitized diff
 
- * fold over the union of paths of the unsanitized diff, looking up the element in the updated unsanitized trie for each path and adding it to a trie ordered by dependency depth, and also adding any elements which depend on that element directly or indirectly according to the dependency DAG.  Note that elements not found in the unsanitized trie must still be added as empty elements to ensure they are deleted later in the sanitized trie.
+ * calculate a dirty set of elements to be visited:
+   * for each path in the union of the diff, add the element found at that path in the updated unsanitized trie, or an empty element if none is found
+   * for each path in the result of the above, add any elements known to depend on that path according to the dependency DAG, recursing so that all directly- and indirectly- depending elements are included
 
- * (each element the updated unsanitized trie should already include a rules object attached to it which is specific to that path)
+ * visit the elements in the dirty set, breadth-first:
+   * if the element is empty, remove that path from the in-progress sanitized trie
+   * otherwise, visit each value listed in the element in lexographic order:
+     * validate the value according to the rules for this path, if any, updating the ACL in the process
+     * if the ".read" or ".write" rules depend on any element in the dirty set besides the current one, skip this element and descend with the parent ACL
+     * if the ".validate" rule depends on any element in the dirty set besides the current one, skip this element and descend with the updated ACL
+     * if the value validates, update the in-progress sanitized trie, remove this element from the dirty set, and descend
+     * if the value fails to validate, try the next one if present, otherwise, remove the path from the in-progress sanitized trie, remove the element from the dirty set, and descend
 
- * fold over the trie generated above, using the old sanitized trie as a seed, and pick a value for each element according to the rules attached to that element (which reference the in-progress-updated sanitized trie as newData).  The first value, sorted lexographically, which validates is chosen and added to the in-progress-updated sanitized trie, or else removed if no value validates.
-
- * finito!
+ * repeat the above until the dirty set is empty

@@ -229,6 +229,8 @@ updateTrees currentTrees (obsoleteTrees, newTrees) = do
 
           when (revision < getTreeRevision currentTree) badForest
 
+          when (M.member acl trees) badForest
+
           received <- get (receiverReceived . ignisReceiver)
 
           -- kind of silly to do a diff, since the current trie will
@@ -272,11 +274,112 @@ updateTrees currentTrees (obsoleteTrees, newTrees) = do
 
         _ -> patternFailure
 
-updateUnsanitized unsanitized (obsolete, new) =
-  foldr addUnsanitized (foldr subtractUnsanitized unsanitized obsolete) new
+updateUnsanitized currentUnsanitized (obsolete, new) =
+  foldr unionUnsanitized
+  (foldr subtractUnsanitized currentUnsanitized (T.paths obsolete))
+  (T.paths new)
 
-updateSanitized sanitized unsanitized rules dependencies (obsolete, new) =
-  todo
+visitDirty context acl rules key
+  result@(remainingDirty, sanitized, dependencies) =
+    if null $ getContextDirty context then
+      result else
+      visitValues result possibleValues where
+        rules' = T.sub key rules
+        dirty' = T.sub key $ getContextDirty context
+
+        context' =
+          L.over contextHead (T.sub key)
+          $ L.set contextDirty remainingDirty context
+
+        possibleValues =
+          fromMaybe M.empty (L.get elementMap <$> T.value dirty')
+
+        visitValues result@(remainingDirty, sanitized, dependencies)
+          firstValid values =
+          let value = maybeHead values
+
+              context'' = L.set contextValue value context'
+
+              (readACL, readDependencies) =
+                fromMaybe (Right acl, T.empty)
+                ((\r -> (getRulesRead r) context'' acl) <$> T.value rules')
+
+                acl' = either (const acl) id readACL
+
+              (writeACL, writeDependencies) =
+                fromMaybe (Right acl', T.empty)
+                ((\r -> (getRulesWrite r) context'' acl') <$> T.value rules')
+
+              (validateResult, validateDependencies) =
+                fromMaybe (Right (), T.empty)
+                (value >>
+                 ((\r -> (getRulesValidate r) context'') <$> T.value rules'))
+
+              dependencies' =
+                BT.insertTrie path readDependencies
+                $ BT.insertTrie path writeDependencies
+                $ BT.insertTrie path validateDependencies
+                dependencies
+
+              next value = case maybeTail values of
+                Just tail ->
+                  visitValues (remainingDirty, sanitized, dependencies')
+                  (firstValid <|> value) tail
+
+                Nothing ->
+                  (T.subtract path remainingDirty,
+                   case firstValid of
+                     Nothing -> T.subtract path sanitized
+                     Just v -> T.union (fmap (const v) path) sanitized,
+                   dependencies') in
+
+          case readACL >> writeACL of
+            Left R.DirtyReference ->
+              foldr (visitDirty context' acl rules' dirty') result
+              $ T.keys dirty'
+
+            Left _ -> next Nothing
+
+            Right acl'' ->
+              if maybe True (\v -> aclWriter (valueSigner v) acl'') value then
+                case validateResult of
+                  Left R.DirtyReference ->
+                    foldr (visitDirty acl'' context' rules' dirty')
+                    result $ T.keys dirty'
+
+                  Left _ -> next Nothing
+
+                  Right _ -> next value
+              else
+                next Nothing
+
+updateSanitized revision acl currentSanitized updatedUnsanitized
+  updatedRules currentDependencies (obsoleteUnsanitized, newUnsanitized) =
+
+    clean (Context nobody revision T.empty currentSanitized dirty)
+    (dirty, currentSanitized, remainingDependencies) where
+
+      dirty =
+        foldr findDirty T.empty
+        $ T.paths $ T.union obsoleteUnsanitized newUnsanitized
+
+      remainingDependencies = BT.subtract dirty currentDependencies
+
+      findDirty path (dirty, dependencies) =
+        foldr findDirty
+        (T.union
+         (fromMaybe (Element T.empty) (T.find path updatedUnsanitized)
+          <$> path)
+         dirty)
+        (T.paths $ fromMaybe T.empty $ BT.reverseFind path dependencies)
+
+      clean context result@(dirty, sanitized, dependencies)
+        | null dirty = (sanitized, dependencies)
+        | otherwise =
+          clean context
+          (foldr (visitDirty context acl updatedRules) result $ T.keys dirty)
+
+rulesKey = ".rules"
 
 updateForest current name = do
   received <- get (receiverReceived . ignisReceiver)
@@ -288,7 +391,9 @@ updateForest current name = do
                    , P.getForestACL = acl
                    , P.getForestTrees = trees }) -> do
 
-      get ignisAdministratorACL >>= verify adminSignature
+      adminACL <- get ignisAdministratorACL
+
+      verify adminSignature adminACL
 
       when (revision <= getForestRevision current) badForest
       when (adminRevision <= getForestAdminRevision current) badForest
@@ -300,74 +405,66 @@ updateForest current name = do
 
       verify signature aclTrie
 
-      (treeTrie, unsanitizedDiff) <-
+      -- todo: recompute/purge interned ACLs if ACL has changed
+
+      (treeTrie, unsanitizedDiff@(obsoleteUnsanitized, newUnsanitized)) <-
         diffChunks (getForestChunks current) (getForestTrees current)
         received trees
         >>= updateTrees (getForestTreeTrie current)
-
-      let unsanitized =
-            updateUnsanitized (getForestUnsanitized current)
-            unsanitizedDiff
-
-      -- todo: find admin tree and extract rules from that
-      rulesDiff <-
-        diffChunks (getForestChunks current) (getForestRules current)
-        received rules
 
       chunks <-
         fmap (updateChunks $ getForestChunks current)
         (get (receiverDiff . ignisReceiver))
 
-      let forest = Forest chunks adminTree adminTrie trees treeTrie
+      let unsanitized =
+            updateUnsanitized (getForestUnsanitized current)
+            unsanitizedDiff
 
-      if diffEmpty rulesDiff then do
-        let rules = getForestRules current
+          forest = Forest chunks revision adminRevision acl aclTrie trees
+                   treeTrie unsanitized
 
-        dependencies <-
-          updateDependencies (getForestDependencies current) rules
-          unsanitizedDiff
+      if T.member rulesKey obsoleteUnsanitized
+         || T.member rulesKey newUnsanitized then do
 
-        let sanitized =
-              updateSanitized (getForestSanitized current) unsanitized rules
-              dependencies unsanitizedDiff
+        let (sanitizedRules, _) =
+              updateSanitized
+              0
+              adminACL
+              (T.sub rulesKey (getForestSanitized current))
+              (T.sub rulesKey unsanitized)
+              T.empty
+              BT.empty
+              ((T.sub rulesKey obsoleteUnsanitized),
+               (T.sub rulesKey newUnsanitized))
 
-            rulesUnsanitized = getForestRulesUnsanitized current
-            rulesSanitized = getForestRulesSanitized current
+        rules <- compileRules sanitizedRules
 
-        return $ forest rulesUnsanitized rulesSanitized dependencies
-          unsanitized sanitized
-
-        else do
-        cred <- get ignisCred >>= whoAmI
-
-        case T.find (T.super WriteKey $ T.key $ getCredPublic cred) aclTrie of
-          Nothing -> badForest
-
-          Just encryptedKey -> do
-            rulesUnsanitizedDiff <-
-              updateUnsanitizedDiff
-              (C.decryptAsymmetric (getCredPrivate cred) encryptedKey)
-              aclTrie (T.empty, T.empty) rulesDiff
-
-            let rulesUnsanitized =
-                  updateUnsanitized (getForestRulesUnsanitized current)
-
-                rulesSanitized =
-                  updateSanitized (getForestRulesSanitized current)
-                  rulesUnsanitized permissiveRules (M.empty, M.empty) diff
-
-            rules <- compileRules $ rulesSanitized
-
-            dependencies <-
-              updateDependencies (M.empty, M.empty) rules
+        let (sanitized, dependencies) =
+              updateSanitized
+              revision
+              emptyACL
+              T.empty
+              unsanitized
+              rules
+              BT.empty
               (T.empty, unsanitized)
 
-            let sanitized =
-                  updateSanitized T.empty unsanitized rules dependencies
-                  (T.empty, unsanitized)
+        return $ forest rules dependencies sanitized
 
-            return $ forest rulesUnsanitized rulesSanitized dependencies
-              unsanitized sanitized
+        else
+        let rules = getForestRules current
+
+            (sanitized, dependencies) =
+              updateSanitized
+              revision
+              emptyACL
+              (getForestSanitized current)
+              unsanitized
+              rules
+              (getForestDependencies current)
+              unsanitizedDiff in
+
+        return $ forest rules dependencies sanitized
 
     _ -> patternFailure
 
