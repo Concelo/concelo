@@ -155,7 +155,7 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
       case leaf of
         P.Leaf { P.getLeafBody = body } ->
           return case P.deserializeTrie body of
-            Just trie ->T.subtract trie acl
+            Just trie -> T.subtract trie acl
             Nothing -> acl
 
         _ -> patternFailure
@@ -291,11 +291,14 @@ visitDirty context acl rules key
                 fromMaybe (Right acl, T.empty)
                 ((\r -> (getRulesRead r) context'' acl) <$> T.value rules')
 
-                acl' = either (const acl) id readACL
+              acl' = either (const acl) id readACL
 
               (writeACL, writeDependencies) =
                 fromMaybe (Right acl', T.empty)
                 ((\r -> (getRulesWrite r) context'' acl') <$> T.value rules')
+
+              readWriteDependencies =
+                T.union readDependencies writeDependencies
 
               (validateResult, validateDependencies) =
                 fromMaybe (Right (), T.empty)
@@ -303,10 +306,11 @@ visitDirty context acl rules key
                  ((\r -> (getRulesValidate r) context'') <$> T.value rules'))
 
               dependencies' =
-                BT.insertTrie path readDependencies
-                $ BT.insertTrie path writeDependencies
+                BT.insertTrie path readWriteDependencies
                 $ BT.insertTrie path validateDependencies
                 dependencies
+
+              remainingDirty' = T.subtract path remainingDirty
 
               next value = case maybeTail values of
                 Just tail ->
@@ -314,31 +318,32 @@ visitDirty context acl rules key
                   (firstValid <|> value) tail
 
                 Nothing ->
-                  (T.subtract path remainingDirty,
+                  (remainingDirty',
                    case firstValid of
                      Nothing -> T.subtract path sanitized
                      Just v -> T.union (fmap (const v) path) sanitized,
                    dependencies') in
 
-          case readACL >> writeACL of
-            Left R.DirtyReference ->
-              foldr (visitDirty context' acl rules' dirty') result
-              $ T.keys dirty'
-
-            Left _ -> next Nothing
-
-            Right acl'' ->
-              if maybe True (\v -> aclWriter (valueSigner v) acl'') value then
-                case validateResult of
-                  Left R.DirtyReference ->
+          if null $ T.intersect readWriteDependencies remainingDirty'
+          then
+            case readACL >> writeACL of
+              Left _ -> next Nothing
+              Right acl'' ->
+                if maybe True (\v -> aclWriter (valueSigner v) acl'') value
+                then
+                  if null $ T.intersect validateDependencies remainingDirty'
+                  then
+                    case validateResult of
+                      Left _ -> next Nothing
+                      Right _ -> next value
+                  else
                     foldr (visitDirty acl'' context' rules' dirty')
                     result $ T.keys dirty'
-
-                  Left _ -> next Nothing
-
-                  Right _ -> next value
-              else
-                next Nothing
+                else
+                  next Nothing
+          else
+            foldr (visitDirty context' acl rules' dirty') result
+            $ T.keys dirty'
 
 updateSanitized revision acl currentSanitized updatedUnsanitized
   updatedRules currentDependencies (obsoleteUnsanitized, newUnsanitized) =
