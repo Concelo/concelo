@@ -91,19 +91,16 @@ maybeUpdateForest lens hash sequence = do
 
   checkForests
 
-isComplete hash = fmap (null . T.sub hash) (get ignisMissingByGroup)
+isComplete hash = fmap (null . BM.find hash) (get ignisMissing)
 
-addMissingToGroups member group (byMember, byGroup) =
-  foldr (addMissingToGroups member) result $ T.sub group byMember where
-    result = (T.insert (T.super member $ T.value group group) byMember,
-              T.insert (T.super group $ T.value member ()) byGroup)
+addMissingToGroups member group missing =
+  foldr (addMissingToGroups member) (BM.insert group member missing)
+  $ BM.reverseFind group missing
 
 addMissing group members = do
   received <- get ignisReceived
-  byMember <- get ignisMissingByMember
-  byGroup <- get ignisMissingByGroup
 
-  let fold member result@(byMember, byGroup) = case T.find member received of
+  let fold member missing = case T.find member received of
         Nothing -> addMissingToGroups member group result
 
         Just (P.Group { P.getGroupMembers = members }) ->
@@ -111,20 +108,10 @@ addMissing group members = do
 
         Just _ -> result
 
-      (byMember', byGroup') = foldr fold (byMember, byGroup) members
+  update ignisMissing (\missing -> foldr fold missing members)
 
-  set ignisMissingByMember byMember'
-  set ignisMissingByGroup byGroup'
-
-updateMissing member = do
-  byMember <- getAndUpdate ignisMissingByMember $ T.remove member
-
-  update ignisMissingByGroup \byGroup ->
-    foldr fold byGroup $ T.sub member byMember where
-      fold group = T.subtract $ T.super group $ T.value member ()
-
-isComplete name =
-  fmap (null . T.sub name) (get $ missingByGroup . ignisMissing)
+updateMissing member =
+  update ignisMissing $ BM.reverseRemove member
 
 findNewChunks oldChunks newChunks newRoot =
   visit newRoot (T.empty, T.empty) where
