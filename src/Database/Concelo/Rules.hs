@@ -4,20 +4,20 @@ module Database.Concelo.Rules
 data Fields = Fields { getFieldEnv :: Trie Key ()
                      , getFieldString :: String }
 
--- type Parser a = StateT Fields (ErrorT () Identity) a
+data Exception = NoParse | Error String
+
+-- type Parser a = StateT Fields (ErrorT Exception Identity) a
 
 -- todo: enforce operator precedence and associativity
-
--- todo: use a custom error type which distinguishes between recoverable (i.e. try the next alternative) and unrecoverable (i.e. return an error even if there's an alternative) errors
-
--- todo: perhaps the parser should just create an Error/State monad instead of an explicit AST
 
 runParser parser fields =
   runIdentity $ runErrorT $ evalStateT parser fields
 
+noParse = throwError NoParse
+
 eos expression = do
   s <- get fieldString >>= skipSpace
-  if null s then return expression else throwError ()
+  if null s then return expression else noParse
 
 skipSpace all@(c:cs)
   | isSpace c = cs
@@ -35,49 +35,59 @@ terminal t = do
   prefix t
 
 prefix t =
-  fmap (subtractPrefix t) (get fieldString) >>= \case
+  subtractPrefix t <$> get fieldString >>= \case
     Just s' -> do
       set fieldString s'
       return t
-    Nothing -> throwError ()
+    Nothing -> noParse
 
 optional parser
-  =   fmap Just parser
+  =   Just <$> parser
   >>| return Nothing
 
-ternary parser expression = do
+ternary parser = do
   a <- boolean
   terminal "?"
   b <- parser
   terminal ":"
-  fmap (expression a b) parser
+  c <- parser
+  return $ liftM3 (\a b c -> if a then b else c) a b c
 
-binary parser operator expression = do
+binary parser operator function = do
   a <- parser
   terminal operator
-  fmap (expression a) parser
+  b <- parser
+  return $ liftM2 function a b
 
-unary parser operator expression = do
+unary parser operator function = do
   terminal operator
-  fmap expression parser
+  a <- parser
+  return $ fmap function a
 
-call1 object method argument expression = do
+call1 object method argument function =
+  callM1 object method argument (liftM2 function)
+
+callM1 object method argument action = do
   a <- object
   terminal "."
   terminal method
-  fmap (expression a) (group argument)
+  b <- argument
+  return $ action a b
 
-call0 object method argument expression = do
+call0 object method argument function = do
+  callM0 object method argument (fmap function)
+
+callM0 object method argument action = do
   a <- object
   terminal "."
   terminal method
   group void
-  return $ expression a
+  return $ action a
 
 intersperse delimiter parser =
   optional parser >>= \case
     Just a ->
-      delimiter >> fmap (a:) (intersperse delimiter parser)
+      delimiter >> (a:) <$> intersperse delimiter parser
       >>| [a]
     Nothing -> return []
 
@@ -88,39 +98,47 @@ stringArray = do
   return a
 
 element code expression =
-  fmap expression $ prefix code
+  expression <$> prefix code
 
 alternative = do
   a <- patternElement
   prefix "|"
-  fmap (Alternative a) patternElement
+  b <- patternElement
+  return (a <|> b)
 
-escaped = prefix "\\" >> fmap Character character
+escaped = prefix "\\" >> (prefix . (:[])) <$> character
+
+isWordCharacter c = isAlphaNum c || c == '_'
 
 atom
-  =   element "\s" Space
-  >>| element "\w" WordCharacter
-  >>| element "\d" Digit
-  >>| element "\S" (Neg . Space)
-  >>| element "\w" (Neg . WordCharacter)
-  >>| element "\d" (Neg . Digit)
+  =   element "\s" (test character isSpace)
+  >>| element "\w" (test character isWordCharacter)
+  >>| element "\d" (test character isDigit)
+  >>| element "\S" (test character (not . isSpace))
+  >>| element "\w" (test character (not . isWordCharacter))
+  >>| element "\d" (test character (not . isDigit))
   >>| escaped
   >>| unescaped
 
+neg parser = do
+  result <- parser >> return True >>| return False
+  if result then noParse else return ()
+
 unescaped =
   character >>= \case
-    ']' -> throwError ()
-    '$' -> throwError ()
-    _ -> return $ Character c
+    ']' -> noParse
+    '$' -> noParse
+    _ -> return $ prefix [c]
 
 interval = do
   a <- unescaped
   prefix "-"
-  fmap (Interval a) unescaped
+  b <- unescaped
+  return (test character \c -> ord c >= ord a && ord c <= ord b)
 
 zeroOrMore parser =
   optional parser >>= \case
-    Just a -> fmap (a:) parser >>| [a]
+    Just a -> (a:) <$> parser >>| [a]
     Nothing -> return []
 
 characterSet = do
@@ -128,7 +146,7 @@ characterSet = do
   negate <- (optional $ prefix "^") >>= isJust
   atoms <- zeroOrMore (atom >>| interval)
   prefix "]"
-  return $ if negate then Neg else id $ foldr Alternative Fail atoms
+  return $ if negate then neg else id $ foldr (<|>) noParse atoms
 
 suffix s = do
   a <- patternElement
@@ -137,66 +155,102 @@ suffix s = do
 
 patternElement
   =   group pattern
-  >>| suffix "*" ZeroOrMore
-  >>| suffix "+" OneOrMore
-  >>| suffix "?" ZeroOrOne
+  >>| suffix "*" (zeroOrMore character)
+  >>| suffix "+" (character >>= zeroOrMore character)
+  >>| suffix "?" (optional character)
   >>| alternative
   >>| characterSet
-  >>| element "." Wildcard
+  >>| element "." character
   >>| atom
-  >>| element "]" (Character ']')
+  >>| element "]" (prefix "]")
 
 pattern ignoreCase = do
-  anchorStart <- fmap isJust $ optional $ prefix "^"
+  anchorStart <- isJust <$> optional $ prefix "^"
   elements <- zeroOrMore patternElement
-  anchorEnd <- fmap isJust $ optional $ prefix "$"
+  anchorEnd <- isJust <$> optional $ prefix "$"
   return $ Pattern ignoreCase anchorStart anchorEnd
-    $ foldr Sequence Success elements
+    $ foldr (>>) void elements
 
 regex = do
   p <- stringLiteral' '/'
-  ignoreCase <- fmap isJust $ optional $ terminal 'i'
+  ignoreCase <- isJust <$> optional $ terminal 'i'
   case runParser (pattern >>= eos) (RegexState p) of
     Right result -> return result
     Left error -> throwError error
 
 booleanOperation
-  =   binary boolean "&&" And
-  >>| binary boolean "||" Or
-  >>| unary boolean "!" Not
+  =   binary boolean "&&" (&&)
+  >>| binary boolean "||" (||)
+  >>| unary boolean "!" not
+
+hasChild visitor key = do
+  v <- visitor
+  k <- key
+  update contextDependencies $ T.union $ T.make (k : getVisitorPath v) ()
+
+  return $ not $ null $ T.sub k $ getVisitorTrie v
+
+queryVisitor visitor = do
+  v <- visitor
+  update contextDependencies (T.union $ T.make $ getVisitorPath v)
+  return v
+
+queryValue visitor = (T.value . getVisitorTrie) <$> queryVisitor visitor
+
+queryMaybeType accessor visitor =
+  (maybe False (const True)) <$> queryMaybeField accessor visitor
+
+queryMaybeField accessor visitor = (accessor =<<) <$> queryValue visitor
+
+queryRequiredField accessor visitor =
+  queryMaybeField accessor >>= maybeToEither (Error "field not found")
+
+queryField accessor visitor = fmap accessor <$> queryValue visitor
 
 booleanCall
-  =   call1 snapshot "hasChild" string HasChild
-  >>| call1 snapshot "hasChildren" (optional stringArray) HasChildren
-  >>| call0 snapshot "exists" Exists
-  >>| call0 snapshot "isNumber" IsNumber
-  >>| call0 snapshot "isString" IsString
-  >>| call0 snapshot "isBoolean" IsBoolean
-  >>| call1 string "contains" string Contains
-  >>| call1 string "beginsWith" string BeginsWith
-  >>| call1 string "endsWith" string EndsWith
-  >>| call1 string "matches" regex Matches
+  =   callM1 snapshot "hasChild" string hasChild
+
+  >>| callM1 snapshot "hasChildren" (optional stringArray)
+      (\visitor -> \case
+          Just keys -> mapM_ (hasChild visitor) keys
+          Nothing -> do
+            v <- visitor
+            mapM_ (hasChild visitor) $ T.keys $ getVisitorTrie v)
+
+  >>| callM0 snapshot "exists"
+      (\visitor -> (maybe False (const True)) <$> queryValue visitor)
+
+  >>| callM0 snapshot "isNumber" (queryMaybeType valueNumber)
+  >>| callM0 snapshot "isString" (queryMaybeType valueString)
+  >>| callM0 snapshot "isBoolean" (queryMaybeType valueBoolean)
+  >>| call1 string "contains" string isInfixOf
+  >>| call1 string "beginsWith" string isPrefixOf
+  >>| call1 string "endsWith" string isSuffixOf
+  >>| call1 string "matches" regex matches
 
 comparison
-  =   binary number "===" Equal
-  >>| binary number "!==" \a b -> Not $ Equal a b
-  >>| binary number "<" LessThan
-  >>| binary number ">" GreaterThan
-  >>| binary number "<=" \a b -> Not $ GreaterThan
-  >>| binary string "===" Equal
-  >>| binary string "!==" \a b -> Not $ Equal a b
-  >>| binary string "<" LessThan
-  >>| binary string ">" GreaterThan
-  >>| binary string "<=" \a b -> Not $ GreaterThan
-  >>| binary string ">=" \a b -> Not $ LessThan
-  >>| binary boolean "===" Equal
-  >>| binary boolean "!==" \a b -> Not $ Equal a b
-  >>| binary boolean "<" LessThan
-  >>| binary boolean ">" GreaterThan
-  >>| binary boolean "<=" \a b -> Not $ GreaterThan
-  >>| binary boolean ">=" \a b -> Not $ LessThan
+  =   binary number "===" (==)
+  >>| binary number "!==" (/=)
+  >>| binary number "<" (<)
+  >>| binary number ">" (>)
+  >>| binary number "<=" (<=)
+  >>| binary number ">=" (>=)
 
-booleanTernary = ternary boolean IfElse
+  >>| binary string "===" (==)
+  >>| binary string "!==" (/=)
+  >>| binary string "<" (<)
+  >>| binary string ">" (>)
+  >>| binary string "<=" (<=)
+  >>| binary string ">=" (>=)
+
+  >>| binary boolean "===" (==)
+  >>| binary boolean "!==" (/=)
+  >>| binary boolean "<" (<)
+  >>| binary boolean ">" (>)
+  >>| binary boolean "<=" (<=)
+  >>| binary boolean ">=" (>=)
+
+booleanTernary = ternary boolean
 
 void = return ()
 
@@ -225,83 +279,96 @@ numberLiteralPrefix c:cs
 numberLiteralPrefix [] = Nothing
 
 numberLiteral =
-  get fieldString >>= fmap numberLiteralPrefix skipSpace >>= \case
+  get fieldString >>= numberLiteralPrefix <$> skipSpace >>= \case
     Just (n, s') -> do
       set fieldString s'
-      return $ NumberLiteral n
-    Nothing -> throwError ()
+      return $ return n
+    Nothing -> noParse
 
-numberReference = terminal "now" >> return Now
+numberReference = terminal "now" >> return $ get contextNow
 
 numberOperation
-  =   binary number "+" Add
-  >>| binary number "-" Subtract
-  >>| binary number "*" Multiply
-  >>| binary number "/" Divide
-  >>| binary number "%" Modulo
-  >>| unary number "-" Negate
+  =   binary number "+" (+)
+  >>| binary number "-" (-)
+  >>| binary number "*" (*)
+  >>| binary number "/" (/)
+  >>| binary number "%" (%)
+  >>| unary number "-" (0.0-)
 
 numberCall
-  =   call0 snapshot "val" NumberVal
-  >>| call0 snapshot "getPriority" Priority
+  =   callM0 snapshot "val" (queryRequiredField valueNumber)
+  >>| call0 snapshot "getPriority" (queryField valuePriority)
 
 field object field expression = do
   a <- object
   terminal field
   return $ expression a
 
-numberField = field string "length" Length
+numberField = field string "length" length
 
-numberTernary = ternary number IfElse
+numberTernary = ternary number
 
 stringLiteralBody delimiter =
   character >>= unescaped where
     unescaped c
       | c == delimiter = return []
       | c == '\\' = character >>= escaped
-      | otherwise = character >>= fmap (c:) unescaped
+      | otherwise = character >>= (c:) <$> unescaped
 
     escaped c
-      | c == delimiter = character >>= fmap (c:) unescaped
-      | otherwise = character >>= fmap ('\\':c:) unescaped
+      | c == delimiter = character >>= (c:) <$> unescaped
+      | otherwise = character >>= ('\\':c:) <$> unescaped
 
 stringLiteral' delimiter = do
   terminal [delimiter]
   s <- stringLiteralBody delimiter
   return s
 
-stringLiteral = fmap StringLiteral $ stringLiteral' '"'
+stringLiteral = return <$> stringLiteral' '"'
 
 stringReference =
-  get fieldEnv >>= foldr fold (throwError ()) where
+  get fieldEnv >>= foldr fold noParse where
+    sr name = do
+      env <- get contextEnv
+      n <- name
+      maybeToEither (Error "bad reference") (T.find n env)
+
     fold key alternative =
-      fmap StringReference (terminal key)
+      sr <$> terminal key
       >>| alternative
 
-stringOperation = binary string "+" Concatenate
+stringOperation = binary string "+" (++)
 
 stringCall
-  =   call2 string "replace" string string Replace
-  >>| call0 string "toLowerCase" ToLowerCase
-  >>| call0 string "toUpperCase" ToUpperCase
+  =   call2 string "replace" string string (\x y z -> replace y z x)
+  >>| call0 string "toLowerCase" toLower
+  >>| call0 string "toUpperCase" toUpper
 
 stringField = do
   a <- field auth "uid" Uid
   set fieldUsingUid True
   return a
 
-stringTernary = ternary string IfElse
+stringTernary = ternary string
 
-auth = terminal "auth" >> return Auth
+auth = terminal "auth" >> return (return ())
 
 snapshotReference
-  =   terminal "root" >> return Root
-  >>| terminal "data" >> return Data
-  >>| terminal "newData" >> return NewData
+  =   terminal "root" >> return (get contextRootVisitor)
+  >>| terminal "data" >> return (get contextVisitor)
+  >>| terminal "newData" >> return (get contextVisitor)
 
 snapshotCall
-  =   call1 snapshot "child" string Child
-  >>| call0 snapshot "parent" Parent
+  =   callM1 snapshot "child" string
+      (\visitor key -> do
+          v <- visitor
+          k <- key
+          return $ Visitor v (key : getVisitorPath v)
+            (T.sub key $ getVisitorTrie v))
+
+  >>| callM0 snapshot "parent"
+      (maybeToEither (Error "visitor has no parent")
+       . getVisitorParent . (=<<))
 
 snapshot
   =   snapshotReference
@@ -335,7 +402,7 @@ boolean
 
 annotate expression = do
   usingUid <- get fieldUsingUid
-  return if usingUid then UsingUid expression else expression
+  return if usingUid then UsingUid expression else NotUsingUid expression
 
 evalACL lens (UsingUid expression) context acl =
   foldr fold acl $ acListsBlackList $ L.get lens acl where
@@ -343,54 +410,36 @@ evalACL lens (UsingUid expression) context acl =
       | evalRule expression (L.set contextMe uid) = whiteList lens uid acl
       | otherwise = acl
 
-evalACL lens expression context acl
+evalACL lens (NotUsingUid expression) context acl
   | evalRule expression context = whiteListAll lens acl
-  | otherwise = blackListAll lens acl
+  | otherwise = acl
 
 evalRule expression context =
-  case runErrorT $ evalBoolean expression context of
+  case runErrorT $ expression context of
     Right v -> v
     Left _ -> False
 
 hasValueOfType trie type' =
   fromMaybe false
-  (fmap valueType (T.value trie) >>= \case
+  (valueType <$> T.value trie >>= \case
       Number -> return true
       _ -> return false)
 
-test parser p = parser >>= \x -> if p x then return x else throwError ()
-
-evalMatch = \case
-  Character c -> prefix [c]
-  Sequence a b -> evalMatch a >> evalMatch b
-  Alternative a b -> evalMatch a >>| const evalMatch b
-  Space -> test character isSpace
-  WordCharacter -> test character \c -> (isAlphaNum c) || c == '_'
-  Digit -> test character isDigit
-  Neg a -> do
-    result <- evalMatch a >> return True >>| return False
-    if result then throwError() else return ()
-  Interval a b -> test character \c -> ord c >= ord a && ord c <= ord b
-  ZeroOrMore a -> zeroOrMore $ evalMatch a
-  OneOrMore a -> evalMatch a >>= zeroOrMore (evalMatch a)
-  ZeroOrOne a -> optional $ evalMatch a
-  WildCard -> character
-  Fail -> throwError ()
-  Success -> return ()
+test parser p = parser >>= \x -> if p x then return x else noParse
 
 tryMatch =
   get matchStateMatchers >>= \case
     [] -> return ()
     m:ms -> do
       set matchStateMatchers ms
-      evalMatch m
+      m
 
 match anchorStart anchorEnd =
   again where
     again
       =   tryMatch >> if anchorEnd then eos else return ()
       >>| const if anchorStart then
-                  throwError () else
+                  noParse else
                   update position (drop 1) >> again
 
 matches string (Pattern ignoreCase anchorStart anchorEnd elements) =
@@ -399,96 +448,17 @@ matches string (Pattern ignoreCase anchorStart anchorEnd elements) =
     Right _ -> True
     Left _ -> False
 
-lift3 f a b c = liftM3 f (eval a) (eval b) (eval c)
-lift2 f a b = liftM2 f (eval a) (eval b)
-lift1 f a = fmap f $ eval a
-
-eval = \case
-  And a b -> lift2 (&&) a b
-  Or a b -> lift2 (||) a b
-  Not a -> lift1 not a
-
-  HasChild v key -> lift2 hasChild v key where
-    hasChild v key = not $ null $ T.sub key $ getVisitorTrie v
-
-  HasChildren v (Just keys) -> lift2 hasChildren v keys where
-    hasChildren v keys = foldr fold True keys
-    fold key result = (not $ null $ T.sub key $ getVisitorTrie v) && result
-
-  HasChildren v Nothing -> lift1 hasChildren v where
-    hasChildren v = not $ null $ T.keys $ getVisitorTrie v
-
-  Exists v -> lift1 exists v where
-    exists v = not $ null $ getVisitorTrie v
-
-  IsNumber v -> lift1 isNumber v where
-    isNumber v = maybe False (const True)
-                   $ (T.value $ getVisitorTrie v) >>= valueNumber
-
-  IsString v -> lift1 isString v where
-    isString v = maybe False (const True)
-                 $ (T.value $ getVisitorTrie v) >>= valueString
-
-  IsBoolean v -> lift1 isBoolean v where
-    isBoolean v = maybe False (const True)
-                  $ (T.value $ getVisitorTrie v) >>= valueBoolean
-
-  Contains string substring -> lift2 isInfixOf substring string
-  BeginsWith string substring -> lift2 isPrefixOf substring string
-  EndsWith string substring -> lift2 isSuffixOf substring string
-  Matches string pattern -> lift2 matches string pattern
-
-  Equal a b -> lift2 (==) a b
-  LessThan a b -> lift2 (<) a b
-  GreaterThan a b -> lift2 (>) a b
-  IfElse a b c -> lift3 (\a b c -> if a then b else c) a b c
-
-  Add a b -> lift2 (+) a b
-  Subtract a b -> lift2 (-) a b
-  Multiply a b -> lift2 (*) a b
-  Divide a b -> lift2 (/) a b
-  Modulo a b -> lift2 mod a b
-  Negate a b -> lift1 (0.0-) a
-
-  NumberVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
-                                   >>= valueNumber)
-
-  StringVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
-                                   >>= valueString)
-
-  BooleanVal v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
-                                    >>= valueBoolean)
-
-  Priority v -> maybeToEither () (T.value (getVisitorTrie $ eval v)
-                                  >>= valuePriority)
-
-  Length a -> lift1 length a
-  StringLiteral a -> return a
-  StringReference a -> maybeToEither () T.find a $ getContextEnv context
-  Concatenate a b -> lift2 (++) a b
-
-  Replace string substring replacement ->
-    lift3 substring replacement string
-
-  ToLowerCase a -> lift1 toLower a
-  ToUpperCase a -> lift1 toUpper a
-
-  Uid _ -> return $ getContextMe context
-  Auth -> return ()
-  Root -> return $ getContextRoot context
-  Data -> return $ getContextData context
-  NewData -> return $ getContextNewData context
-
-  Child v key -> lift2 child v key where
-    child v key = T.sub key $ getVisitorTrie v
-
-  Parent v -> eval v >>= maybeToEither () . getVisitorParent
-
 parseRule evaluate env = \case
   J.String s -> do
-    fmap evaluate
-      $ runParser (boolean >>= eos >>= annotate) (ParseState env xs False)
+    evaluate <$>
+      runParser (boolean >>= eos >>= annotate) (ParseState env xs False)
   _ -> Left "unexpected type in rule"
+
+parseACLRule lens env value =
+  parseRule (evalACL lens) env value
+
+parseBooleanRule lens env value =
+  parseRule (evalBoolean lens) env value
 
 parseIndexOn = \case
   J.Array names -> Right $ foldr T.insert T.empty names

@@ -760,23 +760,3 @@ makeDiff head atomicHead = do
         apply' (obsoletePaths, newPaths, newACLs) acl =
           (T.union obsoletePath obsoletePaths,
            T.union (fmap (L.set valueACL acl) newPath) newPaths)
-
--- 1. compute diff (as sets of removes and adds)
-
--- 2. remove chunks from base for each remove in diff and add orphans (any value that's in a removed chunk but not in the set of removes) to set of adds
-
--- (2.5.) find remaining chunk with the most space available
-
--- 3. if there's a remaining chunk into which the entire set of adds will fit, remove that chunk and create a new one with the union of orphans and adds
-
--- 4. otherwise, add a new chunk and fill it with as many adds as possible, then go back to 3, or go to 5 if no adds remain
-
--- 5. now we have a set of added chunks and a set of removed chunks.  Start again at 2, except at the level of chunks and groups of chunks.  Repeat this process (for groups of groups, groups of groups of groups, etc.) until the new root is calculated and collect everything that's new in reverse dependency order
-
--- NB: compute the new acks as the intersection of the set generated in 5 and old acks, and the new nacks as the difference between the two (i.e. new set minus new acks)
-
--- NB: if a nack is received (or an obsolete root), move the specified item from acks to nacks
-
--- NB: subscriber should send the last complete root it received periodically to ensure we're in sync
-
--- NB: each writer must segregate values into chunks according to permissions (i.e. all values in a given chunk must share the exact same read and write Access).  However, groups may contain chunks with various Accesses.
