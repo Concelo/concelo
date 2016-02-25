@@ -20,11 +20,13 @@ receive = \case
     receiveChunk forest name [trees, rules, acl]
 
   p@(P.Persisted forest) -> do
-    update subscriberIncomplete $ T.insert (T.super PersistedKey $ T.value forest p)
+    update subscriberIncomplete
+      $ T.insert (T.super PersistedKey $ T.value forest p)
     checkIncomplete
 
   p@(P.Published forest) -> do
-    update subscriberIncomplete $ T.insert (T.super PublishedKey $ T.value forest p)
+    update subscriberIncomplete
+      $ T.insert (T.super PublishedKey $ T.value forest p)
     checkIncomplete
 
   _ -> patternFailure
@@ -61,10 +63,12 @@ findNewChunks oldChunks newChunks newRoot =
           -- we do not allow a given chunk to have more than one
           -- parent since it confuses the diff algorithm
           if M.member name new then
-            fail else
+            badForest
+          else
             foldM visit (M.insert name chunk new,
                          if chunkIsLeaf chunk then
-                           M.insert name chunk newLeaves else
+                           M.insert name chunk newLeaves
+                         else
                            newLeaves,
                          found) (chunkMembers chunk)
 
@@ -72,11 +76,13 @@ findObsoleteChunks oldChunks oldRoot found =
   visit oldRoot T.empty where
     visit name result@(obsolete, obsoleteLeaves) =
       if M.member name found then
-        result else
+        result
+      else
         find name oldChunks >>= \chunk ->
           foldM visit (M.insert name chunk obsolete,
                        if chunkIsLeaf chunk then
-                         M.insert name chunk obsoleteLeaves else
+                         M.insert name chunk obsoleteLeaves
+                       else
                          obsoleteLeaves) (chunkMembers chunk)
 
 diffChunks oldChunks oldRoot newChunks newRoot = do
@@ -225,7 +231,8 @@ updateUnsanitized currentUnsanitized (obsolete, new) =
 visitDirty context acl rules key
   result@(remainingDirty, sanitized, dependencies) =
     if null $ getContextDirty context then
-      result else
+      result
+    else
       visitValues result possibleValues where
         rules' = T.sub key rules
         dirty' = T.sub key $ getContextDirty context
@@ -368,7 +375,8 @@ updateForest current name = do
       publicKey <- subscriberPublicKey
 
       if public == nobody then
-        return $ forest T.empty BT.empty T.empty else
+        return $ forest T.empty BT.empty T.empty
+        else
 
         let unsanitized =
               updateUnsanitized (getForestUnsanitized current)
@@ -432,7 +440,8 @@ filterDiff (obsoleteChunks, newChunks) = do
   return (foldr removeLive obsoleteChunks $ M.keys obsoleteChunks, newChunks)
     where removeLive key result =
             if M.member key persisted || M.member key published then
-              M.remove key result else
+              M.remove key result
+            else
               result
 
 checkForest revision name =

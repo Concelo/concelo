@@ -5,40 +5,46 @@ import qualified Data.ByteString as BS
 import qualified Database.Concelo.Crypto as C
 import qualified Database.Concelo.Protocol as P
 
-data Cred = Cred { _credPrivate :: ByteString
-                 , _credPublic :: ByteString
-                 , _credRequest :: Int
-                 , _credSent :: Bool }
+import Database.Concelo.Lens (get, set, getThenUpdate, with)
 
-data Ignis = Ignis { }
+data Cred = Cred { getCredPrivate :: ByteString
+                 , getCredPublic :: ByteString
+                 , getCredRequest :: Int
+                 , getCredSent :: Bool }
 
-data Credentials = PrivateKey { _privateKey :: ByteString }
-                 | EmailPassword { _email :: Text
-                                 , _password :: Text }
+data Ignis = Ignis { getIgnisCred :: Maybe Cred
+                   , getIgnisNextRequest :: Int
+                   , getIgnisPRNG :: C.PRNG }
 
-ignis rules = R.parse rules >>= Right . Ignis
+ignisCred = L.lens getIgnisCred (\x v -> x { getIgnisCred = v })
+ignisNextRequest =
+  L.lens getIgnisNextRequest (\x v -> x { getIgnisNextRequest = v })
+ignisPRNG = L.lens getIgnisPRNG (\x v -> x { getIgnisPRNG = v })
 
-authenticate (PrivateKey private) =
-  authenticateWithPrivateKey private
+data Credentials = PrivateKey { getPKPrivateKey :: ByteString
+                              , getPKPassword :: ByteString }
+                 | EmailPassword { getEPEmail :: ByteString
+                                 , getEPPassword :: ByteString }
 
-authenticate (EmailPassword email password) =
-  authenticateWithPrivateKey $ C.derivePrivate password email
+ignis seed = Ignis Nothing 1 (C.makePRNG seed)
 
-authenticateWithPrivateKey private =
+authenticate = \case
+  PrivateKey key password ->
+    authenticateWithPrivateKey $ C.decryptPrivate password key
+
+  EmailPassword email password ->
+    authenticateWithPrivateKey $ C.deriveKey password email
+
+authenticateWithPrivateKey private = do
   request <- get ignisNextRequest
   set ignisCred $ Just $ Cred private (C.derivePublic private) request False
   nextRequest
 
-nextRequest = do
-  getThenUpdate ignisNextRequest (+1)
+nextRequest = getThenUpdate ignisNextRequest (+1)
 
-with lens f =
-  (result, new) <- get lens >>= f
-  set lens new
-  return result
+sign private challenge = with ignisPRNG $ C.sign private challenge
 
-sign private challenge =
-  with ignisPRNG $ C.sign private challenge
+-- tbc
 
 bind f x =
   x >>= \case

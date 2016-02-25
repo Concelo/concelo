@@ -12,12 +12,12 @@ nextMessages now pub sub sent lastPing ping = do
       pubSent <- getAndSet sent False
       if pubSent then
         ping
-      else do
+        else do
         last <- get lastPing
         if now - last > pingInterval then do
           set lastPing now
           ping
-        else
+          else
           return []
 
     Just message -> do
