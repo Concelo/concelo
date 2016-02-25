@@ -1,11 +1,15 @@
 module Database.Concelo.Ignis
   ( ignis ) where
 
+import qualified Control.Lens as L
 import qualified Data.ByteString as BS
 import qualified Database.Concelo.Crypto as C
 import qualified Database.Concelo.Protocol as P
+import qualified Database.Concelo.Revision as R
+import qualified Database.Concelo.Pipe as Pipe
 
-import Database.Concelo.Lens (get, set, getThenUpdate, with)
+import Database.Concelo.Control (get, set, getThenUpdate, with, bindMaybe,
+                                 bindMaybe2)
 
 data Cred = Cred { getCredPrivate :: ByteString
                  , getCredPublic :: ByteString
@@ -13,16 +17,31 @@ data Cred = Cred { getCredPrivate :: ByteString
                  , getCredSent :: Bool }
 
 data Ignis = Ignis { getIgnisCred :: Maybe Cred
+                   , getIgnisChallenge :: Maybe ByteString
                    , getIgnisNextRequest :: Int
+                   , getIgnisHead :: R.Revision
+                   , getIgnisDiff :: R.ValueTrie
+                   , getIgnisPipe :: Pipe.Pipe
                    , getIgnisPRNG :: C.PRNG }
 
 ignisCred = L.lens getIgnisCred (\x v -> x { getIgnisCred = v })
+
+ignisChallenge = L.lens getIgnisChallenge (\x v -> x { getIgnisChallenge = v })
+
 ignisNextRequest =
   L.lens getIgnisNextRequest (\x v -> x { getIgnisNextRequest = v })
+
+ignisHead = L.lens getIgnisHead (\x v -> x { getIgnisHead = v })
+
+ignisDiff = L.lens getIgnisDiff (\x v -> x { getIgnisDiff = v })
+
+ignisPipe = L.lens getIgnisPipe (\x v -> x { getIgnisPipe = v })
+
 ignisPRNG = L.lens getIgnisPRNG (\x v -> x { getIgnisPRNG = v })
 
 data Credentials = PrivateKey { getPKPrivateKey :: ByteString
                               , getPKPassword :: ByteString }
+
                  | EmailPassword { getEPEmail :: ByteString
                                  , getEPPassword :: ByteString }
 
@@ -37,79 +56,69 @@ authenticate = \case
 
 authenticateWithPrivateKey private = do
   request <- get ignisNextRequest
-  set ignisCred $ Just $ Cred private (C.derivePublic private) request False
+
+  set ignisCred $ Just
+    $ Cred private (C.derivePublic private) Nothing request False
+
   nextRequest
 
 nextRequest = getThenUpdate ignisNextRequest (+1)
 
 sign private challenge = with ignisPRNG $ C.sign private challenge
 
--- tbc
-
-bind f x =
-  x >>= \case
-    Nothing -> return Nothing
-    Just x' -> f x'
-
-bind2 f x y =
-  x >>= \case
-    Nothing -> return Nothing
-    Just x' -> y >>= \case
-      Nothing -> return Nothing
-      Just y' -> f x' y'
-
 maybeAuthenticate =
-  bind2 try (get ignisCred) (get ignisChallenge) where
-
+  bindMaybe2 (get ignisCred) (get ignisChallenge) where
     try cred challenge =
-      if getCredSent cred then return Nothing else do
+      if getCredSent cred then
+        return $ Just []
+      else do
         set ignisCred $ Just $ L.set credSent True cred
 
         sign (getCredPrivate cred) challenge
-          >>= P.Cred (getCredRequest cred) (getCredPublic cred)
+          >>= Just
+          [P.Cred P.version (getCredRequest cred) (getCredPublic cred)]
 
-getPublic =
-  get ignisCred >>= \case
-    Nothing -> return Nothing
-    Just cred -> return $ getCredPublic cred
+getPublic = bindMaybe getCredPublic $ get ignisCred
 
 unAuth = set ignisCred Nothing
 
 update now update atomicUpdate = do
-  head <- fmap update $ get ignisHead
-  let atomicHead = atomicUpdate head
-  makeDiff head atomicHead >>= set ignisDiff
-  set ignisUpdateTime now
+  head <- update <$> L.set revisionUpdateTime now <$> get ignisHead
+
+  makeDiff head (atomicUpdate head) >>= set ignisDiff
+
   set ignisHead head
 
 receive = \case
-  P.Challenge challenge -> do
-    set ignisChallenge $ Just challenge
-    get ignisCred >>= \case
-      Nothing -> return ()
-      Just cred -> set ignisCred $ Just $ L.set credSent False cred
+  P.Challenge { P.getChallengeProtocolVersion = v
+              , P.getChallengeBody = body } ->
+    if v /= P.version then
+      error "unexpected protocol version: " ++ show v
+    else do
+      set ignisChallenge $ Just body
+
+      bindMaybe (set ignisCred . Just . L.set credSent False) (get ignisCred)
+
+      maybeAuthenticate
 
   nack@(P.Nack {}) ->
-    with ignisPublisher $ Pub.receive nack
+    with (pipePublisher . ignisPipe) $ Pub.receive nack
 
+-- tbc
   message ->
-    with ignisSubscriber $ Sub.receive message
-
-ping = (:[] . P.Published) <$> get ignisPublished
+    with (pipeSubscriber . ignisPipe) $ Sub.receive message
 
 nextMessages now =
-  get ignisCred >>= \case
+  maybeAuthenticate >>= \case
     Nothing -> return []
-    Just _ ->
-      maybeAuthenticate >>= \case
-        Just message ->
-          return [message]
 
-        Nothing ->
-          PubSub.nextMessages now ignisPublisher ignisSubscriber ignisPubSent
-          ignisLastPing ping
+    Just [] ->
+      with ignisPipe
+      $ Pipe.nextMessages now
+      ((:[]) . P.Published
+       <$> get (publisherPublished . pipePublisher . ignisPipe))
 
-mapPair f (x, y) = (f x, f y)
+    Just messages -> return messages
 
 byACL path value = T.super (getValueACL value) path
 

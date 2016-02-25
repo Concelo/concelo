@@ -3,71 +3,59 @@ module Database.Concelo.Trie
   , empty
   , key
   , value
+  , firstPath
+  , first
   , insert
   , modify
   , delete
   , sub
   , super
-  , diff ) where
+  , singleton
+  , union
+  , intersectL
+  , intersectR
+  , subtract ) where
 
+import qualified Database.Concelo.VTrie as V
 import qualified Database.Concelo.Map as M
-import qualified Control.Lens as L
 
-newtype Trie k v = Trie (M.Map k (Cell k v))
+newtype Trie k v = Trie { run :: V.VTrie k v }
 
-data Cell k v = Cell { getCellValue :: Maybe v
-                     , getCellSubTrie :: Trie k v }
+instance M.FoldableWithKey Trie where
+  foldrWithKey visit seed = foldrWithKey visit seed . run
 
-cellValue = L.lens getCellValue (\x v -> x { getCellValue = v })
-cellSubTrie = L.lens getCellSubTrie (\x v -> x { getCellSubTrie = v })
+empty = Trie V.empty
 
-empty = Trie M.empty
+key = V.key . run
 
-key (Trie map) = M.key map
+value = V.value . run
 
-value (Trie map) = M.value map >>= getCellValue
+subTrie = Trie . V.subTrie . run
 
-subTrie (Trie map) = getCellSubTrie <$> M.value map
+firstPath = V.firstPath . run
 
-insert revision key value trie = modify revision key (const $ Just value) trie
+first = V.first . run
 
-modify revision key transform (Trie map) =
-  Trie $ M.modify revision key
-  (\case
-      Nothing -> case transform Nothing of
-        Nothing -> Nothing
+paths = V.paths . run
 
-        v -> Just $ Cell v empty
+insert k v = Trie . V.insert 0 k v . run
 
-      Just (Cell v sub) -> case transform v of
-        Nothing -> if null sub then
-                     Nothing
-                   else
-                     Just $ Cell Nothing sub
+modify k f = Trie . V.modify 0 k f . run
 
-        v -> Just $ Cell v sub)
-  map
+delete k = Trie . V.delete 0 k . run
 
-delete revision key trie = modify revision key (const Nothing) trie
+sub k = Trie . V.sub k . run
 
-sub key (Trie map) = maybe empty getCellSubTrie $ find key map
+superKV k v = Trie . V.superKV 0 k v . run
 
-super revision key value trie =
-  Trie $ M.insert revision key (Cell value trie) empty
+super k = Trie . V.super 0 k . run
 
-insertCell (Just (M.Cell r k v)) (Trie map) = Trie $ M.insert r k v map
-insertCell Nothing trie = trie
+singleton k v = Trie . V.singleton 0 k v
 
-diff (Trie a) (Trie b) =
-  M.foldrDiff
-  (\maybeA maybeB result@(as, bs) ->
-    case (maybeA, maybeB) of
-      (Just a, Nothing) -> (insertCell a as, bs)
-      (Nothing, Just b) -> (as, insertCell b bs)
-      (Just a, Just b) ->
-        let (subAs, subBs) = diff (getCellSubTrie a) (getCellSubTrie b) in
-        (insertCell (L.set cellSubTrie subAs a) as,
-         insertCell (L.set cellSubTrie subBs a) bs)
+union a = Trie . V.union 0 a . run
 
-      _ -> result)
-  (empty, empty) a b
+intersectL a = Trie . V.intersectL 0 a . run
+
+intersectR a = Trie . V.intersectR 0 a . run
+
+subtract a = Trie . V.subtract 0 a . run

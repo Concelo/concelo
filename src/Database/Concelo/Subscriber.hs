@@ -1,9 +1,15 @@
 module Database.Concelo.Subscriber
   ( receive ) where
 
+import Database.Concelo.Control (patternFailure)
+
+import qualified Database.Concelo.Protocol as P
+import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.Path as Path
+
 receive = \case
   leaf@(P.Leaf { P.getLeafName = name }) ->
-    receiveChunk leaf name []
+    receiveChunk leaf name T.empty
 
   group@(P.Group { P.getGroupName = name
                  , P.getGroupMembers = members }) ->
@@ -11,27 +17,26 @@ receive = \case
 
   tree@(P.Tree { P.getTreeName = name
                , P.getTreeACL = acl }) ->
-    receiveChunk tree name [acl]
+    receiveChunk tree name acl
 
   forest@(P.Forest { P.getForestName = name
                    , P.getForestTrees = trees
-                   , P.getForestRules = rules
                    , P.getForestACL = acl }) ->
-    receiveChunk forest name [trees, rules, acl]
+    receiveChunk forest name $ T.union trees $ T.union acl T.empty
 
-  p@(P.Persisted forest) -> do
-    update subscriberIncomplete
-      $ T.insert (T.super PersistedKey $ T.value forest p)
-    checkIncomplete
+  p@(P.Persisted forest) -> updateIncomplete forest p
 
-  p@(P.Published forest) -> do
-    update subscriberIncomplete
-      $ T.insert (T.super PublishedKey $ T.value forest p)
-    checkIncomplete
+  p@(P.Published forest) -> updateIncomplete forest p
 
   _ -> patternFailure
 
-isComplete hash = fmap (null . BM.find hash) (get subscriberMissing)
+updateIncomplete key name message = do
+  update subscriberIncomplete
+    $ T.union $ Path.super key $ const message <$> name
+  checkIncomplete
+
+-- tbc
+isComplete hash = null . BM.find hash <$> get subscriberMissing
 
 addMissingToGroups member group missing =
   foldr (addMissingToGroups member) (BM.insert group member missing)
@@ -106,10 +111,10 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
 
     add leaf acl =
       case leaf of
-        P.Leaf { P.getLeafSignature = signature
+        P.Leaf { P.getLeafSigned = signed
                , P.getLeafBody = body } -> do
 
-          get subscriberAdministratorACL >>= verify signature
+          get subscriberAdministratorACL >>= verify signed
 
           return case P.deserializeTrie body of
             Just trie -> T.union trie acl
@@ -124,7 +129,7 @@ updateUnsanitizedDiff key acl (obsoleteUnsanitized, newUnsanitized)
   return (obsolete, new) where
     visit needVerify leaf result =
       case leaf of
-        P.Leaf { P.getLeafSignature = signature
+        P.Leaf { P.getLeafSigned = signed
                , P.getLeafBody = body } -> do
 
           return case P.deserializeTrie (C.decryptSymmetric key body) of
@@ -137,7 +142,7 @@ verifyLeafDiff acl result@(_, newLeaves) = do
   mapM_ visit newLeaves
   return result where
     visit = \case
-      P.Leaf { P.getLeafSignature = signature } -> verify signature acl
+      P.Leaf { P.getLeafSigned = signed } -> verify signed acl
       _ -> patternFailure
 
 updateTrees currentTrees (obsoleteTrees, newTrees) = do
@@ -156,7 +161,7 @@ updateTrees currentTrees (obsoleteTrees, newTrees) = do
     add tree (trees, unsanitizedDiff@(obsoleteUnsanitized, newUnsanitized)) =
       case tree of
         P.Tree { P.getTreeRevision = revision
-               , P.getTreeSignature = signature
+               , P.getTreeSigned = signed
                , P.getTreeName = name
                , P.getTreeACL = acl
                , P.getTreeLeaves = leaves } -> do
@@ -181,7 +186,7 @@ updateTrees currentTrees (obsoleteTrees, newTrees) = do
 
           when (not (adminACL `T.isSuperSetOf` aclTrie)) badForest
 
-          verify signature aclTrie
+          verify signed aclTrie
 
           publicKey <- get subscriberPublicKey
 
@@ -340,15 +345,15 @@ updateForest current name = do
   received <- get subscriberReceived
   case T.find name received of
     Just (P.Forest { P.getForestRevision = revision
-                   , P.getForestSignature = signature
+                   , P.getForestSigned = signed
                    , P.getForestAdminRevision = adminRevision
-                   , P.getForestAdminSignature = adminSignature
+                   , P.getForestAdminSigned = adminSigned
                    , P.getForestACL = acl
                    , P.getForestTrees = trees }) -> do
 
       adminACL <- get subscriberAdministratorACL
 
-      verify adminSignature adminACL
+      verify adminSigned adminACL
 
       when (revision <= getForestRevision current) badForest
       when (adminRevision <= getForestAdminRevision current) badForest
@@ -358,7 +363,7 @@ updateForest current name = do
         received rules
         >>= updateACL (getForestACLTrie current)
 
-      verify signature aclTrie
+      verify signed aclTrie
 
       -- todo: recompute/purge interned ACLs if ACL has changed
 

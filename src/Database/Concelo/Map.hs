@@ -1,73 +1,40 @@
 module Database.Concelo.Map
   ( Map()
-  , Cell(Cell)
-  , getCellRevision
-  , getCellKey
-  , getCellValue
-  , cellRevision
-  , cellKey
-  , cellValue
+  , FoldableWithKey(foldrWithKey)
   , empty
   , key
   , value
   , member
   , lookup
+  , first
   , insert
   , modify
-  , delete
-  , foldrDiff
-  , diff ) where
+  , delete ) where
 
-import qualified Data.Tree.RBTree as T
-import qualified Control.Lens as L
+import qualified Database.Concelo.VMap as V
 
-newtype Map k v = Map (T.RBTree (Cell k v))
+newtype Map k v = Map { run :: V.VMap k v }
 
-data Cell k v = Cell { getCellRevision :: Integer
-                     , getCellKey :: k
-                     , getCellValue :: v }
+class FoldableWithKey t where
+  foldrWithKey :: (k -> a -> b -> b) -> b -> t k a -> b
 
-cellRevision = L.lens getCellRevision (\x v -> x { getCellRevision = v })
-cellKey = L.lens getCellKey (\x v -> x { getCellKey = v })
-cellValue = L.lens getCellValue (\x v -> x { getCellValue = v })
+instance FoldableWithKey Map where
+  foldrWithKey visit seed = foldrWithKey visit seed . run
 
-instance Ord k => Ord (Cell k v) where
-  compare a b = compare (getCellKey a) (getCellKey b)
+empty = Map V.empty
 
-compareKey k c = compare k (getCellKey c)
+key = V.key . run
 
-cellRevisionsEqual (Cell a _ _) (Cell b _ _) = a == b
+value = V.value . run
 
-empty = Map T.Leaf
+member k = V.member k . run
 
-maybeCell = \case
-  Map T.Leaf -> Nothing
-  Map (T.Node _ c _ _) -> Just c
+lookup k = V.lookup k . run
 
-key tree = getCellKey <$> maybeCell tree
+first = V.first . run
 
-value tree = getCellValue <$> maybeCell tree
+insert k v = Map . V.insert 0 k v . run
 
-member key map = maybe False (const True) $ find key map
+modify k f = Map . V.modify 0 k f . run
 
-lookup key map = getCellValue <$> find key map
-
-find key (Map tree) = T.searchFast (\k c -> compare k $ getCellKey c) tree key
-
-insert revision key value map = modify key (const $ Just value) map
-
-modify revision key transform (Map tree) =
-  Map $ T.modifyVersioned (L.set cellRevision revision) compareKey tree key
-  ((Cell revision key <$>) . transform . (getCellValue <$>))
-
-delete revision key map = modify key (const Nothing) map
-
-insertCell (Just (Cell r k v)) map = insert r k v map
-insertCell _ map = map
-
-foldrDiff visit seed a b =
-  T.foldrDiffVersioned cellRevisionsEqual compare visit seed a b
-
-diff a b =
-  T.foldrDiffVersioned cellRevisionsEqual compare
-  (\a b (as, bs) -> (insertCell a as, insertCell b bs)) (empty, empty) a b
+delete k = Map . V.delete 0 k . run
