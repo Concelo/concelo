@@ -9,6 +9,7 @@ module Database.Concelo.VMap
   , insert
   , modify
   , delete
+  , triples
   , foldrDiff
   , diff ) where
 
@@ -61,6 +62,8 @@ modify version key transform (VMap tree) =
   ((Cell version key <$>) . transform . (getCellValue <$>))
 
 delete version key map = modify version key (const Nothing) map
+
+triples = fmap triple . toList . run
 
 pair (Cell _ k v) = (k, v)
 

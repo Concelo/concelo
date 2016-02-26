@@ -5,6 +5,7 @@ module Database.Concelo.Trie
   , value
   , firstPath
   , first
+  , find
   , insert
   , modify
   , delete
@@ -21,6 +22,9 @@ import qualified Database.Concelo.Map as M
 
 newtype Trie k v = Trie { run :: V.VTrie k v }
 
+instance Functor VTrie where
+  fmap f = Trie . fmap f . run
+
 instance M.FoldableWithKey Trie where
   foldrWithKey visit seed = foldrWithKey visit seed . run
 
@@ -35,6 +39,8 @@ subTrie = Trie . V.subTrie . run
 firstPath = V.firstPath . run
 
 first = V.first . run
+
+find = V.find . run
 
 paths = V.paths . run
 

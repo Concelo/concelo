@@ -102,7 +102,7 @@ receive = \case
       maybeAuthenticate
 
   nack@(P.Nack {}) ->
-    with (pipePublisher . ignisPipe) $ Pub.receive nack
+    with (pipePublisher . ignisPipe) $ Pub.receive (const True) nack
 
 -- tbc
   message ->

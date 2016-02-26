@@ -37,13 +37,17 @@ nextMessage =
 
     Nothing -> return Nothing
 
-receive = \case
+receive hashAccessible = \case
   P.Nack path ->
-    (T.intersectR path <$> get publisherAcks) >>= \case
-      Just nack -> do
-        update publisherNacks $ T.union nack
-        update publisherAcks $ T.subtract nack
-        return ()
+    (T.find path <$> get publisherAcks) >>= \case
+      Just (nack, message) ->
+        let h = P.getMessageKeyHash message in
+        if null h || hashAccessible h then do
+          update publisherNacks $ T.union nack
+          update publisherAcks $ T.subtract nack
+          return ()
+        else
+          return ()
 
       Nothing -> return ()
 

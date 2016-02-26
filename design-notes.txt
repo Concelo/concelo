@@ -135,3 +135,43 @@ sanitizing a trie
      * if the value fails to validate, try the next one if present, otherwise, remove the path from the in-progress sanitized trie, remove the element from the dirty set, and descend
 
  * repeat the above until the dirty set is empty
+
+
+thoughts on the protocol
+
+forest:
+  globally unique ID (i.e. distinct from any other forest, tree, group, or leaf ID or hash; immutable)
+  hash of current state
+  admin revision
+  admin signature
+  acl group hash (may change only if admin revision and signature are updated)
+  revision
+  signature
+  tree group hash (may change only if revision and signature are updated, but must contain same or updated trees relative to previous forest)
+
+tree:
+  globally unique ID (immutable)
+  forest ID (immutable)
+  boolean optional (immutable)
+  acl group hash (immutable)
+  hash of encryption key (immutable)
+  hash of current state
+  revision
+  signature
+  leaf group hash (containing only groups/leaves encrypted with said key and signed by writers listed in the ACL; may only change if revision and signature are updated)
+
+group:
+  hash of state
+  hash of key if content encrypted
+  signature
+  hashes of group/tree/leaf members
+
+leaf:
+  hash of state
+  hash of key if content encrypted
+  signature
+  body
+
+When a client connects to a relay, it explicitly subscribes the IDs of the forest(s) of interest (and may unsubscribe at any time) -- the relay will not send anything by default besides the challenge.
+
+In cases of large data sets, applications may avoid causing clients to download unnecessary content by labeling trees "optional" (i.e. sent only in response to a specific nack).  Furthermore, a client need not download an entire optional tree if it's only interested in a subset of the information; the application data may refer directly to the group(s) and/or leaf/leaves of interest via their hashes.

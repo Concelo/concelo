@@ -7,6 +7,9 @@ import qualified Database.Concelo.Protocol as P
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Path as Path
 
+persisted = "e"
+published = "u"
+
 receive = \case
   leaf@(P.Leaf { P.getLeafName = name }) ->
     receiveChunk leaf name T.empty
@@ -24,9 +27,9 @@ receive = \case
                    , P.getForestACL = acl }) ->
     receiveChunk forest name $ T.union trees $ T.union acl T.empty
 
-  p@(P.Persisted forest) -> updateIncomplete forest p
+  p@(P.Persisted forest) -> updateIncomplete persisited forest p
 
-  p@(P.Published forest) -> updateIncomplete forest p
+  p@(P.Published forest) -> updateIncomplete published forest p
 
   _ -> patternFailure
 
@@ -36,7 +39,6 @@ updateIncomplete key name message = do
   checkIncomplete
 
 -- tbc
-isComplete hash = null . BM.find hash <$> get subscriberMissing
 
 addMissingToGroups member group missing =
   foldr (addMissingToGroups member) (BM.insert group member missing)

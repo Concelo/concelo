@@ -1,6 +1,7 @@
 module Database.Concelo.Path
   ( Path()
   , empty
+  , key
   , sub
   , super
   , singleton ) where
@@ -8,6 +9,7 @@ module Database.Concelo.Path
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Map as M
 
+-- todo: using a Trie here is overkill; a list would be sufficient
 newtype Path k v = Path { run :: T.Trie k v }
 
 instance Functor Trie where
@@ -18,7 +20,9 @@ instance M.FoldableWithKey Path where
 
 empty = Path T.empty
 
-sub k = Path . T.sub k . run
+key = T.key . run
+
+sub = Path . T.subTrie . run
 
 super k = Path . T.super k . run
 

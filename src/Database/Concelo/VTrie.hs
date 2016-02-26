@@ -3,6 +3,8 @@ module Database.Concelo.VTrie
   , empty
   , key
   , value
+  , firstPath
+  , first
   , insert
   , modify
   , delete
@@ -55,7 +57,16 @@ first (VTrie map) =
   else
     first sub
 
-paths (VTrie map) =
+find path trie@(VTrie map) =
+  case P.key path of
+    Nothing -> Nothing
+    Just k ->
+      let subPath = P.sub path
+      if null subPath then
+        (\v -> (P.singleton k v, v)) <$> value trie
+      else
+        (\(p, v) -> (P.super k, v))
+        <$> ((getCellSubTrie <$> V.lookup k map) >>= find subPath)
 
 insert version key value trie = modify version key (const $ Just value) trie
 

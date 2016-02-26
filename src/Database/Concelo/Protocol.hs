@@ -28,14 +28,16 @@ data Message = Cred { getCredProtocolVersion :: Int
 
              | Persisted { getPersistedForest :: Name }
 
-             | Nack { getNackName :: Name }
+             | Nack { getNackNames :: Names }
 
              | Leaf { getLeafName :: Name
                     , getLeafSigned :: Signed
+                    , getLeafKeyHash :: ByteString
                     , getLeafBody :: ByteString }
 
              | Group { getGroupName :: Name
                      , getGroupSigned :: Signed
+                     , getGroupKeyHash :: ByteString
                      , getGroupMembers :: Names }
 
              | Tree { getTreeName :: Name
@@ -51,5 +53,10 @@ data Message = Cred { getCredProtocolVersion :: Int
                       , getForestAdminSigned :: Signed
                       , getForestACL :: Name
                       , getForestTrees :: Name }
+
+getMessageKeyHash = \case
+  Leaf { getLeafKeyHash = h } -> h
+  Group { getGroupKeyHash = h } -> h
+  _ -> ""
 
 version = 0
