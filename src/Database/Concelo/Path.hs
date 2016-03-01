@@ -1,6 +1,7 @@
 module Database.Concelo.Path
   ( Path()
   , empty
+  , toPath
   , key
   , sub
   , super
@@ -19,6 +20,10 @@ instance M.FoldableWithKey Path where
   foldrWithKey visit seed = foldrWithKey visit seed . run
 
 empty = Path T.empty
+
+toPath (k:ks@(_:_)) v = super k $ toPath ks v
+toPath (k:_) v = singleton k v
+toPath _ = empty
 
 key = T.key . run
 

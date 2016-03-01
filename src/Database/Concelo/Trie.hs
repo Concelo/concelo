@@ -6,6 +6,10 @@ module Database.Concelo.Trie
   , firstPath
   , first
   , find
+  , findValue
+  , findTrie
+  , member
+  , paths
   , insert
   , modify
   , delete
@@ -15,7 +19,8 @@ module Database.Concelo.Trie
   , union
   , intersectL
   , intersectR
-  , subtract ) where
+  , subtract
+  , subtractAll ) where
 
 import qualified Database.Concelo.VTrie as V
 import qualified Database.Concelo.Map as M
@@ -40,7 +45,13 @@ firstPath = V.firstPath . run
 
 first = V.first . run
 
-find = V.find . run
+find path = V.find path . run
+
+findValue path = V.findValue path . run
+
+findTrie path = Trie . V.findTrie path . run
+
+member path = V.member path . run
 
 paths = V.paths . run
 
@@ -65,3 +76,5 @@ intersectL a = Trie . V.intersectL 0 a . run
 intersectR a = Trie . V.intersectR 0 a . run
 
 subtract a = Trie . V.subtract 0 a . run
+
+subtractAll a = Trie . V.subtractAll 0 a . run

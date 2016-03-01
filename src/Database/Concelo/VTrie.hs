@@ -5,11 +5,22 @@ module Database.Concelo.VTrie
   , value
   , firstPath
   , first
+  , find
+  , findValue
+  , findTrie
+  , member
+  , paths
   , insert
   , modify
   , delete
   , sub
   , super
+  , singleton
+  , union
+  , intersectL
+  , intersectR
+  , subtract
+  , subtractAll
   , diff ) where
 
 import qualified Database.Concelo.VMap as V
@@ -67,6 +78,21 @@ find path trie@(VTrie map) =
       else
         (\(p, v) -> (P.super k, v))
         <$> ((getCellSubTrie <$> V.lookup k map) >>= find subPath)
+
+findValue path trie = snd <$> find path trie
+
+member path = isJust . find path
+
+paths trie@(VTrie map) =
+  M.foldrWithKey visit [] map where
+    visit key (Cell v sub) result =
+      (P.super key <$> paths sub)
+      ++ maybe result (\v -> P.singleton key v : result) v
+
+findTrie path trie =
+  case P.key path of
+    Nothing -> trie
+    Just k -> find' (P.sub path) (sub k trie)
 
 insert version key value trie = modify version key (const $ Just value) trie
 
@@ -131,8 +157,21 @@ subtract version small (VTrie large) =
       Nothing ->
         result
       Just (Cell lv ls) ->
-        let new = Cell (sv >> lv) (subtract version ss ls) in
+        let new = Cell (if isNothing sv then lv else Nothing)
+                  (subtract version ss ls) in
         if cellIsEmpty new then
+          V.delete version k result
+        else
+          V.insert version k new result
+
+subtractAll version small (VTrie large) =
+  VTrie $ M.foldrWithKey visit large small where
+    visit k cell@(Cell sv ss) result = case V.lookup k large of
+      Nothing ->
+        result
+      Just (Cell lv ls) ->
+        let new = Cell lv (subtract version ss ls) in
+        if isJust sv || cellIsEmpty new then
           V.delete version k result
         else
           V.insert version k new result

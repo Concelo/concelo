@@ -44,8 +44,8 @@ decryptSymmetric key ciphertext = do
 
 deriveKey = generate prf . Parameters iterations
 
--- todo: many are suspicious of the NIST curves, so find one that's
--- more generally trusted
+-- todo: many smart people are suspicious of the NIST curves, so find
+-- one that's more generally trusted
 curve = getCurveByName SEC_p521r1
 
 derivePublic = pointToString . generateQ curve . stringToInteger
@@ -56,11 +56,18 @@ integerToString = i2osp
 
 pointToString (Point x y) = combine (integerToString x) (integerToString y)
 
+stringToPoint s = Point (stringToInteger x) (stringToInteger y) where
+  (c, cs) = case BS.uncons s of
+    Nothing -> error "empty point"
+    Just pair -> pair
+
+  (x, y) = splitAt c cs
+
 combine a b = concat [ BS.singleton $ count a, a, b ] where
   count a = let c = length a in
     if c > 255 then error "string too large" else c
 
-stringToPrivate s = toPrivateKey $ KeyPair curve (generateQ curve $ i) i where
+stringToPrivate s = toPrivateKey $ KeyPair curve (generateQ curve i) i where
   i = stringToInteger s
 
 sign privateKey text = do
@@ -72,3 +79,8 @@ sign privateKey text = do
   S.put $ PRNG drg
 
   return result
+
+stringToPublic s = PublicKey curve $ stringToPoint s
+
+verify publicKey signature text =
+  ECDSA.verify hash (stringToPublic publicKey) signature text

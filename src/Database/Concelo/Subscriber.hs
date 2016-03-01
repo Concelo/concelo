@@ -1,14 +1,51 @@
 module Database.Concelo.Subscriber
   ( receive ) where
 
-import Database.Concelo.Control (patternFailure)
+import Database.Concelo.Control (patternFailure, badForest, maybeM2)
 
 import qualified Database.Concelo.Protocol as P
 import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.Map as M
+import qualified Database.Concelo.BiTrie as BT
 import qualified Database.Concelo.Path as Path
+import qualified Database.Concelo.Crypto as C
+import qualified Control.Lens as L
 
-persisted = "e"
-published = "u"
+data Incomplete =
+  Incomplete { getIncompletePersisted :: T.Trie ByteString P.Message
+             , getIncompletePublished :: T.Trie ByteString P.Message
+
+incompletePersisted =
+  L.lens getIncompletePersisted (\x v -> x { getIncompletePersisted = v })
+
+incompletePublished =
+  L.lens getIncompletePublished (\x v -> x { getIncompletePublished = v })
+
+data Subscriber =
+  Subscriber { getSubscriberIncomplete :: Incomplete
+             , getSubscriberReceived :: T.Trie ByteString P.Message
+             , getSubscriberMissing :: BT.BiTrie ByteString
+             , getSubscriberObsolete :: T.Trie ByteString P.Message
+             , getSubscriberNew :: T.Trie ByteString P.Message
+             , getSubscriberAdminACL :: T.Trie ByteString () }
+
+subscriberIncomplete =
+  L.lens getSubscriberIncomplete (\x v -> x { getSubscriberIncomplete = v })
+
+subscriberReceived =
+  L.lens getSubscriberReceived (\x v -> x { getSubscriberReceived = v })
+
+subscriberMissing =
+  L.lens getSubscriberMissing (\x v -> x { getSubscriberMissing = v })
+
+subscriberObsolete =
+  L.lens getSubscriberObsolete (\x v -> x { getSubscriberObsolete = v })
+
+subscriberNew =
+  L.lens getSubscriberNew (\x v -> x { getSubscriberNew = v })
+
+subscriberAdminACL =
+  L.lens getSubscriberAdminACL (\x v -> x { getSubscriberAdminACL = v })
 
 receive = \case
   leaf@(P.Leaf { P.getLeafName = name }) ->
@@ -27,68 +64,74 @@ receive = \case
                    , P.getForestACL = acl }) ->
     receiveChunk forest name $ T.union trees $ T.union acl T.empty
 
-  p@(P.Persisted forest) -> updateIncomplete persisited forest p
+  p@(P.Persisted forest) -> updateIncomplete incompletePersisted forest p
 
-  p@(P.Published forest) -> updateIncomplete published forest p
+  p@(P.Published forest) -> updateIncomplete incompletePublished forest p
 
   _ -> patternFailure
 
 updateIncomplete key name message = do
-  update subscriberIncomplete
-    $ T.union $ Path.super key $ const message <$> name
+  update (key . subscriberIncomplete) $ T.union $ const message <$> name
   checkIncomplete
 
--- tbc
-
 addMissingToGroups member group missing =
-  foldr (addMissingToGroups member) (BM.insert group member missing)
-  $ BM.reverseFind group missing
+  foldr (addMissingToGroups member) (BT.insert group member missing)
+  $ T.paths $ BT.reverseFind group missing
 
 addMissing group members = do
   received <- get subscriberReceived
 
-  let fold member missing = case T.find member received of
+  let visit member missing = case T.findValue member received of
         Nothing -> addMissingToGroups member group result
 
         Just (P.Group { P.getGroupMembers = members }) ->
-          foldr fold result members
+          foldr visit result $ T.paths members
 
         Just _ -> result
 
-  update subscriberMissing (\missing -> foldr fold missing members)
+  update subscriberMissing $ \missing -> foldr visit missing $ T.paths members
 
 updateMissing member =
-  update subscriberMissing $ BM.reverseRemove member
+  update subscriberMissing $ BT.reverseDelete member
+
+chunkIsLeaf = \case
+  P.Leaf {} -> True
+  _ -> False
+
+chunkMembers = \case
+  P.Group { P.getGroupMembers = m } -> m
+  _ -> T.empty
 
 findNewChunks oldChunks newChunks newRoot =
-  visit newRoot (T.empty, T.empty) where
+  visit newRoot (T.empty, T.empty, T.empty) where
     visit name (new, newLeaves, found) =
-      case M.find name oldChunks of
-        Just chunk -> return (new, newLeaves, M.insert name chunk found)
+      case T.find name oldChunks of
+        Just chunk ->
+          return (new, newLeaves, T.union (const chunk <$> name) found)
 
-        Nothing -> find name newChunks >>= \chunk ->
+        Nothing -> maybeM2 T.findValue name newChunks >>= \chunk ->
           -- we do not allow a given chunk to have more than one
           -- parent since it confuses the diff algorithm
-          if M.member name new then
+          if T.member name new then
             badForest
           else
-            foldM visit (M.insert name chunk new,
+            foldM visit (T.union (const chunk <$> name) new,
                          if chunkIsLeaf chunk then
-                           M.insert name chunk newLeaves
+                           T.union (const chunk <$> name) newLeaves
                          else
                            newLeaves,
                          found) (chunkMembers chunk)
 
 findObsoleteChunks oldChunks oldRoot found =
-  visit oldRoot T.empty where
+  visit oldRoot (T.empty, T.empty) where
     visit name result@(obsolete, obsoleteLeaves) =
-      if M.member name found then
+      if T.member name found then
         result
       else
-        find name oldChunks >>= \chunk ->
-          foldM visit (M.insert name chunk obsolete,
+        maybeM2 T.findValue name oldChunks >>= \chunk ->
+          foldM visit (T.union (const chunk <$> name) obsolete,
                        if chunkIsLeaf chunk then
-                         M.insert name chunk obsoleteLeaves
+                         T.union (const chunk <$> name) obsoleteLeaves
                        else
                          obsoleteLeaves) (chunkMembers chunk)
 
@@ -99,13 +142,27 @@ diffChunks oldChunks oldRoot newChunks newRoot = do
   update subscriberNew (T.union new)
   return (obsoleteLeaves, newLeaves)
 
+aclWriter = "w"
+aclReader = "r"
+
+verify (P.Signed { getSignedSigner = signer
+                 , getSignedSignature = signature
+                 , getSignedText = text }) acl =
+  if T.member (P.super aclWriter $ P.singleton signer ()) acl then
+    if C.verify signer signature text then
+      return ()
+    else
+      badForest
+  else
+    badForest
+
 updateACL currentACL (obsoleteLeaves, newLeaves) = do
   subset <- foldM remove currentACL obsoleteLeaves
   foldM add subset newLeaves where
     remove leaf acl =
       case leaf of
         P.Leaf { P.getLeafBody = body } ->
-          return case P.deserializeTrie body of
+          return case P.parseTrie body of
             Just trie -> T.subtract trie acl
             Nothing -> acl
 
@@ -116,25 +173,42 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
         P.Leaf { P.getLeafSigned = signed
                , P.getLeafBody = body } -> do
 
-          get subscriberAdministratorACL >>= verify signed
+          get subscriberAdminACL >>= verify signed
 
-          return case P.deserializeTrie body of
+          return case P.parseTrie body of
+            -- todo: handle defragmentation?  Or is it unnecessary for ACLs?
             Just trie -> T.union trie acl
             Nothing -> acl
 
         _ -> patternFailure
 
+unionUnsanitized small large =
+  T.foldrWithPaths visit large small where
+    visit path new result =
+      case T.findValue path large of
+        Nothing ->
+          T.union path result
+        Just element ->
+          T.union ((const $ update element new) <$> path) result
+
+-- tbc
+    update (UnsanitizedElement map) new =
+      UnsanitizedElement $ M.insert new $ P.parseValue new
+
 updateUnsanitizedDiff key acl (obsoleteUnsanitized, newUnsanitized)
   (obsoleteLeaves, newLeaves) = do
-  obsolete <- foldM visit obsoleteUnsanitized obsoleteLeaves
-  new <- foldM visit newUnsanitized newLeaves
+  obsolete <- foldM (visit false) obsoleteUnsanitized obsoleteLeaves
+  new <- foldM (visit true) newUnsanitized newLeaves
   return (obsolete, new) where
     visit needVerify leaf result =
       case leaf of
         P.Leaf { P.getLeafSigned = signed
                , P.getLeafBody = body } -> do
 
-          return case P.deserializeTrie (C.decryptSymmetric key body) of
+          when needVerify $ verify signed acl
+
+          return case P.parseTrie (C.decryptSymmetric key body) of
+            -- todo: handle defragmentation
             Just trie -> unionUnsanitized trie result
             Nothing -> result
 

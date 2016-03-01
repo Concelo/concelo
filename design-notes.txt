@@ -147,7 +147,7 @@ forest:
   acl group hash (may change only if admin revision and signature are updated)
   revision
   signature
-  tree group hash (may change only if revision and signature are updated, but must contain same or updated trees relative to previous forest)
+  tree group hash (may change only if revision and signature are updated, but must contain same or updated trees relative to previous forest; all zeros if empty)
 
 tree:
   globally unique ID (immutable)
@@ -158,7 +158,7 @@ tree:
   hash of current state
   revision
   signature
-  leaf group hash (containing only groups/leaves encrypted with said key and signed by writers listed in the ACL; may only change if revision and signature are updated)
+  leaf group hash (containing only groups/leaves encrypted with said key and signed by writers listed in the ACL; may only change if revision and signature are updated; all zeros if empty)
 
 group:
   hash of state

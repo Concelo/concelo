@@ -24,22 +24,9 @@ skipSpace all@(c:cs)
   | otherwise = all
 skipSpace [] = []
 
-subtractPrefix p:ps c:cs
-  | p == c = subtractPrefix ps cs
-  | otherwise = Nothing
-subtractPrefix [] cs = Just cs
-subtractPrefix _ _ = Nothing
-
 terminal t = do
   update fieldString skipSpace
   prefix t
-
-prefix t =
-  subtractPrefix t <$> get fieldString >>= \case
-    Just s' -> do
-      set fieldString s'
-      return t
-    Nothing -> noParse
 
 optional parser
   =   Just <$> parser
