@@ -9,7 +9,9 @@ module Database.Concelo.Trie
   , findValue
   , findTrie
   , member
+  , isSuperSetOf
   , paths
+  , pathsAndValues
   , insert
   , modify
   , delete
@@ -53,7 +55,11 @@ findTrie path = Trie . V.findTrie path . run
 
 member path = V.member path . run
 
+isSuperSetOf super sub = V.isSuperSetOf (run super) (run sub)
+
 paths = V.paths . run
+
+pathsAndValues = V.pathsAndValues . run
 
 insert k v = Trie . V.insert 0 k v . run
 

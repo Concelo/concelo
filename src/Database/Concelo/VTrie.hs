@@ -9,7 +9,9 @@ module Database.Concelo.VTrie
   , findValue
   , findTrie
   , member
+  , isSuperSetOf
   , paths
+  , pathsAndValues
   , insert
   , modify
   , delete
@@ -83,11 +85,18 @@ findValue path trie = snd <$> find path trie
 
 member path = isJust . find path
 
-paths trie@(VTrie map) =
+isSuperSetOf super sub =
+  findAll $ paths sub where
+    findAll [] = True
+    findAll (p:ps) = member p super && findAll ps
+
+pathsAndValues trie@(VTrie map) =
   M.foldrWithKey visit [] map where
     visit key (Cell v sub) result =
-      (P.super key <$> paths sub)
-      ++ maybe result (\v -> P.singleton key v : result) v
+      ((\(p, v) -> (P.super key p, v) <$> pathsAndValues sub)
+      ++ maybe result (\v -> (P.singleton key v, v) : result) v
+
+paths trie = fst <$> pathsAndValues trie
 
 findTrie path trie =
   case P.key path of

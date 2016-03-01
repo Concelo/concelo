@@ -9,7 +9,8 @@ module Database.Concelo.Map
   , first
   , insert
   , modify
-  , delete ) where
+  , delete
+  , index ) where
 
 import qualified Database.Concelo.VMap as V
 
@@ -38,3 +39,5 @@ insert k v = Map . V.insert 0 k v . run
 modify k f = Map . V.modify 0 k f . run
 
 delete k = Map . V.delete 0 k . run
+
+index f = Map . V.index 0 f

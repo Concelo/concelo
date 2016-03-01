@@ -15,9 +15,9 @@ runParser parser fields =
 
 noParse = throwError NoParse
 
-eos expression = do
-  s <- get fieldString >>= skipSpace
-  if null s then return expression else noParse
+endOfInput expression = do
+  update fieldString skipSpace
+  endOfStream expression
 
 skipSpace all@(c:cs)
   | isSpace c = cs
@@ -27,10 +27,6 @@ skipSpace [] = []
 terminal t = do
   update fieldString skipSpace
   prefix t
-
-optional parser
-  =   Just <$> parser
-  >>| return Nothing
 
 ternary parser = do
   a <- boolean
@@ -123,11 +119,6 @@ interval = do
   b <- unescaped
   return (test character \c -> ord c >= ord a && ord c <= ord b)
 
-zeroOrMore parser =
-  optional parser >>= \case
-    Just a -> (a:) <$> parser >>| [a]
-    Nothing -> return []
-
 characterSet = do
   prefix "["
   negate <- (optional $ prefix "^") >>= isJust
@@ -161,7 +152,7 @@ pattern ignoreCase = do
 regex = do
   p <- stringLiteral' '/'
   ignoreCase <- isJust <$> optional $ terminal 'i'
-  case runParser (pattern >>= eos) (RegexState p) of
+  case runParser (pattern >>= endOfInput) (RegexState p) of
     Right result -> return result
     Left error -> throwError error
 
@@ -424,7 +415,7 @@ tryMatch =
 match anchorStart anchorEnd =
   again where
     again
-      =   tryMatch >> if anchorEnd then eos else return ()
+      =   tryMatch >> if anchorEnd then endOfInput else return ()
       >>| const if anchorStart then
                   noParse else
                   update position (drop 1) >> again
@@ -438,7 +429,7 @@ matches string (Pattern ignoreCase anchorStart anchorEnd elements) =
 parseRule evaluate env = \case
   J.String s -> do
     evaluate <$>
-      runParser (boolean >>= eos >>= annotate) (ParseState env xs False)
+      runParser (boolean >>= endOfInput >>= annotate) (ParseState env xs False)
   _ -> Left "unexpected type in rule"
 
 parseACLRule lens env value =

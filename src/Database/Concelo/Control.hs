@@ -6,16 +6,21 @@ module Database.Concelo.Control
   , getThenUpdate
   , getThenSet
   , with
+  , Exception (Error, PatternFailure, BadForest, MissingChunks, NoParse)
   , error
   , patternFailure
   , badForest
+  , missingChunks
   , noParse
   , ParseState(parseString)
   , character
   , (>>|)
+  , zeroOrMore
+  , endOfStream
   , mapPair
   , maybeM
   , maybeM2
+  , eitherToMaybe
   , bindMaybe
   , bindMaybe2 ) where
 
@@ -27,6 +32,7 @@ import qualified Control.Monad.State.Class as S
 data Exception = Error ByteString
                | PatternFailure
                | BadForest
+               | MissingChunks
                | NoParse
 
 error s = throwError $ Error s
@@ -34,6 +40,8 @@ error s = throwError $ Error s
 patternFailure = throwError PatternFailure
 
 badForest = throwError BadForest
+
+missingChunks = throwError MissingChunks
 
 noParse = throwError NoParse
 
@@ -86,6 +94,10 @@ maybeM2 f x y = case f x y of
   Nothing -> patternFailure
   Just v -> return v
 
+eitherToMaybe = \case
+  Left _ -> Nothing
+  Right v -> Just v
+
 class ParseState s where
   parseString :: Lens s t a b
 
@@ -115,3 +127,16 @@ a >>| b = do
     Right (x, s) -> S.put s >> return x
     Left NoParse -> b
     Left error -> throwError error
+
+zeroOrMore parser =
+  optional parser >>= \case
+    Just a -> (a:) <$> parser >>| [a]
+    Nothing -> return []
+
+optional parser
+  =   Just <$> parser
+  >>| return Nothing
+
+endOfStream expression = do
+  s <- get parseString
+  if null s then return expression else noParse

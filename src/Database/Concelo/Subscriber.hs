@@ -1,7 +1,8 @@
 module Database.Concelo.Subscriber
   ( receive ) where
 
-import Database.Concelo.Control (patternFailure, badForest, maybeM2)
+import Database.Concelo.Control (patternFailure, badForest, missingChunks,
+                                 maybeM2)
 
 import qualified Database.Concelo.Protocol as P
 import qualified Database.Concelo.Trie as T
@@ -10,6 +11,11 @@ import qualified Database.Concelo.BiTrie as BT
 import qualified Database.Concelo.Path as Path
 import qualified Database.Concelo.Crypto as C
 import qualified Control.Lens as L
+import qualified Data.ByteString as BS
+
+data KeyPair =
+  KeyPair { getKeyPairPublic :: ByteString
+          , getKeyPairPrivate :: ByteString }
 
 data Incomplete =
   Incomplete { getIncompletePersisted :: T.Trie ByteString P.Message
@@ -27,7 +33,8 @@ data Subscriber =
              , getSubscriberMissing :: BT.BiTrie ByteString
              , getSubscriberObsolete :: T.Trie ByteString P.Message
              , getSubscriberNew :: T.Trie ByteString P.Message
-             , getSubscriberAdminACL :: T.Trie ByteString () }
+             , getSubscriberAdminACL :: T.Trie ByteString ()
+             , getSubscriberKeyPair :: KeyPair }
 
 subscriberIncomplete =
   L.lens getSubscriberIncomplete (\x v -> x { getSubscriberIncomplete = v })
@@ -46,6 +53,9 @@ subscriberNew =
 
 subscriberAdminACL =
   L.lens getSubscriberAdminACL (\x v -> x { getSubscriberAdminACL = v })
+
+subscriberPublicKey =
+  L.lens getSubscriberPublicKey (\x v -> x { getSubscriberPublicKey = v })
 
 receive = \case
   leaf@(P.Leaf { P.getLeafName = name }) ->
@@ -162,9 +172,9 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
     remove leaf acl =
       case leaf of
         P.Leaf { P.getLeafBody = body } ->
-          return case P.parseTrie body of
-            Just trie -> T.subtract trie acl
-            Nothing -> acl
+          case P.parseTrie body of
+            Just trie -> return $ T.subtract trie acl
+            Nothing -> patternFailure
 
         _ -> patternFailure
 
@@ -175,31 +185,52 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
 
           get subscriberAdminACL >>= verify signed
 
-          return case P.parseTrie body of
-            -- todo: handle defragmentation?  Or is it unnecessary for ACLs?
-            Just trie -> T.union trie acl
-            Nothing -> acl
+          case P.parseTrie body of
+            -- todo: handle defragmentation (or assert that no valid forest will contain a fragmented ACL)
+            Just trie -> return $ T.union trie acl
+            Nothing -> badForest
 
         _ -> patternFailure
 
-unionUnsanitized small large =
-  T.foldrWithPaths visit large small where
-    visit path new result =
+newtype UnsanitizedElement = UnsanitizedElement (M.Map ByteString P.Value)
+
+unionUnsanitized signer small large =
+  foldr visit large $ T.pathsAndValues small where
+
+    visit (path, new) result =
       case T.findValue path large of
         Nothing ->
           T.union path result
         Just element ->
           T.union ((const $ update element new) <$> path) result
 
--- tbc
-    update (UnsanitizedElement map) new =
-      UnsanitizedElement $ M.insert new $ P.parseValue new
+    update element@(UnsanitizedElement map) new =
+      case P.parseValue signer new of
+        Nothing -> element
+        Just v -> UnsanitizedElement $ M.insert new v map
+
+subtractUnsanitized small large =
+  foldr visit large $ T.pathsAndValues small where
+
+    visit (path, obsolete) result =
+      case T.findValue path large of
+        Nothing -> result
+        Just (UnsanitizedElement map) ->
+          let map' = M.delete obsolete map in
+          if null map' then
+            T.subtract path result
+          else
+            T.union ((const $ UnsanitizedElement map') <$> path) result
 
 updateUnsanitizedDiff key acl (obsoleteUnsanitized, newUnsanitized)
   (obsoleteLeaves, newLeaves) = do
+
   obsolete <- foldM (visit false) obsoleteUnsanitized obsoleteLeaves
+
   new <- foldM (visit true) newUnsanitized newLeaves
+
   return (obsolete, new) where
+
     visit needVerify leaf result =
       case leaf of
         P.Leaf { P.getLeafSigned = signed
@@ -209,7 +240,7 @@ updateUnsanitizedDiff key acl (obsoleteUnsanitized, newUnsanitized)
 
           return case P.parseTrie (C.decryptSymmetric key body) of
             -- todo: handle defragmentation
-            Just trie -> unionUnsanitized trie result
+            Just trie -> unionUnsanitized (getSignedSigner signed) trie result
             Nothing -> result
 
         _ -> patternFailure
@@ -221,93 +252,124 @@ verifyLeafDiff acl result@(_, newLeaves) = do
       P.Leaf { P.getLeafSigned = signed } -> verify signed acl
       _ -> patternFailure
 
-updateTrees currentTrees (obsoleteTrees, newTrees) = do
-  subset <-  remove currentTrees obsoleteTrees
-  foldM add (subset, (T.empty, T.empty)) newTrees where
-    newByACL = M.index treeByACL newTrees
+data Tree = Tree { getTreeRevision :: Integer
+                 , getTreeStream :: ByteString
+                 , getTreeACL :: P.Name
+                 , getTreeACLTrie :: T.Trie ByteString ByteString }
 
-    remove tree trees =
-      case tree of
-        P.Tree { P.getTreeACL = acl } -> do
-          when (not $ M.member acl newByACL) failSubscriber
-          return $ M.delete acl trees
+treeRevision =
+  L.lens getTreeRevision (\x v -> x { getTreeRevision = v })
 
-        _ -> patternFailure
+treeStream =
+  L.lens getTreeStream (\x v -> x { getTreeStream = v })
 
-    add tree (trees, unsanitizedDiff@(obsoleteUnsanitized, newUnsanitized)) =
-      case tree of
-        P.Tree { P.getTreeRevision = revision
-               , P.getTreeSigned = signed
-               , P.getTreeName = name
-               , P.getTreeACL = acl
-               , P.getTreeLeaves = leaves } -> do
+treeChunks =
+  L.lens getTreeChunks (\x v -> x { getTreeChunks = v })
 
-          let currentTree = fromJust emptyTree $ M.find acl currentTrees
+treeACL =
+  L.lens getTreeACL (\x v -> x { getTreeACL = v })
 
-          when (revision < getTreeRevision currentTree) badForest
-          when (revision > getForestRevision currentForest) badForest
+treeACLTrie =
+  L.lens getTreeACLTrie (\x v -> x { getTreeACLTrie = v })
 
-          when (M.member acl trees) badForest
+emptyTree stream = Tree (-1) stream P.empty T.empty
 
-          received <- get subscriberReceived
+data Forest = Forest { getForestRevision :: Integer
+                     , getForstStream :: ByteString }
 
-          -- kind of silly to do a diff, since the current trie will
-          -- only either be empty or unchanged, but it does the job:
-          aclTrie <-
-            diffChunks (getTreeChunks currentTree) (getTreeACL currentTree)
-            received acl
-            >>= updateACL (getTreeACLTrie currentTree)
+updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
+  let currentTrees = getForestTreeTrie currentForest in do
+    subset <- remove currentTrees obsoleteTrees
 
-          adminACL <- get subscriberAdminstratorACL
+    foldM add (subset, (T.empty, T.empty)) newTrees where
 
-          when (not (adminACL `T.isSuperSetOf` aclTrie)) badForest
+      newByStream = M.index getTreeStream newTrees
 
-          verify signed aclTrie
+      remove tree trees =
+        case tree of
+          P.Tree { P.getTreeStream = stream } -> do
+            when (not $ M.member stream newByStream) badForest
+            return $ M.delete stream trees
 
-          publicKey <- get subscriberPublicKey
+          _ -> patternFailure
 
-          let trees' =
-                M.insert acl (L.set treeACLTrie aclTrie currentTree)
-                trees
+      add tree (trees, unsanitizedDiff@(obsoleteUnsanitized, newUnsanitized)) =
+        case tree of
+          P.Tree { P.getTreeRevision = revision
+                 , P.getTreeSigned = signed
+                 , P.getTreeName = name
+                 , P.getTreeACL = acl
+                 , P.getTreeStream = stream
+                 , P.getTreeForestStream = forestStream
+                 , P.getTreeLeaves = leaves } -> do
 
-              leafDiff =
-                diffChunks (getTreeChunks current) (getTreeLeaves current)
-                received leaves
-                >>= verifyLeafDiff
+            let currentTree =
+                  fromJust (emptyTree stream) $ M.find stream currentTrees
 
-          if public == nobody then do
-            addMissing name [leaves]
-            assertComplete name
-            leafDiff
+            when (revision < getTreeRevision currentTree
+                  || M.member stream trees
+                  || forestStream /= getForestStream currentForest)
+              badForest
 
-            return (trees', unsanitizedDiff)
+            received <- get subscriberReceived
 
-            else
+            -- kind of silly to do a diff, since the current trie will
+            -- only either be empty or unchanged, but it does the job:
+            aclTrie <-
+              diffChunks (getForestChunks currentForest)
+              (getTreeACL currentTree) received acl
+              >>= updateACL (getTreeACLTrie currentTree)
 
-            case T.find (T.super ReadKey $ T.key $ getCredPublic cred)
-               aclTrie of
-              Just encryptedKey -> do
-                addMissing name [leaves]
-                assertComplete name
+            when (not (forestACLTrie `T.isSuperSetOf` aclTrie)) badForest
 
-                unsanitizedDiff' <-
-                  leafDiff >>= updateUnsanitizedDiff
-                  (C.decryptAsymmetric (getCredPrivate cred) encryptedKey)
-                  aclTrie unsanitizedDiff
+            verify signed aclTrie
 
-                return (trees', unsanitizedDiff')
+            keyPair <- get subscriberKeyPair
 
-              Nothing ->
-                -- we don't have read access to this tree, so we ignore
-                -- the leaves
-                return (trees', unsanitizedDiff)
+            let trees' =
+                  M.insert stream (Tree revision stream acl aclTrie)
+                  trees
 
-        _ -> patternFailure
+                leafDiff =
+                  diffChunks (getForestChunks currentForest)
+                  (getTreeLeaves current) received leaves
+                  >>= verifyLeafDiff
+
+            if null (getKeyPairPublic keyPair) then do
+              addMissing name leaves
+              assertComplete name
+              leafDiff
+
+              return (trees', unsanitizedDiff)
+
+              else
+
+              case T.findValue (P.super aclReader
+                                $ P.singleton (getKeyPairPublic keyPair) ())
+                   aclTrie of
+                Just encryptedKey -> do
+                  addMissing name leaves
+                  assertComplete name
+
+                  unsanitizedDiff' <-
+                    leafDiff >>= updateUnsanitizedDiff
+                    (C.decryptAsymmetric (getKeyPairPrivate keyPair)
+                     encryptedKey)
+                    aclTrie unsanitizedDiff
+
+                  return (trees', unsanitizedDiff')
+
+                Nothing ->
+                  -- we don't have read access to this tree, so we ignore
+                  -- the leaves
+                  return (trees', unsanitizedDiff)
+
+          _ -> patternFailure
 
 updateUnsanitized currentUnsanitized (obsolete, new) =
-  foldr unionUnsanitized
-  (foldr subtractUnsanitized currentUnsanitized (T.paths obsolete))
-  (T.paths new)
+  unionUnsanitized new (subtractUnsanitized obsolete currentUnsanitized)
+
+-- tbc
 
 visitDirty context acl rules key
   result@(remainingDirty, sanitized, dependencies) =
@@ -446,7 +508,7 @@ updateForest current name = do
       (treeTrie, unsanitizedDiff@(obsoleteUnsanitized, newUnsanitized)) <-
         diffChunks (getForestChunks current) (getForestTrees current)
         received trees
-        >>= updateTrees (getForestTreeTrie current)
+        >>= updateTrees aclTrie current
 
       chunks <- updateChunks (getForestChunks current) <$> get subscriberDiff
 
@@ -549,6 +611,10 @@ checkIncomplete =
     P.Persisted name -> checkForest subscriberPersisted name
     P.Published name -> checkForest subscriberPublished name
     _ -> patternFailure
+
+assertComplete name =
+  complete <- get subscriberMissing >>= null . BT.find name
+  when (not complete) missingChunks
 
 receiveChunk chunk name members = do
   update subscriberReceived $ T.insert name chunk
