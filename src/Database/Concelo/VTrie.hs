@@ -44,6 +44,7 @@ data Cell k v = Cell { getCellValue :: Maybe v
                      , getCellSubTrie :: VTrie k v }
 
 cellValue = L.lens getCellValue (\x v -> x { getCellValue = v })
+
 cellSubTrie = L.lens getCellSubTrie (\x v -> x { getCellSubTrie = v })
 
 cellIsEmpty (Cell v sub) = isNothing v && null sub

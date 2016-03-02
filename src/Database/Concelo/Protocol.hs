@@ -3,6 +3,14 @@ module Database.Concelo.Protocol
   , getTreeStream
   , getCredProtocolVersion
   , getChallengeProtocolVersion
+  , aclWriter
+  , aclReader
+  , Value()
+  , valueNumber
+  , valueString
+  , valueBoolean
+  , valuePriority
+  , rulesKey
   , version ) where
 
 import Data.ByteString (ByteString)
@@ -65,6 +73,12 @@ data Message = Cred { getCredProtocolVersion :: Int
                       , getForestAdminSigned :: Signed
                       , getForestACL :: Name
                       , getForestTrees :: Name }
+
+aclWriter = "w"
+
+aclReader = "r"
+
+rulesKey = ".rules"
 
 getMessageKeyHash = \case
   Leaf { getLeafKeyHash = h } -> h
@@ -147,6 +161,18 @@ valuePriority =
 
 valueBody =
   L.lens getValueBody (\x v -> x { getValueBody = v })
+
+valueNumber = \case
+  Value { getValueBody = NumberBody n } -> Just n
+  _ -> Nothing
+
+valueString = \case
+  Value { getValueBody = StringBody s } -> Just s
+  _ -> Nothing
+
+valueBoolean = \case
+  Value { getValueBody = BooleanBody b } -> Just b
+  _ -> Nothing
 
 data ValueState = ValueState { getValueStateString :: ByteString
                              , getValueStateValue :: Value }

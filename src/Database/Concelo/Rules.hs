@@ -1,28 +1,72 @@
 module Database.Concelo.Rules
-  ( parse ) where
+  ( parse
+  , Context(Context)
+  , contextDirty
+  , contextNow
+  , contextEnv
+  , contextRoot
+  , contextVisitor
+  , contextDependencies ) where
 
-data Fields = Fields { getFieldEnv :: Trie Key ()
-                     , getFieldString :: String }
+import Database.Concelo.Control (noParse, ParseState(parseString), endOfStream,
+                                 prefix, maybeToEither, stringLiteral,
+                                 Exception(Error))
 
-data Exception = NoParse | Error String
+import qualified Data.ByteString as BS
+import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.Map as M
+import qualified Database.Concelo.Set as S
+import qualified Database.Concelo.Path as Path
+import qualified Database.Concelo.Protocol as P
+import qualified Database.Concelo.ACL as ACL
+import qualified Control.Lens as L
 
--- type Parser a = StateT Fields (ErrorT Exception Identity) a
+data Context a =
+  Context { getContextDirty :: T.Trie BS.ByteString a
+          , getContextNow :: Integer
+          , getContextEnv :: M.Map BS.ByteString BS.ByteString
+          , getContextRoot :: Visitor
+          , getContextVisitor :: Visitor
+          , getContextDependencies :: T.Trie BS.ByteString () }
+
+contextDirty =
+  L.lens getContextDirty (\x v -> x { getContextDirty = v })
+
+contextNow =
+  L.lens getContextNow (\x v -> x { getContextNow = v })
+
+contextRoot =
+  L.lens getContextRoot (\x v -> x { getContextRoot = v })
+
+contextVisitor =
+  L.lens getContextVisitor (\x v -> x { getContextVisitor = v })
+
+contextDependencies =
+  L.lens getContextDependencies (\x v -> x { getContextDependencies = v })
+
+data RuleState = RuleState { getRuleStateString :: ByteString
+                           , getRuleStateEnv :: S.Set BS.ByteString
+                           , ruleStateUsingUid :: Bool }
+
+ruleStateString =
+  L.lens getRuleStateString (\x v -> x { getRuleStateString = v })
+
+ruleStateEnv =
+  L.lens getRuleStateEnv (\x v -> x { getRuleStateEnv = v })
+
+ruleStateUsingUid =
+  L.lens getRuleStateUsingUid (\x v -> x { getRuleStateUsingUid = v })
+
+instance ParseState RuleState where
+  parseString = ruleStateString
 
 -- todo: enforce operator precedence and associativity
-
-runParser parser fields =
-  runIdentity $ runErrorT $ evalStateT parser fields
-
-noParse = throwError NoParse
 
 endOfInput expression = do
   update fieldString skipSpace
   endOfStream expression
 
-skipSpace all@(c:cs)
-  | isSpace c = cs
-  | otherwise = all
-skipSpace [] = []
+skipSpace = BS.dropWhile isSpace
 
 terminal t = do
   update fieldString skipSpace
@@ -45,7 +89,7 @@ binary parser operator function = do
 unary parser operator function = do
   terminal operator
   a <- parser
-  return $ fmap function a
+  return (function <$> a)
 
 call1 object method argument function =
   callM1 object method argument (liftM2 function)
@@ -70,7 +114,7 @@ callM0 object method argument action = do
 intersperse delimiter parser =
   optional parser >>= \case
     Just a ->
-      delimiter >> (a:) <$> intersperse delimiter parser
+      delimiter >> ((a:) <$> intersperse delimiter parser)
       >>| [a]
     Nothing -> return []
 
@@ -80,91 +124,20 @@ stringArray = do
   terminal "]"
   return a
 
-element code expression =
-  expression <$> prefix code
-
-alternative = do
-  a <- patternElement
-  prefix "|"
-  b <- patternElement
-  return (a <|> b)
-
-escaped = prefix "\\" >> (prefix . (:[])) <$> character
-
-isWordCharacter c = isAlphaNum c || c == '_'
-
-atom
-  =   element "\s" (test character isSpace)
-  >>| element "\w" (test character isWordCharacter)
-  >>| element "\d" (test character isDigit)
-  >>| element "\S" (test character (not . isSpace))
-  >>| element "\w" (test character (not . isWordCharacter))
-  >>| element "\d" (test character (not . isDigit))
-  >>| escaped
-  >>| unescaped
-
-neg parser = do
-  result <- parser >> return True >>| return False
-  if result then noParse else return ()
-
-unescaped =
-  character >>= \case
-    ']' -> noParse
-    '$' -> noParse
-    _ -> return $ prefix [c]
-
-interval = do
-  a <- unescaped
-  prefix "-"
-  b <- unescaped
-  return (test character \c -> ord c >= ord a && ord c <= ord b)
-
-characterSet = do
-  prefix "["
-  negate <- (optional $ prefix "^") >>= isJust
-  atoms <- zeroOrMore (atom >>| interval)
-  prefix "]"
-  return $ if negate then neg else id $ foldr (<|>) noParse atoms
-
-suffix s = do
-  a <- patternElement
-  prefix s
-  return a
-
-patternElement
-  =   group pattern
-  >>| suffix "*" (zeroOrMore character)
-  >>| suffix "+" (character >>= zeroOrMore character)
-  >>| suffix "?" (optional character)
-  >>| alternative
-  >>| characterSet
-  >>| element "." character
-  >>| atom
-  >>| element "]" (prefix "]")
-
-pattern ignoreCase = do
-  anchorStart <- isJust <$> optional $ prefix "^"
-  elements <- zeroOrMore patternElement
-  anchorEnd <- isJust <$> optional $ prefix "$"
-  return $ Pattern ignoreCase anchorStart anchorEnd
-    $ foldr (>>) void elements
-
-regex = do
-  p <- stringLiteral' '/'
-  ignoreCase <- isJust <$> optional $ terminal 'i'
-  case runParser (pattern >>= endOfInput) (RegexState p) of
-    Right result -> return result
-    Left error -> throwError error
-
 booleanOperation
   =   binary boolean "&&" (&&)
   >>| binary boolean "||" (||)
   >>| unary boolean "!" not
 
+data Visitor = Visitor { getVisitorParent :: Maybe Visitor
+                       , getVisitorPath :: [BS.ByteString]
+                       , getVisitorTrie :: T.Trie ByteString P.Value ]
+
 hasChild visitor key = do
   v <- visitor
   k <- key
-  update contextDependencies $ T.union $ T.make (k : getVisitorPath v) ()
+
+  update contextDependencies $ T.union $ Path.toPath (k : getVisitorPath v) ()
 
   return $ not $ null $ T.sub k $ getVisitorTrie v
 
@@ -181,7 +154,7 @@ queryMaybeType accessor visitor =
 queryMaybeField accessor visitor = (accessor =<<) <$> queryValue visitor
 
 queryRequiredField accessor visitor =
-  queryMaybeField accessor >>= maybeToEither (Error "field not found")
+  queryMaybeField accessor >>= maybeToAction (Error "field not found")
 
 queryField accessor visitor = fmap accessor <$> queryValue visitor
 
@@ -198,13 +171,13 @@ booleanCall
   >>| callM0 snapshot "exists"
       (\visitor -> (maybe False (const True)) <$> queryValue visitor)
 
-  >>| callM0 snapshot "isNumber" (queryMaybeType valueNumber)
-  >>| callM0 snapshot "isString" (queryMaybeType valueString)
-  >>| callM0 snapshot "isBoolean" (queryMaybeType valueBoolean)
+  >>| callM0 snapshot "isNumber" (queryMaybeType P.valueNumber)
+  >>| callM0 snapshot "isString" (queryMaybeType P.valueString)
+  >>| callM0 snapshot "isBoolean" (queryMaybeType P.valueBoolean)
   >>| call1 string "contains" string isInfixOf
   >>| call1 string "beginsWith" string isPrefixOf
   >>| call1 string "endsWith" string isSuffixOf
-  >>| call1 string "matches" regex matches
+  >>| call1 string "matches" Regex.regex Regex.matches
 
 comparison
   =   binary number "===" (==)
@@ -238,29 +211,30 @@ group parser = do
   terminal ")"
   return a
 
-numberLiteralPrefix c:cs
-  | isDigit c = digitsOrDot [c] cs where
-    digitsOrDot acc all@(c:cs)
-      | isDigit c = digitsOrDot (c : acc) cs
-      | c == '.' = digits (c : acc) cs
-      | otherwise = Just (reverse acc, all)
+numberLiteralPrefix s = case BS.uncons s of
+  Nothing -> Nothing
+  Just (c, cs)
+    | isDigit c -> digitsOrDot [c] cs where
+      digitsOrDot acc s = case BS.uncons s of
+        Nothing -> Just (reverse acc, [])
+        Just (c, cs)
+          | isDigit c -> digitsOrDot (c : acc) cs
+          | c == '.' -> digits (c : acc) cs
+          | otherwise -> Just (reverse acc, s)
 
-    digitsOrDot acc [] = Just (reverse acc, [])
+      digits acc s = case BS.uncons s of
+        Nothing -> Just (reverse acc, [])
+        Just (c, cs)
+          | isDigit c -> digits (c : acc) cs
+          | otherwise -> Just (reverse acc, s)
 
-    digits acc c:cs
-      | isDigit c = digits (c : acc) cs
-
-      | otherwise = Just (reverse acc, all)
-
-  | otherwise = Nothing
-
-numberLiteralPrefix [] = Nothing
+    | otherwise -> Nothing
 
 numberLiteral =
-  get fieldString >>= numberLiteralPrefix <$> skipSpace >>= \case
+  get parseString >>= numberLiteralPrefix <$> skipSpace >>= \case
     Just (n, s') -> do
-      set fieldString s'
-      return $ return n
+      set parseString s'
+      return $ return $ read n :: Double
     Nothing -> noParse
 
 numberReference = terminal "now" >> return $ get contextNow
@@ -274,8 +248,8 @@ numberOperation
   >>| unary number "-" (0.0-)
 
 numberCall
-  =   callM0 snapshot "val" (queryRequiredField valueNumber)
-  >>| call0 snapshot "getPriority" (queryField valuePriority)
+  =   callM0 snapshot "val" (queryRequiredField P.valueNumber)
+  >>| call0 snapshot "getPriority" (queryField P.valuePriority)
 
 field object field expression = do
   a <- object
@@ -286,45 +260,27 @@ numberField = field string "length" length
 
 numberTernary = ternary number
 
-stringLiteralBody delimiter =
-  character >>= unescaped where
-    unescaped c
-      | c == delimiter = return []
-      | c == '\\' = character >>= escaped
-      | otherwise = character >>= (c:) <$> unescaped
-
-    escaped c
-      | c == delimiter = character >>= (c:) <$> unescaped
-      | otherwise = character >>= ('\\':c:) <$> unescaped
-
-stringLiteral' delimiter = do
-  terminal [delimiter]
-  s <- stringLiteralBody delimiter
-  return s
-
-stringLiteral = return <$> stringLiteral' '"'
-
 stringReference =
-  get fieldEnv >>= foldr fold noParse where
+  get ruleStateEnv >>= foldr visit noParse where
     sr name = do
       env <- get contextEnv
       n <- name
-      maybeToEither (Error "bad reference") (T.find n env)
+      maybeToAction (Error "bad reference") (M.findValue n env)
 
-    fold key alternative =
+    visit key alternative =
       sr <$> terminal key
       >>| alternative
 
 stringOperation = binary string "+" (++)
 
 stringCall
-  =   call2 string "replace" string string (\x y z -> replace y z x)
-  >>| call0 string "toLowerCase" toLower
-  >>| call0 string "toUpperCase" toUpper
+  =   call2 string "replace" string string (\x y z -> BS.replace y z x)
+  >>| call0 string "toLowerCase" BS.toLower
+  >>| call0 string "toUpperCase" BS.toUpper
 
 stringField = do
   a <- field auth "uid" Uid
-  set fieldUsingUid True
+  set ruleStateUsingUid True
   return a
 
 stringTernary = ternary string
@@ -332,7 +288,7 @@ stringTernary = ternary string
 auth = terminal "auth" >> return (return ())
 
 snapshotReference
-  =   terminal "root" >> return (get contextRootVisitor)
+  =   terminal "root" >> return (get contextRoot)
   >>| terminal "data" >> return (get contextVisitor)
   >>| terminal "newData" >> return (get contextVisitor)
 
@@ -379,58 +335,29 @@ boolean
   >>| group boolean
 
 annotate expression = do
-  usingUid <- get fieldUsingUid
+  usingUid <- get ruleStateUsingUid
   return if usingUid then UsingUid expression else NotUsingUid expression
 
 evalACL lens (UsingUid expression) context acl =
-  foldr fold acl $ acListsBlackList $ L.get lens acl where
-    fold uid acl
-      | evalRule expression (L.set contextMe uid) = whiteList lens uid acl
+  foldr visit acl $ ACL.listsBlackList $ L.get lens acl where
+    visit uid acl
+      | evalBoolean expression (L.set contextMe uid) =
+        ACL.whiteList lens uid acl
+
       | otherwise = acl
 
 evalACL lens (NotUsingUid expression) context acl
-  | evalRule expression context = whiteListAll lens acl
+  | evalBoolean expression context = ACL.whiteListAll lens acl
   | otherwise = acl
 
-evalRule expression context =
-  case runErrorT $ expression context of
+evalBoolean expression context =
+  case eval expression context of
     Right v -> v
     Left _ -> False
 
-hasValueOfType trie type' =
-  fromMaybe false
-  (valueType <$> T.value trie >>= \case
-      Number -> return true
-      _ -> return false)
-
-test parser p = parser >>= \x -> if p x then return x else noParse
-
-tryMatch =
-  get matchStateMatchers >>= \case
-    [] -> return ()
-    m:ms -> do
-      set matchStateMatchers ms
-      m
-
-match anchorStart anchorEnd =
-  again where
-    again
-      =   tryMatch >> if anchorEnd then endOfInput else return ()
-      >>| const if anchorStart then
-                  noParse else
-                  update position (drop 1) >> again
-
-matches string (Pattern ignoreCase anchorStart anchorEnd elements) =
-  case runParser (match anchorStart anchorEnd)
-       (MatchState string elements ignoreCase) of
-    Right _ -> True
-    Left _ -> False
-
-parseRule evaluate env = \case
-  J.String s -> do
-    evaluate <$>
-      runParser (boolean >>= endOfInput >>= annotate) (ParseState env xs False)
-  _ -> Left "unexpected type in rule"
+parseRule evaluate env s =
+  evaluate <$>
+  eval (boolean >>= endOfInput >>= annotate) (RuleState s env False)
 
 parseACLRule lens env value =
   parseRule (evalACL lens) env value
@@ -438,32 +365,57 @@ parseACLRule lens env value =
 parseBooleanRule lens env value =
   parseRule (evalBoolean lens) env value
 
-parseIndexOn = \case
-  J.Array names -> Right $ foldr T.insert T.empty names
-  J.String name -> T.singleton name
-  _ -> Left "unexpected type in index"
+parseIndexOn = [] -- todo
 
-parseTrie value env =
-  (case value of
-      J.Object map -> foldrWithKey fold (Right T.empty) map
-      _ -> Left "unexpected type in rules") where
+data Rule a =
+  Rule { getRuleRead :: Context a -> ACL -> ACL
+       , getRuleWrite :: Context a -> ACL -> ACL
+       , getRuleValidate :: Context a -> Bool
+       , getRuleIndexOn :: [BS.ByteString]
+       , getRuleWildCard :: Maybe (Rule a)
+       , getRuleMap :: M.Map BS.ByteString (Rule a) }
 
-    fold key value eitherTrie = do
-      trie <- eitherTrie
-      let rule = fromMaybe empty $ T.getValue trie
-          update lens value =
-            Right $ L.set T.value (L.set ruleRead value rule) trie
+ruleRead =
+  L.lens getRuleRead (\x v -> x { getRuleRead = v })
 
-      case key of
-        ".read" -> parseACLRule aclReadLists env value >>= update ruleRead
-        ".write" -> parseACLRule aclWriteLists env value >>= update ruleWrite
-        ".validate" -> parseBooleanRule env value >>= update ruleValidate
-        ".indexOn" -> parseIndexOn value >>= update ruleIndexOn
+ruleWrite =
+  L.lens getRuleWrite (\x v -> x { getRuleWrite = v })
 
-        name@('$' : _) ->
-          parseTrie value (T.insert name env) >>= update ruleWildCard
+ruleValidate =
+  L.lens getRuleValidate (\x v -> x { getRuleValidate = v })
 
-          _ -> parseTrie value env >>= Right $ T.super key
+ruleIndexOn =
+  L.lens getRuleIndexOn (\x v -> x { getRuleIndexOn = v })
 
-parse json =
-  parseTrie (decode json) T.empty where
+ruleWildCard =
+  L.lens getRuleWildCard (\x v -> x { getRuleWildCard = v })
+
+ruleMap =
+  L.lens getRuleMap (\x v -> x { getRuleMap = v })
+
+emptyRule = Rule (const id) (const id) (const True) [] Nothing M.empty
+
+parseTrie env =
+  foldM visit emptyRule . T.triples where
+    visit (k, v, sub) rule = case k of
+      ".read" ->
+        flip L.set ruleRead rule <$> parseACLRule aclReadLists env v
+
+      ".write" ->
+        flip L.set ruleWrite rule <$> parseACLRule aclWriteLists env v
+
+      ".validate" ->
+        flip L.set ruleValidate rule <$> parseBooleanRule env v
+
+      ".indexOn" ->
+        flip L.set ruleIndexOn rule <$> parseIndexOn v
+
+      _ -> case BS.uncons k of
+        Just ('$', _) ->
+          flip L.set ruleWildCard rule . Just
+          <$> parseTrie (S.insert k env) sub
+
+        _ -> parseTrie env sub >>= \r ->
+          return $ L.over ruleMap (M.insert k r) rule
+
+parse = parseTrie S.empty

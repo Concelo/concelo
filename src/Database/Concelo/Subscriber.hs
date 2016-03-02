@@ -10,6 +10,7 @@ import qualified Database.Concelo.Map as M
 import qualified Database.Concelo.BiTrie as BT
 import qualified Database.Concelo.Path as Path
 import qualified Database.Concelo.Crypto as C
+import qualified Database.Concelo.Rules as R
 import qualified Control.Lens as L
 import qualified Data.ByteString as BS
 
@@ -152,13 +153,10 @@ diffChunks oldChunks oldRoot newChunks newRoot = do
   update subscriberNew (T.union new)
   return (obsoleteLeaves, newLeaves)
 
-aclWriter = "w"
-aclReader = "r"
-
 verify (P.Signed { getSignedSigner = signer
                  , getSignedSignature = signature
                  , getSignedText = text }) acl =
-  if T.member (P.super aclWriter $ P.singleton signer ()) acl then
+  if T.member (P.super P.aclWriter $ P.singleton signer ()) acl then
     if C.verify signer signature text then
       return ()
     else
@@ -192,7 +190,8 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
 
         _ -> patternFailure
 
-newtype UnsanitizedElement = UnsanitizedElement (M.Map ByteString P.Value)
+newtype UnsanitizedElement =
+  UnsanitizedElement { getElementMap :: M.Map ByteString P.Value }
 
 unionUnsanitized signer small large =
   foldr visit large $ T.pathsAndValues small where
@@ -272,7 +271,7 @@ treeACL =
 treeACLTrie =
   L.lens getTreeACLTrie (\x v -> x { getTreeACLTrie = v })
 
-emptyTree stream = Tree (-1) stream P.empty T.empty
+emptyTree stream = Tree (-1) stream Path.empty T.empty
 
 data Forest = Forest { getForestRevision :: Integer
                      , getForstStream :: ByteString }
@@ -303,11 +302,13 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
                  , P.getTreeForestStream = forestStream
                  , P.getTreeLeaves = leaves } -> do
 
-            let currentTree =
-                  fromJust (emptyTree stream) $ M.find stream currentTrees
+            let old = M.find stream currentTrees
+                oldACL = maybe acl getTreeACL old
+                currentTree = fromJust (emptyTree stream) old
 
             when (revision < getTreeRevision currentTree
                   || M.member stream trees
+                  || acl /= oldACL
                   || forestStream /= getForestStream currentForest)
               badForest
 
@@ -369,33 +370,32 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
 updateUnsanitized currentUnsanitized (obsolete, new) =
   unionUnsanitized new (subtractUnsanitized obsolete currentUnsanitized)
 
--- tbc
-
 visitDirty context acl rules key
   result@(remainingDirty, sanitized, dependencies) =
-    if null $ getContextDirty context then
+    if null $ R.getContextDirty context then
       result
     else
-      visitValues result possibleValues where
+      visitValues result Nothing possibleValues where
         rules' = T.sub key rules
-        dirty' = T.sub key $ getContextDirty context
+        dirty' = T.sub key $ R.getContextDirty context
 
         context' =
-          L.over contextHead (T.sub key)
-          $ L.set contextDirty remainingDirty context
+          L.over R.contextHead (T.sub key)
+          $ L.set R.contextDirty remainingDirty context
 
         possibleValues =
-          fromMaybe M.empty (L.get elementMap <$> T.value dirty')
+          fromMaybe M.empty (getElementMap <$> T.value dirty')
 
         visitValues result@(remainingDirty, sanitized, dependencies)
           firstValid values =
           let value = maybeHead values
 
-              context'' = L.set contextValue value context'
+              context'' = L.set R.contextValue value context'
 
+-- tbc
               (readACL, readDependencies) =
                 fromMaybe (Right acl, T.empty)
-                ((\r -> (getRulesRead r) context'' acl) <$> T.value rules')
+                ((\r -> (R.getRulesRead r) context'' acl) <$> T.value rules')
 
               acl' = either (const acl) id readACL
 
@@ -435,7 +435,7 @@ visitDirty context acl rules key
             case readACL >> writeACL of
               Left _ -> next Nothing
               Right acl'' ->
-                if maybe True (\v -> aclWriter (valueSigner v) acl'') value
+                if maybe True (\v -> P.aclWriter (valueSigner v) acl'') value
                 then
                   if null $ T.intersect validateDependencies remainingDirty'
                   then
@@ -454,7 +454,7 @@ visitDirty context acl rules key
 updateSanitized revision acl currentSanitized updatedUnsanitized
   updatedRules currentDependencies (obsoleteUnsanitized, newUnsanitized) =
 
-    clean (Context nobody revision T.empty currentSanitized dirty)
+    clean (Context BS.empty revision T.empty currentSanitized dirty)
     (dirty, currentSanitized, remainingDependencies) where
 
       dirty =
@@ -476,8 +476,6 @@ updateSanitized revision acl currentSanitized updatedUnsanitized
         | otherwise =
           clean context
           (foldr (visitDirty context acl updatedRules) result $ T.keys dirty)
-
-rulesKey = ".rules"
 
 updateForest current name = do
   received <- get subscriberReceived
@@ -525,19 +523,19 @@ updateForest current name = do
               updateUnsanitized (getForestUnsanitized current)
               unsanitizedDiff in
 
-        if T.member rulesKey obsoleteUnsanitized
-           || T.member rulesKey newUnsanitized then do
+        if T.member P.rulesKey obsoleteUnsanitized
+           || T.member P.rulesKey newUnsanitized then do
 
           let (sanitizedRules, _) =
                 updateSanitized
                 0
                 adminACL
-                (T.sub rulesKey (getForestSanitized current))
-                (T.sub rulesKey unsanitized)
+                (T.sub P.rulesKey (getForestSanitized current))
+                (T.sub P.rulesKey unsanitized)
                 T.empty
                 BT.empty
-                ((T.sub rulesKey obsoleteUnsanitized),
-                 (T.sub rulesKey newUnsanitized))
+                ((T.sub P.rulesKey obsoleteUnsanitized),
+                 (T.sub P.rulesKey newUnsanitized))
 
           rules <- compileRules sanitizedRules
 

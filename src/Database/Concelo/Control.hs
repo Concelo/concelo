@@ -12,24 +12,28 @@ module Database.Concelo.Control
   , badForest
   , missingChunks
   , noParse
-  , ParseState(parseString)
+  , ParseState (parseString)
   , character
   , (>>|)
   , zeroOrMore
   , endOfStream
+  , stringLiteral
+  , stringLiteralDelimited
   , mapPair
   , maybeM
   , maybeM2
   , eitherToMaybe
+  , maybeToAction
   , bindMaybe
   , bindMaybe2 ) where
 
-import Data.ByteString (ByteString)
-
+import qualified Data.ByteString as BS
 import qualified Control.Lens as L
 import qualified Control.Monad.State.Class as S
 
-data Exception = Error ByteString
+type Action s a = StateT s (ErrorT Exception Identity) a
+
+data Exception = Error BS.ByteString
                | PatternFailure
                | BadForest
                | MissingChunks
@@ -98,22 +102,24 @@ eitherToMaybe = \case
   Left _ -> Nothing
   Right v -> Just v
 
+maybeToAction error = \case
+  Nothing -> throwError error
+  Just v -> return v
+
 class ParseState s where
   parseString :: Lens s t a b
 
 character = do
   s <- get parseString
-  case uncons s of
+  case BS.uncons s of
     Nothing -> noParse
     Just (c, cs) -> do
       set parseString cs
       return c
 
-subtractPrefix p:ps c:cs
-  | p == c = subtractPrefix ps cs
-  | otherwise = Nothing
-subtractPrefix [] cs = Just cs
-subtractPrefix _ _ = Nothing
+subtractPrefix p s =
+  let (a, b) = BS.splitAt (BS.length p) s in
+  if p == a then Just b else Nothing
 
 prefix t =
   subtractPrefix t <$> get parseString >>= \case
@@ -123,8 +129,9 @@ prefix t =
     Nothing -> noParse
 
 a >>| b = do
-  case run a of
-    Right (x, s) -> S.put s >> return x
+  s <- S.get
+  case run a s of
+    Right (x, s') -> S.put s' >> return x
     Left NoParse -> b
     Left error -> throwError error
 
@@ -140,3 +147,21 @@ optional parser
 endOfStream expression = do
   s <- get parseString
   if null s then return expression else noParse
+
+stringLiteralBody delimiter =
+  character >>= unescaped where
+    unescaped c
+      | c == delimiter = return []
+      | c == '\\' = character >>= escaped
+      | otherwise = character >>= (c:) <$> unescaped
+
+    escaped c
+      | c == delimiter = character >>= (c:) <$> unescaped
+      | otherwise = character >>= ('\\':c:) <$> unescaped
+
+stringLiteralDelimited delimiter = do
+  terminal [delimiter]
+  s <- stringLiteralBody delimiter
+  return $ BS.pack s
+
+stringLiteral = return <$> stringLiteralDelimited '"'
