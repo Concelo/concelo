@@ -2,6 +2,7 @@ module Database.Concelo.Control
   ( get
   , set
   , update
+  , updateM
   , updateThenGet
   , getThenUpdate
   , getThenSet
@@ -60,6 +61,8 @@ get lens = L.view lens <$> S.get
 set lens value = S.state $ \s -> ((), L.set lens value s)
 
 update lens update = S.state $ \s -> ((), L.over lens update s)
+
+updateM lens action = get lens >>= action >>= set lens
 
 updateThenGet lens update =
   S.state $ \s -> let v = update $ L.get lens s in (v, L.set lens v s)

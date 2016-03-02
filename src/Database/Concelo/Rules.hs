@@ -6,7 +6,18 @@ module Database.Concelo.Rules
   , contextEnv
   , contextRoot
   , contextVisitor
-  , contextDependencies ) where
+  , contextDependencies
+  , rootVisitor
+  , visitorParent
+  , vistorPath
+  , visitorTrie
+  , visitorChild
+  , emptyRules
+  , rulesRead
+  , rulesWrite
+  , rulesValidate
+  , rulesWildCard
+  , rulesMap ) where
 
 import Database.Concelo.Control (noParse, ParseState(parseString), endOfStream,
                                  prefix, maybeToEither, stringLiteral,
@@ -21,13 +32,15 @@ import qualified Database.Concelo.Protocol as P
 import qualified Database.Concelo.ACL as ACL
 import qualified Control.Lens as L
 
+type Dependencies = T.Trie BS.ByteString ()
+
 data Context a =
   Context { getContextDirty :: T.Trie BS.ByteString a
           , getContextNow :: Integer
           , getContextEnv :: M.Map BS.ByteString BS.ByteString
           , getContextRoot :: Visitor
           , getContextVisitor :: Visitor
-          , getContextDependencies :: T.Trie BS.ByteString () }
+          , getContextDependencies :: Dependencies }
 
 contextDirty =
   L.lens getContextDirty (\x v -> x { getContextDirty = v })
@@ -132,6 +145,20 @@ booleanOperation
 data Visitor = Visitor { getVisitorParent :: Maybe Visitor
                        , getVisitorPath :: [BS.ByteString]
                        , getVisitorTrie :: T.Trie ByteString P.Value ]
+
+visitorParent =
+  L.lens getVisitorParent (\x v -> x { getVisitorParent = v })
+
+visitorPath =
+  L.lens getVisitorPath (\x v -> x { getVisitorPath = v })
+
+visitorTrie =
+  L.lens getVisitorTrie (\x v -> x { getVisitorTrie = v })
+
+rootVisitor trie = Visitor Nothing [] trie
+
+visitorChild key v@(Visitor _ path trie) =
+  Visitor (Just v) (key : path) (T.sub key trie)
 
 hasChild visitor key = do
   v <- visitor
@@ -297,8 +324,7 @@ snapshotCall
       (\visitor key -> do
           v <- visitor
           k <- key
-          return $ Visitor v (key : getVisitorPath v)
-            (T.sub key $ getVisitorTrie v))
+          return $ visitorChild k v)
 
   >>| callM0 snapshot "parent"
       (maybeToEither (Error "visitor has no parent")
@@ -346,14 +372,15 @@ evalACL lens (UsingUid expression) context acl =
 
       | otherwise = acl
 
-evalACL lens (NotUsingUid expression) context acl
-  | evalBoolean expression context = ACL.whiteListAll lens acl
-  | otherwise = acl
+evalACL lens (NotUsingUid expression) context acl =
+  case evalBoolean expression context of
+    (True, deps) -> (ACL.whiteListAll lens acl, deps)
+    (False, deps) -> (acl, deps)
 
 evalBoolean expression context =
-  case eval expression context of
-    Right v -> v
-    Left _ -> False
+  case run expression context of
+    Right r -> r
+    Left _ -> (False, T.empty)
 
 parseRule evaluate env s =
   evaluate <$>
@@ -367,55 +394,55 @@ parseBooleanRule lens env value =
 
 parseIndexOn = [] -- todo
 
-data Rule a =
-  Rule { getRuleRead :: Context a -> ACL -> ACL
-       , getRuleWrite :: Context a -> ACL -> ACL
-       , getRuleValidate :: Context a -> Bool
-       , getRuleIndexOn :: [BS.ByteString]
-       , getRuleWildCard :: Maybe (Rule a)
-       , getRuleMap :: M.Map BS.ByteString (Rule a) }
+data Rules a =
+  Rules { getRulesRead :: Context a -> ACL -> (ACL, Dependencies)
+       , getRulesWrite :: Context a -> ACL -> (ACL, Dependencies)
+       , getRulesValidate :: Context a -> (Bool, Dependencies)
+       , getRulesIndexOn :: [BS.ByteString]
+       , getRulesWildCard :: Maybe (Rules a, BS.ByteString)
+       , getRulesMap :: M.Map BS.ByteString (Rules a) }
 
-ruleRead =
-  L.lens getRuleRead (\x v -> x { getRuleRead = v })
+rulesRead =
+  L.lens getRulesRead (\x v -> x { getRulesRead = v })
 
-ruleWrite =
-  L.lens getRuleWrite (\x v -> x { getRuleWrite = v })
+rulesWrite =
+  L.lens getRulesWrite (\x v -> x { getRulesWrite = v })
 
-ruleValidate =
-  L.lens getRuleValidate (\x v -> x { getRuleValidate = v })
+rulesValidate =
+  L.lens getRulesValidate (\x v -> x { getRulesValidate = v })
 
-ruleIndexOn =
-  L.lens getRuleIndexOn (\x v -> x { getRuleIndexOn = v })
+rulesIndexOn =
+  L.lens getRulesIndexOn (\x v -> x { getRulesIndexOn = v })
 
-ruleWildCard =
-  L.lens getRuleWildCard (\x v -> x { getRuleWildCard = v })
+rulesWildCard =
+  L.lens getRulesWildCard (\x v -> x { getRulesWildCard = v })
 
-ruleMap =
-  L.lens getRuleMap (\x v -> x { getRuleMap = v })
+rulesMap =
+  L.lens getRulesMap (\x v -> x { getRulesMap = v })
 
-emptyRule = Rule (const id) (const id) (const True) [] Nothing M.empty
+emptyRules = Rules (const id) (const id) (const True) [] Nothing M.empty
 
 parseTrie env =
-  foldM visit emptyRule . T.triples where
-    visit (k, v, sub) rule = case k of
+  foldM visit emptyRules . T.triples where
+    visit (k, v, sub) rules = case k of
       ".read" ->
-        flip L.set ruleRead rule <$> parseACLRule aclReadLists env v
+        flip L.set rulesRead rules <$> parseACLRule aclReadLists env v
 
       ".write" ->
-        flip L.set ruleWrite rule <$> parseACLRule aclWriteLists env v
+        flip L.set rulesWrite rules <$> parseACLRule aclWriteLists env v
 
       ".validate" ->
-        flip L.set ruleValidate rule <$> parseBooleanRule env v
+        flip L.set rulesValidate rules <$> parseBooleanRule env v
 
       ".indexOn" ->
-        flip L.set ruleIndexOn rule <$> parseIndexOn v
+        flip L.set rulesIndexOn rules <$> parseIndexOn v
 
       _ -> case BS.uncons k of
         Just ('$', _) ->
-          flip L.set ruleWildCard rule . Just
+          flip L.set rulesWildCard rules . Just . (, k)
           <$> parseTrie (S.insert k env) sub
 
         _ -> parseTrie env sub >>= \r ->
-          return $ L.over ruleMap (M.insert k r) rule
+          return $ L.over rulesMap (M.insert k r) rules
 
 parse = parseTrie S.empty

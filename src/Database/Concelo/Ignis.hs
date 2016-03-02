@@ -104,10 +104,10 @@ receive = \case
   nack@(P.Nack {}) ->
     with (pipePublisher . ignisPipe) $ Pub.receive (const True) nack
 
--- tbc
   message ->
     with (pipeSubscriber . ignisPipe) $ Sub.receive message
 
+-- tbc
 nextMessages now =
   maybeAuthenticate >>= \case
     Nothing -> return []

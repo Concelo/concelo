@@ -9,7 +9,8 @@ module Database.Concelo.Trie
   , findValue
   , findTrie
   , member
-  , isSuperSetOf
+  , hasAll
+  , hasAny
   , paths
   , pathsAndValues
   , insert
