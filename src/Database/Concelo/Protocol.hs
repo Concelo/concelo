@@ -74,11 +74,13 @@ data Message = Cred { getCredProtocolVersion :: Int
                       , getForestACL :: Name
                       , getForestTrees :: Name }
 
-aclWriter = "w"
+aclWriterKey = "w"
 
-aclReader = "r"
+aclReaderKey = "r"
 
 rulesKey = ".rules"
+
+localVersion = (-1)
 
 getMessageKeyHash = \case
   Leaf { getLeafKeyHash = h } -> h

@@ -1,5 +1,6 @@
 module Database.Concelo.Trie
   ( Trie()
+  , trie
   , empty
   , key
   , value
@@ -11,6 +12,7 @@ module Database.Concelo.Trie
   , member
   , hasAll
   , hasAny
+  , triples
   , paths
   , pathsAndValues
   , insert
@@ -28,21 +30,24 @@ module Database.Concelo.Trie
 import qualified Database.Concelo.VTrie as V
 import qualified Database.Concelo.Map as M
 
-newtype Trie k v = Trie { run :: V.VTrie k v }
+data Trie k v = Trie { version :: Integer
+                     , run :: V.VTrie k v }
 
 instance Functor VTrie where
-  fmap f = Trie . fmap f . run
+  fmap f (Trie v t) = Trie v $ fmap f t
 
 instance M.FoldableWithKey Trie where
   foldrWithKey visit seed = foldrWithKey visit seed . run
 
-empty = Trie V.empty
+trie = Trie
+
+empty r = Trie r V.empty
 
 key = V.key . run
 
 value = V.value . run
 
-subTrie = Trie . V.subTrie . run
+subTrie (Trie r t) = Trie r $ V.subTrie t
 
 firstPath = V.firstPath . run
 
@@ -52,36 +57,38 @@ find path = V.find path . run
 
 findValue path = V.findValue path . run
 
-findTrie path = Trie . V.findTrie path . run
+findTrie path (Trie r t) = Trie r $ V.findTrie path t
 
 member path = V.member path . run
 
 isSuperSetOf super sub = V.isSuperSetOf (run super) (run sub)
 
+triples trie = (\(k, v, sub) -> (k, v, Trie sub)) <$> run trie
+
 paths = V.paths . run
 
 pathsAndValues = V.pathsAndValues . run
 
-insert k v = Trie . V.insert 0 k v . run
+insert k v (Trie r t) = Trie r $ V.insert r k v t
 
-modify k f = Trie . V.modify 0 k f . run
+modify k f (Trie r t) = Trie r $ V.modify r k f t
 
-delete k = Trie . V.delete 0 k . run
+delete k (Trie r t) = Trie r $ V.delete r k t
 
-sub k = Trie . V.sub k . run
+sub k (Trie r t) = Trie r $ V.sub k t
 
-superKV k v = Trie . V.superKV 0 k v . run
+superKV k v (Trie r t) = Trie r $ V.superKV r k v t
 
-super k = Trie . V.super 0 k . run
+super k (Trie r t) = Trie r $ V.super r k t
 
-singleton k v = Trie . V.singleton 0 k v
+singleton r k v = Trie r $ V.singleton r k v
 
-union a = Trie . V.union 0 a . run
+union a (Trie r t) = Trie r $ V.union r a t
 
-intersectL a = Trie . V.intersectL 0 a . run
+intersectL a (Trie r t) = Trie r $ V.intersectL r a t
 
-intersectR a = Trie . V.intersectR 0 a . run
+intersectR a (Trie r t) = Trie r $ V.intersectR r a t
 
-subtract a = Trie . V.subtract 0 a . run
+subtract a (Trie r t) = Trie r $ V.subtract r a t
 
-subtractAll a = Trie . V.subtractAll 0 a . run
+subtractAll a (Trie r t) = Trie r $ V.subtractAll r a t

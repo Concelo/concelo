@@ -11,6 +11,7 @@ module Database.Concelo.VTrie
   , member
   , hasAll
   , hasAny
+  , triples
   , paths
   , pathsAndValues
   , insert
@@ -24,7 +25,9 @@ module Database.Concelo.VTrie
   , intersectR
   , subtract
   , subtractAll
-  , diff ) where
+  , diff
+  , mergeL
+  , mergeR ) where
 
 import qualified Database.Concelo.VMap as V
 import qualified Database.Concelo.Map as M
@@ -96,6 +99,10 @@ hasAny large small =
   findAny $ paths small where
     findAny [] = False
     findAny (p:ps) = member p large || findAny ps
+
+triples trie@(VTrie map) =
+  M.foldrWithKey visit [] map where
+    visit key (Cell v sub) result = (key, v, sub) : result
 
 pathsAndValues trie@(VTrie map) =
   M.foldrWithKey visit [] map where
@@ -192,19 +199,91 @@ subtractAll version small (VTrie large) =
         else
           V.insert version k new result
 
-insertCell (Just (V.Cell r k v)) (VTrie map) = VTrie $ V.insert r k v map
-insertCell Nothing trie = trie
+insertCell k v sub (VTrie map) = VTrie $ V.insert 0 k (Cell v sub) map
 
 diff (VTrie a) (VTrie b) =
-  V.foldrDiff
-  (\maybeA maybeB result@(as, bs) ->
-    case (maybeA, maybeB) of
-      (Just a, Nothing) -> (insertCell a as, bs)
-      (Nothing, Just b) -> (as, insertCell b bs)
-      (Just a, Just b) ->
-        let (subAs, subBs) = diff (getCellSubTrie a) (getCellSubTrie b) in
-        (insertCell (L.set cellSubTrie subAs a) as,
-         insertCell (L.set cellSubTrie subBs a) bs)
+  V.foldrDiff visit (empty, empty) a b where
+    visit key maybeA maybeB result@(obsoletes, news) = case maybeA of
+      Just (aVersion, Cell aValue aSub) -> case maybeB of
+        Just (bVersion, Cell bValue bSub) ->
+          let (obsolete, new) = diff aSub bSub in
+          if aVersion == bVersion then
+            if null obsolete then
+              if null new then
+                result
+              else
+                (obsoletes,
+                 insertCell key Nothing new news)
+            else
+              if null new then
+                (insertCell key Nothing obsolete obsoletes,
+                 news)
+              else
+                (insertCell key Nothing obsolete obsoletes,
+                 insertCell key Nothing new news)
+          else
+            (insertCell key aValue obsolete obsoletes,
+             insertCell key bValue new news)
 
-      _ -> result)
-  (empty, empty) a b
+        Nothing -> (insertCell key aValue aSub obsoletes,
+                    news)
+      Nothing -> case maybeB of
+        Just b -> (obsoletes,
+                   insertCell key bValue bSub news)
+        Nothing -> result
+
+data MergePref = LeftPref | RightPref
+
+mergeL = merge LeftPref
+mergeR = merge RightPref
+
+insertCellVersioned tv vv k v sub =
+  VTrie $ V.insertVersioned tv vv k (Cell v sub) . run
+
+deleteCellVersioned tv k = VTrie $ V.delete tv k . run
+
+merge pref version base left right =
+  walk base left right where
+    walk (VTrie base) (VTrie left) (Vtrie right) =
+      V.foldrDiff (visit base) right left right
+
+    visit base key maybeLeft maybeRight result =
+      case V.lookupVersioned key base of
+        Just (baseVersion, Cell baseValue baseSub) -> case maybeLeft of
+          Just (leftVersion, Cell leftValue leftSub) ->
+            let (rightVersion, Cell rightValue rightSub) =
+                  fromMaybe (version, Cell Nothing empty) maybeRight
+
+                sub = walk baseSub leftSub rightSub
+
+                (valueVersion, value) =
+                  if baseVersion == leftVersion || pref == RightPref then
+                    (rightVersion, rightValue)
+                  else
+                    (leftVersion, leftValue) in
+
+            if null sub && isNothing value then
+              deleteCellVersioned version key result
+            else
+              insertCellVersioned version valueVersion key value sub result
+
+          Nothing -> case maybeRight of
+            Just (rightVersion, Cell rightValue rightSub) ->
+              if baseVersion == rightVersion || pref == LeftPref then
+                deleteCellVersioned version key result
+              else
+                result
+
+            Nothing ->
+              result
+
+        Nothing -> case maybeLeft of
+          Just (leftVersion, Cell leftValue leftSub) ->
+            let left = insertCellVersioned version leftVersion key leftValue
+                       leftSub result in
+            case maybeRight of
+              Just (rightVersion, Cell rightValue rightSub) -> case pref of
+                LeftPref -> left
+                RightPref -> result
+            Nothing -> left
+          Nothing -> result

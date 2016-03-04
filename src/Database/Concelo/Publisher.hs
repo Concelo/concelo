@@ -1,6 +1,8 @@
 module Database.Concelo.Publisher
-  ( Publisher
+  ( Publisher()
   , publisherPublished
+  , nextMessage
+  , update
   , empty ) where
 
 import Data.ByteString (ByteString)
@@ -21,12 +23,10 @@ publisherAcks = L.lens getPublisherAcks (\x v -> x { getPublisherAcks = v })
 
 publisherNacks = L.lens getPublisherNacks (\x v -> x { getPublisherNacks = v })
 
-update allObsolete allNew = do
-  acks <-
-    updateThenGet publisherAcks $ T.intersectL allNew . T.subtract allObsolete
+update (obsolete, new) = do
+  acks <- updateThenGet publisherAcks $ T.intersectL new . T.subtract obsolete
 
-  update publisherNacks
-    (T.union (T.subtract acks allNew) . T.subtract allObsolete)
+  update publisherNacks (T.union (T.subtract acks new) . T.subtract obsolete)
 
 nextMessage =
   (T.firstPath <$> get publisherNacks) >>= \case

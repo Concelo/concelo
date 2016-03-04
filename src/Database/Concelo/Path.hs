@@ -2,7 +2,6 @@ module Database.Concelo.Path
   ( Path()
   , empty
   , toPath
-  , key
   , sub
   , super
   , singleton ) where
@@ -10,25 +9,20 @@ module Database.Concelo.Path
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Map as M
 
--- todo: using a Trie here is overkill; a list would be sufficient
-newtype Path k v = Path { run :: T.Trie k v }
+newtype Path k v = Path { keys :: [k]
+                        , value :: Maybe v }
 
 instance Functor Trie where
-  fmap f = Path . fmap f . run
+  fmap f (Path ks v) = Path ks (fmap f v)
 
-instance M.FoldableWithKey Path where
-  foldrWithKey visit seed = foldrWithKey visit seed . run
+empty = Path [] Nothing
 
-empty = Path T.empty
+toPath ks v = Path ks $ Just v
 
-toPath (k:ks@(_:_)) v = super k $ toPath ks v
-toPath (k:_) v = singleton k v
-toPath _ = empty
+sub = \case
+  Path (k:ks@(_:_)) v -> Path ks v
+  _ -> empty
 
-key = T.key . run
+super k (Path ks v) = Path (k:ks) v
 
-sub = Path . T.subTrie . run
-
-super k = Path . T.super k . run
-
-singleton k v = Path . T.singleton k v
+singleton k v = Path [k] v

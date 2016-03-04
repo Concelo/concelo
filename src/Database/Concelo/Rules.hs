@@ -13,6 +13,7 @@ module Database.Concelo.Rules
   , visitorTrie
   , visitorChild
   , emptyRules
+  , subRules
   , rulesRead
   , rulesWrite
   , rulesValidate
@@ -421,6 +422,12 @@ rulesMap =
   L.lens getRulesMap (\x v -> x { getRulesMap = v })
 
 emptyRules = Rules (const id) (const id) (const True) [] Nothing M.empty
+
+subRules key rules = case M.lookup key $ getRulesMap rules of
+  Nothing -> case getRulesWildCard rules of
+    Nothing -> (emptyRules, BS.empty)
+    Just r -> r
+  Just r -> (r, BS.empty)
 
 parseTrie env =
   foldM visit emptyRules . T.triples where

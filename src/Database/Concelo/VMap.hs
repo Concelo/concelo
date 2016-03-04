@@ -7,7 +7,9 @@ module Database.Concelo.VMap
   , lookup
   , first
   , insert
+  , insertVersioned
   , modify
+  , modifyVersioned
   , delete
   , triples
   , index
@@ -21,22 +23,31 @@ import qualified Control.Lens as L
 newtype VMap k v = VMap { run :: T.RBTree (Cell k v) }
 
 instance M.FoldableWithKey VMap where
-  foldrWithKey visit seed = foldr (\(Cell _ k v) r -> visit k v r) seed . run
+  foldrWithKey visit seed = foldr (\(Cell _ _ k v) r -> visit k v r) seed . run
 
-data Cell k v = Cell { getCellVersion :: Integer
+data Cell k v = Cell { getCellTreeVersion :: Integer
+                     , getCellValueVersion :: Integer
                      , getCellKey :: k
                      , getCellValue :: v }
 
-cellVersion = L.lens getCellVersion (\x v -> x { getCellVersion = v })
-cellKey = L.lens getCellKey (\x v -> x { getCellKey = v })
-cellValue = L.lens getCellValue (\x v -> x { getCellValue = v })
+cellValueVersion =
+  L.lens getCellValueVersion (\x v -> x { getCellValueVersion = v })
+
+cellTreeVersion =
+  L.lens getCellTreeVersion (\x v -> x { getCellTreeVersion = v })
+
+cellKey =
+  L.lens getCellKey (\x v -> x { getCellKey = v })
+
+cellValue =
+  L.lens getCellValue (\x v -> x { getCellValue = v })
 
 instance Ord k => Ord (Cell k v) where
   compare a b = compare (getCellKey a) (getCellKey b)
 
 compareKey k c = compare k (getCellKey c)
 
-cellVersionsEqual (Cell a _ _) (Cell b _ _) = a == b
+cellTreeVersionsEqual (Cell a _ _ _) (Cell b _ _ _) = a == b
 
 empty = VMap T.Leaf
 
@@ -54,13 +65,19 @@ lookup key map = getCellValue <$> find key map
 
 find key (VMap tree) = T.searchFast (\k c -> compare k $ getCellKey c) tree key
 
-first (VMap tree) = pair <$> maybeCell (T.first tree)
+first (VMap tree) = pairKV <$> maybeCell (T.first tree)
 
-insert version key value map = modify version key (const $ Just value) map
+insert version key value map = insertVersioned version key version value map
 
-modify version key transform (VMap tree) =
-  VMap $ T.modifyVersioned (L.set cellVersion version) compareKey tree key
-  ((Cell version key <$>) . transform . (getCellValue <$>))
+insertVersioned treeVersion key valueVersion value map =
+  modifyVersioned treeVersion key valueVersion (const $ Just value) map
+
+modify version key value map = modifyVersioned version key version value map
+
+modifyVersioned treeVersion key valueVersion transform (VMap tree) =
+  VMap $ T.modifyVersioned (L.set cellTreeVersion treeVersion) compareKey tree
+  key ((Cell treeVersion valueVersion key <$>) . transform
+       . (getCellValue <$>))
 
 delete version key map = modify version key (const Nothing) map
 
@@ -68,14 +85,20 @@ triples = fmap triple . toList . run
 
 index version f = foldr (\v -> insert version (f v) v) empty
 
-pair (Cell _ k v) = (k, v)
+pairKV (Cell _ _ k v) = (k, v)
 
-triple (Cell r k v) = (r, k, v)
+pairRV (Cell _ r _ v) = (r, v)
 
-visitor visit a b = visit (triple <$> a) (triple <$> b)
+triple (Cell _ r k v) = (r, k, v)
+
+visitor visit a b =
+  visit
+  (fromJust ((getCellKey <$> a) <|> (getCellKey <$> b)))
+  (pairRV <$> a)
+  (pairRV <$> b)
 
 foldrDiff visit seed a b =
-  T.foldrDiffVersioned cellVersionsEqual compare (visitor visit) seed a b
+  T.foldrDiffVersioned cellTreeVersionsEqual compare (visitor visit) seed a b
 
 insertCell (Just (_, k, v)) map = M.insert k v map
 insertCell _ map = map

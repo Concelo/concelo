@@ -7,8 +7,8 @@ module Database.Concelo.Control
   , getThenUpdate
   , getThenSet
   , with
-  , Exception (Error, PatternFailure, BadForest, MissingChunks, NoParse)
-  , error
+  , Exception (Exception, PatternFailure, BadForest, MissingChunks, NoParse)
+  , exception
   , patternFailure
   , badForest
   , missingChunks
@@ -34,13 +34,13 @@ import qualified Control.Monad.State.Class as S
 
 type Action s a = StateT s (ErrorT Exception Identity) a
 
-data Exception = Error BS.ByteString
+data Exception = Exception BS.ByteString
                | PatternFailure
                | BadForest
                | MissingChunks
                | NoParse
 
-error s = throwError $ Error s
+exception s = throwError $ Exception s
 
 patternFailure = throwError PatternFailure
 

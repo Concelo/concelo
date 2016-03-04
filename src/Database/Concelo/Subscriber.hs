@@ -1,5 +1,9 @@
 module Database.Concelo.Subscriber
-  ( receive ) where
+  ( receive
+  , subscriberPublished
+  , forestRevision ) where
+
+-- todo: split this code into two files: one that handles incoming messages and validating forests (Subscriber.hs), and another that aggregates trees into a trie and sanitizes it (Deserializer.hs)
 
 import Database.Concelo.Control (patternFailure, badForest, missingChunks,
                                  maybeM2, set, get, update, updateM)
@@ -187,7 +191,7 @@ diffChunks oldChunks oldRoot newChunks newRoot = do
 verify (P.Signed { getSignedSigner = signer
                  , getSignedSignature = signature
                  , getSignedText = text }) acl =
-  if T.member (P.super P.aclWriter $ P.singleton signer ()) acl then
+  if T.member (Path.super P.aclWriterKey $ Path.singleton signer ()) acl then
     if C.verify signer signature text then
       return ()
     else
@@ -374,8 +378,8 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
 
               else
 
-              case T.findValue (P.super aclReader
-                                $ P.singleton (getKeyPairPublic keyPair) ())
+              case T.findValue (Path.super P.aclReaderKey
+                                $ Path.singleton (getKeyPairPublic keyPair) ())
                    aclTrie of
                 -- todo: handle optional trees
                 Just encryptedKey -> do
@@ -406,13 +410,7 @@ visitDirty context acl rules key
       result
     else
       visitValues result Nothing possibleValues where
-        subRules key rules = case M.lookup key $ L.view R.rulesMap rules of
-          Nothing -> case L.view R.rulesWildCard rules of
-            Nothing -> (R.emptyRules, BS.empty)
-            Just r -> r
-          Just r -> (r, BS.empty)
-
-        (rules', wildcard) = subRules key rules
+        (rules', wildcard) = R.subRules key rules
 
         dirty' = T.sub key $ L.view R.contextDirty context
 
@@ -447,7 +445,7 @@ visitDirty context acl rules key
 
               (validateResult, validateDependencies) =
                 fromMaybe (True, T.empty)
-                (value >> L.view R.rulesValidate rules' context'')
+                (const (L.view R.rulesValidate rules' context'') <$> v)
 
               dependencies' =
                 BT.insertTrie path readWriteDependencies
