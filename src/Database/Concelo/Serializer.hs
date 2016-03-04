@@ -1,5 +1,5 @@
 module Database.Concelo.Serializer
-  ( ) where
+  ( serialize ) where
 
 byACL path value = Path.super (getValueACL value) path
 

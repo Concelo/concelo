@@ -141,7 +141,7 @@ receive = \case
 
     new <- get published
 
-    if L.view Sub.forestRevision new /= L.view Sub.forestRevision old then do
+    if Sub.getForestRevision new /= Sub.getForestRevision old then do
       oldTrie <- get (Des.deserializerTrie . ignisDeserializer)
 
       with ignisDeserializer $ Des.deserialize old new
@@ -188,25 +188,24 @@ makeDiff head = do
 
   published <- get (Sub.subscriberPublished . Pipe.pipeSubscriber . ignisPipe)
 
-  let diff = VT.diff base head
-
   validateDiff
     me
-    (L.view Sub.forestRevision published)
-    (L.view Sub.forestRules published)
-    (L.view Sub.forestPermitNone published)
+    (Sub.getForestRevision published)
+    (Sub.getForestRules published)
+    (Sub.getForestPermitNone published)
     head
-    diff
-
-  return diff
+    (VT.diff base head)
 
 validateDiff me revision rules acl head (obsolete, new) =
-  mapM_ (validate rules acl env union root) $ T.triples union where
+  foldM (validate rules acl env union obsolete new root) (T.empty, T.empty)
+  $ T.triples union where
+
     union = T.union obsolete new
     root = R.rootVisitor head
     env = M.empty
 
-    validate rules acl env union visitor (k, v, sub) =
+    validate rules acl env union obsolete new visitor (k, v, sub)
+      (obsoleteResult, newResult) =
       (case v of
           Nothing -> descend
           Just value ->
@@ -224,14 +223,29 @@ validateDiff me revision rules acl head (obsolete, new) =
 
         union' = T.sub k union
 
+        obsolete' = T.sub k obsolete
+
+        new' = T.sub k new
+
         visitor' = R.visitorChild k visitor
 
         context = R.Context T.empty revision env' root visitor' T.empty
 
-        (acl', _) = L.view R.rulesWrite rules' context acl
+        (readACL, _) = R.getRulesRead rules' context acl
+
+        (acl', _) = R.getRulesWrite rules' context readACL
 
         (valid, _) = fromMaybe (True, T.empty)
-                     (const (L.view R.rulesValidate rules' context) <$> v)
+                     (const (R.getRulesValidate rules' context) <$> v)
 
-        descend = mapM_ (validate rules' acl' env' union' visitor')
-                  $ T.triples union'
+        (obsoleteSubs, newSubs)
+          = foldM (validate rules' acl' env' union' obsolete' new' visitor')
+            (T.empty, T.empty) $ T.triples union'
+
+        obsoleteValue = T.lookup k obsolete
+
+        newValue = (L.set P.valueACL acl') <$> T.lookup k new
+
+        descend =
+          (T.union (T.superKV k obsoleteValue obsoleteSubs) obsoleteResult
+           T.union (T.superKV k newValue newSubs) newResult)

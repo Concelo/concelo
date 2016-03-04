@@ -1,8 +1,6 @@
 module Database.Concelo.VTrie
   ( VTrie()
   , empty
-  , key
-  , value
   , firstPath
   , first
   , find
@@ -54,12 +52,6 @@ cellSubTrie = L.lens getCellSubTrie (\x v -> x { getCellSubTrie = v })
 cellIsEmpty (Cell v sub) = isNothing v && null sub
 
 empty = VTrie V.empty
-
-key = V.key . run
-
-value (VTrie map) = V.value map >>= getCellValue
-
-subTrie (VTrie map) = getCellSubTrie <$> V.value map
 
 firstPath (VTrie map) =
   V.first map >>= \(k, (Cell v sub)) ->
@@ -117,7 +109,7 @@ findTrie path trie =
     Nothing -> trie
     Just k -> find' (P.sub path) (sub k trie)
 
-insert version key value trie = modify version key (const $ Just value) trie
+insert version key value = modify version key (const $ Just value)
 
 modify version key transform (VTrie map) =
   VTrie $ V.modify version key
@@ -136,7 +128,7 @@ modify version key transform (VTrie map) =
         v -> Just $ Cell v sub)
   map
 
-delete version key trie = modify version key (const Nothing) trie
+delete version key = modify version key (const Nothing)
 
 sub key (VTrie map) = maybe empty getCellSubTrie $ find key map
 

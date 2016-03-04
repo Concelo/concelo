@@ -89,8 +89,8 @@ receive = \case
 
   P.Persisted {} -> return ()
 
-  -- todo: stream chunks to subscribers as they are received rather
-  -- than wait until we have a complete tree
+  -- todo: stream (authenticated) chunks to subscribers as they are
+  -- received rather than wait until we have a complete tree
   message -> do
     publicKey <- get relayPublicKey
     when (isJust publicKey) $ get relaySubscriber >>= \subscriber ->
@@ -98,14 +98,10 @@ receive = \case
         Left error -> throwError error
         Right subscriber' ->
           let revision = L.get (forestRevision . subscriberPublished) in
-          if revision subscriber' == revision subscriber then
-            set relaySubscriber subscriber'
+          if revision subscriber' > revision subscriber then
+            share subscriber
           else
-            if revision subscriber' == revision subscriber + 1 then
-              share subscriber'
-            else
-              -- ignore updates that skip revision numbers
-              set relaySubscriber $ getSubscriberClean subscriber'
+            set relaySubscriber subscriber'
 
 ping = do
   published <-

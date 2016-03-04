@@ -397,11 +397,11 @@ parseIndexOn = [] -- todo
 
 data Rules a =
   Rules { getRulesRead :: Context a -> ACL -> (ACL, Dependencies)
-       , getRulesWrite :: Context a -> ACL -> (ACL, Dependencies)
-       , getRulesValidate :: Context a -> (Bool, Dependencies)
-       , getRulesIndexOn :: [BS.ByteString]
-       , getRulesWildCard :: Maybe (Rules a, BS.ByteString)
-       , getRulesMap :: M.Map BS.ByteString (Rules a) }
+        , getRulesWrite :: Context a -> ACL -> (ACL, Dependencies)
+        , getRulesValidate :: Context a -> (Bool, Dependencies)
+        , getRulesIndexOn :: [BS.ByteString]
+        , getRulesWildCard :: Maybe (Rules a, BS.ByteString)
+        , getRulesMap :: M.Map BS.ByteString (Rules a) }
 
 rulesRead =
   L.lens getRulesRead (\x v -> x { getRulesRead = v })

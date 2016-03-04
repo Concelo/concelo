@@ -11,6 +11,7 @@ module Database.Concelo.VMap
   , modify
   , modifyVersioned
   , delete
+  , pairs
   , triples
   , index
   , foldrDiff
@@ -80,6 +81,8 @@ modifyVersioned treeVersion key valueVersion transform (VMap tree) =
        . (getCellValue <$>))
 
 delete version key map = modify version key (const Nothing) map
+
+pairs = fmap pairKV . toList . run
 
 triples = fmap triple . toList . run
 

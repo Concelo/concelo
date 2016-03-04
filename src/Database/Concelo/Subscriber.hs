@@ -1,12 +1,10 @@
 module Database.Concelo.Subscriber
   ( receive
   , subscriberPublished
-  , forestRevision ) where
-
--- todo: split this code into two files: one that handles incoming messages and validating forests (Subscriber.hs), and another that aggregates trees into a trie and sanitizes it (Deserializer.hs)
+  , getForestRevision ) where
 
 import Database.Concelo.Control (patternFailure, badForest, missingChunks,
-                                 maybeM2, set, get, update, updateM)
+                                 set, get, update, updateM)
 
 import qualified Database.Concelo.Protocol as P
 import qualified Database.Concelo.Trie as T
@@ -15,15 +13,10 @@ import qualified Database.Concelo.Set as S
 import qualified Database.Concelo.BiTrie as BT
 import qualified Database.Concelo.Path as Path
 import qualified Database.Concelo.Crypto as C
-import qualified Database.Concelo.Rules as R
-import qualified Database.Concelo.ACL as ACL
+import qualified Database.Concelo.Chunks as Chunks
 import qualified Control.Lens as L
 import qualified Control.Monad.State.Class as State
 import qualified Data.ByteString as BS
-
-data KeyPair =
-  KeyPair { getKeyPairPublic :: BS.ByteString
-          , getKeyPairPrivate :: BS.ByteString }
 
 data Incomplete =
   Incomplete { getIncompletePersisted :: T.Trie BS.ByteString ()
@@ -42,12 +35,12 @@ data Subscriber =
              , getSubscriberObsolete :: T.Trie BS.ByteString P.Message
              , getSubscriberNew :: T.Trie BS.ByteString P.Message
              , getSubscriberAdminACL :: T.Trie BS.ByteString ()
-             , getSubscriberPermitAdmins :: ACL.ACL
-             , getSubscriberKeyPair :: KeyPair
+             , getSubscriberPublicKey :: BS.ByteString
              , getSubscriberStream :: P.Name
              , getSubscriberPersisted :: Forest
              , getSubscriberPublished :: Forest
              , getSubscriberClean :: Subscriber
+             , getSubscriberRequestedTrees :: S.Set BS.ByteString
              , getSubscriberDiff :: (T.Trie BS.ByteString P.Message,
                                      T.Trie BS.ByteString P.Message) }
 
@@ -68,10 +61,6 @@ subscriberNew =
 
 subscriberAdminACL =
   L.lens getSubscriberAdminACL (\x v -> x { getSubscriberAdminACL = v })
-
-subscriberPermitAdmins =
-  L.lens getSubscriberPermitAdmins
-  (\x v -> x { getSubscriberPermitAdmins = v })
 
 subscriberPublicKey =
   L.lens getSubscriberPublicKey (\x v -> x { getSubscriberPublicKey = v })
@@ -138,51 +127,9 @@ addMissing group members = do
 updateMissing member =
   update subscriberMissing $ BT.reverseDelete member
 
-chunkIsLeaf = \case
-  P.Leaf {} -> True
-  _ -> False
-
-chunkMembers = \case
-  P.Group { P.getGroupMembers = m } -> m
-  _ -> T.empty
-
-findNewChunks oldChunks newChunks newRoot =
-  visit newRoot (T.empty, T.empty, T.empty) where
-    visit name (new, newLeaves, found) =
-      case T.find name oldChunks of
-        Just chunk ->
-          return (new, newLeaves, T.union (const chunk <$> name) found)
-
-        Nothing -> maybeM2 T.findValue name newChunks >>= \chunk ->
-          -- we do not allow a given chunk to have more than one
-          -- parent since it confuses the diff algorithm
-          if T.member name new then
-            badForest
-          else
-            foldM visit (T.union (const chunk <$> name) new,
-                         if chunkIsLeaf chunk then
-                           T.union (const chunk <$> name) newLeaves
-                         else
-                           newLeaves,
-                         found) (chunkMembers chunk)
-
-findObsoleteChunks oldChunks oldRoot found =
-  visit oldRoot (T.empty, T.empty) where
-    visit name result@(obsolete, obsoleteLeaves) =
-      if T.member name found then
-        result
-      else
-        maybeM2 T.findValue name oldChunks >>= \chunk ->
-          foldM visit (T.union (const chunk <$> name) obsolete,
-                       if chunkIsLeaf chunk then
-                         T.union (const chunk <$> name) obsoleteLeaves
-                       else
-                         obsoleteLeaves) (chunkMembers chunk)
-
 diffChunks oldChunks oldRoot newChunks newRoot = do
-  (new, newLeaves, found) <- findNewChunks oldChunks newChunks newRoot
-
-  (obsolete, obsoleteLeaves) <- findObsoleteChunks newChunks oldRoot found
+  (obsolete, obsoleteLeaves, new, newLeaves) <-
+    Chunks.diffChunks oldChunks oldRoot newChunks newRoot
 
   update subscriberDiff $ \(o, n) -> (T.union obsolete o, T.union new n)
 
@@ -225,61 +172,6 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
 
         _ -> patternFailure
 
-newtype UnsanitizedElement =
-  UnsanitizedElement
-  { getUnsanitizedElementMap :: M.Map BS.ByteString P.Value }
-
-unionUnsanitized signer small large =
-  foldr visit large $ T.pathsAndValues small where
-
-    visit (path, new) result =
-      case T.findValue path large of
-        Nothing ->
-          T.union path result
-        Just element ->
-          T.union ((const $ update element new) <$> path) result
-
-    update element@(UnsanitizedElement map) new =
-      case P.parseValue signer new of
-        Nothing -> element
-        Just v -> UnsanitizedElement $ M.insert new v map
-
-subtractUnsanitized small large =
-  foldr visit large $ T.pathsAndValues small where
-
-    visit (path, obsolete) result =
-      case T.findValue path large of
-        Nothing -> result
-        Just (UnsanitizedElement map) ->
-          let map' = M.delete obsolete map in
-          if null map' then
-            T.subtract path result
-          else
-            T.union ((const $ UnsanitizedElement map') <$> path) result
-
-updateUnsanitizedDiff key acl (obsoleteUnsanitized, newUnsanitized)
-  (obsoleteLeaves, newLeaves) = do
-
-  obsolete <- foldM (visit false) obsoleteUnsanitized obsoleteLeaves
-
-  new <- foldM (visit true) newUnsanitized newLeaves
-
-  return (obsolete, new) where
-
-    visit needVerify leaf result =
-      case leaf of
-        P.Leaf { P.getLeafSigned = signed
-               , P.getLeafBody = body } -> do
-
-          when needVerify $ verify signed acl
-
-          return case P.parseTrie (C.decryptSymmetric key body) of
-            -- todo: handle defragmentation
-            Just trie -> unionUnsanitized (getSignedSigner signed) trie result
-            Nothing -> result
-
-        _ -> patternFailure
-
 verifyLeafDiff acl result@(_, newLeaves) = do
   mapM_ visit newLeaves
   return result where
@@ -290,7 +182,8 @@ verifyLeafDiff acl result@(_, newLeaves) = do
 data Tree = Tree { getTreeRevision :: Integer
                  , getTreeStream :: BS.ByteString
                  , getTreeACL :: P.Name
-                 , getTreeACLTrie :: T.Trie BS.ByteString BS.ByteString }
+                 , getTreeACLTrie :: T.Trie BS.ByteString BS.ByteString
+                 , getTreeLeaves :: P.Name }
 
 treeRevision =
   L.lens getTreeRevision (\x v -> x { getTreeRevision = v })
@@ -310,10 +203,10 @@ treeACLTrie =
 emptyTree stream = Tree (-1) stream Path.empty T.empty
 
 updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
-  let currentTrees = getForestTreeTrie currentForest in do
-    subset <- remove currentTrees obsoleteTrees
+  let currentTrees = getForestTreeMap currentForest in do
+    subset <- foldM remove currentTrees obsoleteTrees
 
-    foldM add (subset, (T.empty, T.empty)) newTrees where
+    foldM add subset newTrees where
 
       newByStream = M.index getTreeStream newTrees
 
@@ -325,7 +218,7 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
 
           _ -> patternFailure
 
-      add tree (trees, unsanitizedDiff@(obsoleteUnsanitized, newUnsanitized)) =
+      add tree trees =
         case tree of
           P.Tree { P.getTreeRevision = revision
                  , P.getTreeSigned = signed
@@ -333,11 +226,12 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
                  , P.getTreeACL = acl
                  , P.getTreeStream = stream
                  , P.getTreeForestStream = forestStream
+                 , P.getTreeOptional = optional
                  , P.getTreeLeaves = leaves } -> do
 
             let old = M.lookup stream currentTrees
                 oldACL = maybe acl getTreeACL old
-                currentTree = fromJust (emptyTree stream) old
+                currentTree = fromMaybe (emptyTree stream) old
 
             when (revision < getTreeRevision currentTree
                   || M.member stream trees
@@ -358,157 +252,29 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
 
             verify signed aclTrie
 
-            keyPair <- get subscriberKeyPair
+            publicKey <- get subscriberPublicKey
 
-            let trees' =
-                  M.insert stream (Tree revision stream acl aclTrie)
-                  trees
+            requested <- get subscriberRequestedTrees
 
-                leafDiff =
-                  diffChunks (getForestChunks currentForest)
-                  (getTreeLeaves current) received leaves
-                  >>= verifyLeafDiff
+            let descend =
+                  null publicKey
+                  || ((not optional || S.member stream requested)
+                      && T.member (Path.super P.aclReaderKey
+                                   $ Path.singleton publicKey ()) aclTrie)
 
-            if null (getKeyPairPublic keyPair) then do
+            when descend do
               addMissing name leaves
               assertComplete name
-              leafDiff
 
-              return (trees', unsanitizedDiff)
+              diffChunks (getForestChunks currentForest)
+                (getTreeLeaves currentTree) received leaves
+                >>= verifyLeafDiff
 
-              else
-
-              case T.findValue (Path.super P.aclReaderKey
-                                $ Path.singleton (getKeyPairPublic keyPair) ())
-                   aclTrie of
-                -- todo: handle optional trees
-                Just encryptedKey -> do
-                  addMissing name leaves
-                  assertComplete name
-
-                  unsanitizedDiff' <-
-                    leafDiff >>= updateUnsanitizedDiff
-                    (C.decryptAsymmetric (getKeyPairPrivate keyPair)
-                     encryptedKey)
-                    aclTrie unsanitizedDiff
-
-                  return (trees', unsanitizedDiff')
-
-                Nothing ->
-                  -- we don't have read access to this tree, so we ignore
-                  -- the leaves
-                  return (trees', unsanitizedDiff)
+            return $ M.insert stream
+              (Tree revision stream acl aclTrie
+               if descend then leaves else Path.empty) trees
 
           _ -> patternFailure
-
-updateUnsanitized currentUnsanitized (obsolete, new) =
-  unionUnsanitized new (subtractUnsanitized obsolete currentUnsanitized)
-
-visitDirty context acl rules key
-  result@(remainingDirty, sanitized, dependencies) =
-    if null remainingDirty then
-      result
-    else
-      visitValues result Nothing possibleValues where
-        (rules', wildcard) = R.subRules key rules
-
-        dirty' = T.sub key $ L.view R.contextDirty context
-
-        context' =
-          L.over R.contextEnv (if null wildcard then
-                                 id
-                               else
-                                 M.set wildcard key)
-
-          $ L.over R.contextVisitor (R.visitorChild key)
-          $ L.set R.contextDirty remainingDirty context
-
-        possibleValues =
-          fromMaybe M.empty (getUnsanitizedElementMap <$> T.value dirty')
-
-        visitValues result@(remainingDirty, sanitized, dependencies)
-          firstValid values =
-          let value = maybeHead values
-
-              context'' = L.set R.contextValue value context'
-
-              (readACL, readDependencies) =
-                L.view R.rulesRead rules' context'' acl
-
-              (writeACL, writeDependencies) =
-                L.view R.rulesWrite rules' context'' readACL
-
-              acl' = writeACL
-
-              readWriteDependencies =
-                T.union readDependencies writeDependencies
-
-              (validateResult, validateDependencies) =
-                fromMaybe (True, T.empty)
-                (const (L.view R.rulesValidate rules' context'') <$> v)
-
-              dependencies' =
-                BT.insertTrie path readWriteDependencies
-                $ BT.insertTrie path validateDependencies
-                dependencies
-
-              remainingDirty' = T.subtract path remainingDirty
-
-              next value = case maybeTail values of
-                Just tail ->
-                  visitValues (remainingDirty, sanitized, dependencies')
-                  (firstValid <|> value) tail
-
-                Nothing ->
-                  foldr (visitDirty context' acl' rules' dirty')
-                  (remainingDirty',
-                   case firstValid of
-                     Nothing -> T.subtract path sanitized
-                     Just v -> T.union (const v <$> path) sanitized,
-                   dependencies')
-                  $ T.keys dirty'
-          in
-
-          if remainingDirty `T.hasAny` readWriteDependencies then
-            foldr (visitDirty context' acl rules' dirty') result
-            $ T.keys dirty'
-          else
-            if maybe True (\v -> valueSigner v `ACL.isWriter` writeACL) value
-            then
-              if remainingDirty' `T.hasAny` validateDependencies then
-                foldr (visitDirty context' acl' rules' dirty') result
-                $ T.keys dirty'
-              else
-                next if validateResult then value else Nothing
-            else
-              next Nothing
-
-updateSanitized revision acl currentSanitized updatedUnsanitized
-  updatedRules currentDependencies (obsoleteUnsanitized, newUnsanitized) =
-
-    clean
-    (Context dirty revision T.empty (R.rootVisitor currentSanitized) T.empty)
-    (dirty, currentSanitized, remainingDependencies) where
-
-      unsanitized = T.union obsoleteUnsanitized newUnsanitized
-
-      dirty = foldr findDirty unsanitized $ T.paths unsanitized
-
-      remainingDependencies = BT.subtract dirty currentDependencies
-
-      findDirty path result =
-        foldr findDirty
-        (T.union
-         (fromMaybe (UnsanitizedElement T.empty)
-          (T.findValue path updatedUnsanitized) <$> path)
-         result)
-        (T.paths $ BT.reverseFind path currentDependencies)
-
-      clean context result@(dirty, sanitized, dependencies)
-        | null dirty = (sanitized, dependencies)
-        | otherwise =
-          clean context
-          (foldr (visitDirty context acl updatedRules) result $ T.keys dirty)
 
 data Forest =
   Forest { getForestRevision :: Integer
@@ -516,13 +282,8 @@ data Forest =
          , getForestChunks :: T.Trie BS.ByteString P.Message
          , getForestACL :: P.Name
          , getForestACLTrie :: T.Trie BS.ByteString BS.ByteString
-         , getForestPermitNone :: ACL.ACL
          , getForestTrees :: P.Name
-         , getForestTreeTrie :: T.Trie BS.ByteString BS.ByteString
-         , getForestUnsanitized :: T.Trie BS.ByteString UnsanitizedElement
-         , getForestRules :: R.Rules
-         , getForestDependencies :: BT.BiTrie BS.ByteString
-         , getForestSanitized :: T.Trie BS.ByteString P.Value }
+         , getForestTreeMap :: M.Map BS.ByteString Tree }
 
 forestRevision =
   L.lens getForestRevision (\x v -> x { getForestRevision = v })
@@ -539,23 +300,11 @@ forestACL =
 forestACLTrie =
   L.lens getForestACLTrie (\x v -> x { getForestACLTrie = v })
 
-forestPermitNone =
-  L.lens getForestPermitNone (\x v -> x { getForestPermitNone = v })
-
 forestTrees =
   L.lens getForestTrees (\x v -> x { getForestTrees = v })
 
-forestTreeTrie =
-  L.lens getForestTreeTrie (\x v -> x { getForestTreeTrie = v })
-
-forestRules =
-  L.lens getForestRules (\x v -> x { getForestRules = v })
-
-forestDependencies =
-  L.lens getForestDependencies (\x v -> x { getForestDependencies = v })
-
-forestSanitized =
-  L.lens getForestSanitized (\x v -> x { getForestSanitized = v })
+forestTreeMap =
+  L.lens getForestTreeMap (\x v -> x { getForestTreeMap = v })
 
 updateForest current persisted name = do
   received <- get subscriberReceived
@@ -575,88 +324,42 @@ updateForest current persisted name = do
 
       subscribed <- get subscriberStream
 
+      publicKey <- get subscriberPublicKey
+
       when (revision <= getForestRevision persisted
+
+            || (null publicKey
+                && revision /= 1 + getForestRevision published)
+
             || adminRevision < getForestAdminRevision persisted
+
             || (adminRevision == getForestAdminRevision persisted
                 && acl /= getForestACL persisted)
+
             || stream /= subscribed)
         badForest
 
-      (aclTrie, permitNone) <-
+      aclTrie <-
         if acl == getForestACL current then
-          return (getForestACLTrie current, getForestPermitNone current)
+          return $ getForestACLTrie current
         else do
           aclTrie <-
             diffChunks (getForestChunks current) (getForestACL current)
-            received rules
+            received acl
             >>= updateACL (getForestACLTrie current)
 
           verify signed aclTrie
 
-          return (aclTrie, ACL.permitNone aclTrie)
+          return aclTrie
 
-      (treeTrie, unsanitizedDiff@(obsoleteUnsanitized, newUnsanitized)) <-
+      treeMap <-
         diffChunks (getForestChunks current) (getForestTrees current)
         received trees
         >>= updateTrees aclTrie current
 
       chunks <- updateChunks (getForestChunks current) <$> get subscriberDiff
 
-      let forest = Forest revision adminRevision chunks acl aclTrie permitNone
-                   trees treeTrie
-
-      publicKey <- get subscriberPublicKey
-
-      if null publicKey then
-        return $ forest T.empty emptyRules BT.empty T.empty
-        else
-
-        let unsanitized =
-              updateUnsanitized (getForestUnsanitized current)
-              unsanitizedDiff in
-
-        if null (T.sub P.rulesKey obsoleteUnsanitized)
-           && null (T.sub P.rulesKey newUnsanitized) then
-          let rules = getForestRules current
-
-              (sanitized, dependencies) =
-                updateSanitized
-                revision
-                (getForestPermitNone current)
-                (getForestSanitized current)
-                unsanitized
-                rules
-                (getForestDependencies current)
-                unsanitizedDiff in
-
-          return $ forest unsanitized rules dependencies sanitized
-        else do
-          permitAdmins <- get subscriberPermitAdmins
-
-          let (sanitizedRules, _) =
-                updateSanitized
-                0
-                permitAdmins
-                (T.sub P.rulesKey (getForestSanitized current))
-                (T.sub P.rulesKey unsanitized)
-                R.emptyRules
-                BT.empty
-                ((T.sub P.rulesKey obsoleteUnsanitized),
-                 (T.sub P.rulesKey newUnsanitized))
-
-          rules <- compileRules sanitizedRules
-
-          let (sanitized, dependencies) =
-                updateSanitized
-                revision
-                (getForestPermitNone current)
-                T.empty
-                unsanitized
-                rules
-                BT.empty
-                (T.empty, unsanitized)
-
-          return $ forest unsanitized rules dependencies sanitized
+      return $ Forest revision adminRevision chunks acl aclTrie trees treeMap
 
     _ -> patternFailure
 

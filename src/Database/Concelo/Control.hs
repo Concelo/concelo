@@ -1,6 +1,7 @@
 module Database.Concelo.Control
   ( get
   , set
+  , setThenGet
   , update
   , updateM
   , updateThenGet
@@ -59,6 +60,8 @@ eval = runIdenity . runErrorT . evalStateT
 get lens = L.view lens <$> S.get
 
 set lens value = S.state $ \s -> ((), L.set lens value s)
+
+setThenGet lens value = S.state $ \s -> (value, L.set lens value s)
 
 update lens update = S.state $ \s -> ((), L.over lens update s)
 

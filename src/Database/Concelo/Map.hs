@@ -7,6 +7,7 @@ module Database.Concelo.Map
   , member
   , lookup
   , first
+  , pairs
   , insert
   , modify
   , delete
@@ -33,6 +34,8 @@ member k = V.member k . run
 lookup k = V.lookup k . run
 
 first = V.first . run
+
+pairs = V.pairs . run
 
 insert k v = Map . V.insert 0 k v . run
 

@@ -16,6 +16,7 @@ module Database.Concelo.Trie
   , paths
   , pathsAndValues
   , insert
+  , update
   , modify
   , delete
   , sub
@@ -43,11 +44,11 @@ trie = Trie
 
 empty r = Trie r V.empty
 
-key = V.key . run
+data Element k v = Element { key :: Maybe k
+                           , value :: Maybe v
+                           , subTrie :: Trie k v }
 
-value = V.value . run
-
-subTrie (Trie r t) = Trie r $ V.subTrie t
+root = Element Nothing Nothing
 
 firstPath = V.firstPath . run
 
