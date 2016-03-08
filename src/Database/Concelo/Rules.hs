@@ -171,7 +171,7 @@ hasChild visitor key = do
 
 queryVisitor visitor = do
   v <- visitor
-  update contextDependencies (T.union $ T.make $ getVisitorPath v)
+  update contextDependencies (T.union $ Path.toPath $ getVisitorPath v)
   return v
 
 queryValue visitor = (T.value . getVisitorTrie) <$> queryVisitor visitor

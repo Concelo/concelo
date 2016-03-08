@@ -1,27 +1,25 @@
 module Database.Concelo.Trie
   ( Trie()
   , trie
+  , isEmpty
   , empty
-  , key
-  , value
+  , isLeaf
+  , leaf
   , firstPath
   , first
   , find
   , findValue
-  , findTrie
   , member
   , hasAll
   , hasAny
-  , triples
+  , foldrPaths
   , paths
+  , foldrPathsAndValues
   , pathsAndValues
-  , insert
-  , update
-  , modify
-  , delete
+  , values
   , sub
   , super
-  , singleton
+  , superValue
   , union
   , intersectL
   , intersectR
@@ -29,26 +27,29 @@ module Database.Concelo.Trie
   , subtractAll ) where
 
 import qualified Database.Concelo.VTrie as V
-import qualified Database.Concelo.Map as M
 
-data Trie k v = Trie { version :: Integer
-                     , run :: V.VTrie k v }
+newtype Trie k v = Trie { run :: V.VTrie k v }
 
-instance Functor VTrie where
-  fmap f (Trie v t) = Trie v $ fmap f t
+instance Functor (Trie k) where
+  fmap f = Trie . fmap f . run
 
-instance M.FoldableWithKey Trie where
-  foldrWithKey visit seed = foldrWithKey visit seed . run
+instance Foldable (Trie k) where
+  foldr visit seed = foldr visit seed . run
+
+instance TrieLike Trie where
+  value = value . run
+  member path = member path . run
+  foldrPairs visit seed = foldrParis visit seed . run
 
 trie = Trie
 
-empty r = Trie r V.empty
+isEmpty = V.isEmpty . run
 
-data Element k v = Element { key :: Maybe k
-                           , value :: Maybe v
-                           , subTrie :: Trie k v }
+empty = Trie $ V.empty
 
-root = Element Nothing Nothing
+isLeaf = V.isLeaf . run
+
+leaf v = Trie $ V.leaf v
 
 firstPath = V.firstPath . run
 
@@ -58,11 +59,9 @@ find path = V.find path . run
 
 findValue path = V.findValue path . run
 
-findTrie path (Trie r t) = Trie r $ V.findTrie path t
-
 member path = V.member path . run
 
-isSuperSetOf super sub = V.isSuperSetOf (run super) (run sub)
+hasAll a b = V.hasAll (run a) (run b)
 
 triples trie = (\(k, v, sub) -> (k, v, Trie sub)) <$> run trie
 

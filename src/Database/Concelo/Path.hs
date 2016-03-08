@@ -1,28 +1,36 @@
 module Database.Concelo.Path
   ( Path()
-  , empty
+  , leaf
+  , singleton
   , toPath
+  , keys
+  , value
   , sub
-  , super
-  , singleton ) where
+  , super ) where
 
-import qualified Database.Concelo.Trie as T
-import qualified Database.Concelo.Map as M
+import qualified Database.Concelo.TrieLike as TL
 
-newtype Path k v = Path { keys :: [k]
-                        , value :: Maybe v }
+data Path k v = Path { getPathKeys :: [k]
+                     , getPathValue :: v }
 
-instance Functor Trie where
-  fmap f (Path ks v) = Path ks (fmap f v)
+instance Functor Path where
+  fmap f (Path ks v) = Path ks (f v)
 
-empty = Path [] Nothing
+instance Foldable (Path k) where
+  foldr visit seed (Path _ v) = visit v seed
 
-toPath ks v = Path ks $ Just v
-
-sub = \case
-  Path (k:ks@(_:_)) v -> Path ks v
-  _ -> empty
-
-super k (Path ks v) = Path (k:ks) v
+leaf v = Path [] v
 
 singleton k v = Path [k] v
+
+keys = getPathKeys
+
+value = getPathValue
+
+toPath = Path
+
+sub = \case
+  Path (k:ks) v -> Just (Path ks v)
+  p -> Nothing
+
+super k (Path ks v) = Path (k:ks) v

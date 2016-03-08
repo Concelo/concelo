@@ -118,11 +118,11 @@ addMissing group members = do
         Nothing -> addMissingToGroups member group result
 
         Just (P.Group { P.getGroupMembers = members }) ->
-          foldr visit result $ T.paths members
+          T.foldrPaths visit result members
 
         Just _ -> result
 
-  update subscriberMissing $ \missing -> foldr visit missing $ T.paths members
+  update subscriberMissing $ \missing -> T.foldrPaths visit missing members
 
 updateMissing member =
   update subscriberMissing $ BT.reverseDelete member
@@ -411,7 +411,7 @@ assertComplete name =
   when (not complete) missingChunks
 
 receiveChunk chunk name members = do
-  update subscriberReceived $ T.insert name chunk
+  update subscriberReceived $ T.union (const chunk $ name)
   addMissing name members
   removeMissing name
   checkIncomplete

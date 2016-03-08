@@ -40,7 +40,7 @@ desSanitized =
   L.lens getDesSanitized (\x v -> x { getDesSanitized = v })
 
 visitDirty revision acl rules result =
-  foldr (visit M.empty (Path.root ()) rules acl dirty) result $ T.keys dirty
+  T.foldrKeys (visit M.empty (Path.root ()) rules acl dirty) result dirty
   where
     (dirty, _, _) = result
 
@@ -95,20 +95,20 @@ visitDirty revision acl rules result =
                   (firstValid <|> (L.set P.valueACL acl' <$> value)) tail
 
                 Nothing ->
-                  foldr visitDirty'
+                  T.foldrKeys visitDirty'
                   (remainingDirty',
                    case firstValid of
                      Nothing -> T.subtract path sanitized
                      Just v -> T.union (const v <$> path) sanitized,
                    dependencies')
-                  $ T.keys dirty' in
+                  dirty' in
 
           if remainingDirty `T.hasAny` writeDependencies then
-            foldr visitDirty' result $ T.keys dirty'
+            T.foldrKeys visitDirty' result dirty'
           else
             if maybe True (\v -> valueSigner v `ACL.isWriter` acl') value then
               if remainingDirty' `T.hasAny` validateDependencies then
-                foldr visitDirty' result $ T.keys dirty'
+                T.foldrKeys visitDirty' result dirty'
               else
                 next if validateResult then value else Nothing
             else
@@ -121,17 +121,17 @@ updateSanitized revision acl currentSanitized updatedUnsanitized
 
       unsanitized = T.union obsoleteUnsanitized newUnsanitized
 
-      dirty = foldr findDirty unsanitized $ T.paths unsanitized
+      dirty = T.foldrPaths findDirty unsanitized unsanitized
 
       remainingDependencies = BT.subtract dirty currentDependencies
 
       findDirty path result =
-        foldr findDirty
+        T.foldrPaths findDirty
         (T.union
          (fromMaybe (UnsanitizedElement T.empty)
           (T.findValue path updatedUnsanitized) <$> path)
          result)
-        (T.paths $ BT.reverseFind path currentDependencies)
+        (BT.reverseFind path currentDependencies)
 
       clean result@(dirty, sanitized, dependencies)
         | null dirty = (sanitized, dependencies)
@@ -143,7 +143,7 @@ newtype UnsanitizedElement =
   { getUnsanitizedElementMap :: M.Map BS.ByteString P.Value }
 
 unionUnsanitized signer small large =
-  foldr visit large $ T.pathsAndValues small where
+  T.foldrPathsAndValues visit large small where
 
     visit (path, new) result =
       case T.findValue path large of
@@ -158,7 +158,7 @@ unionUnsanitized signer small large =
         Just v -> UnsanitizedElement $ M.insert new v map
 
 subtractUnsanitized small large =
-  foldr visit large $ T.pathsAndValues small where
+  T.foldrPathsAndValues visit large small where
 
     visit (path, obsolete) result =
       case T.findValue path large of

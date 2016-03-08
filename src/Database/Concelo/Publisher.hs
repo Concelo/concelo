@@ -39,12 +39,12 @@ nextMessage =
 
 receive hashAccessible = \case
   P.Nack path ->
-    (T.find path <$> get publisherAcks) >>= \case
-      Just (nack, message) ->
+    (T.findValue path <$> get publisherAcks) >>= \case
+      Just message ->
         let h = P.getMessageKeyHash message in
         if null h || hashAccessible h then do
-          update publisherNacks $ T.union nack
-          update publisherAcks $ T.subtract nack
+          update publisherNacks $ T.union (const message <$> nack)
+          update publisherAcks $ T.subtract path
           return ()
         else
           return ()

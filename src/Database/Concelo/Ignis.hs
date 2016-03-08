@@ -242,10 +242,10 @@ validateDiff me revision rules acl head (obsolete, new) =
           = foldM (validate rules' acl' env' union' obsolete' new' visitor')
             (T.empty, T.empty) $ T.triples union'
 
-        obsoleteValue = T.lookup k obsolete
+        obsoleteValue = T.value obsolete'
 
-        newValue = (L.set P.valueACL acl') <$> T.lookup k new
+        newValue = (L.set P.valueACL acl') <$> T.value new'
 
         descend =
-          (T.union (T.superKV k obsoleteValue obsoleteSubs) obsoleteResult
-           T.union (T.superKV k newValue newSubs) newResult)
+          (T.union (T.superValue obsoleteValue k obsoleteSubs) obsoleteResult
+           T.union (T.superValue newValue k newSubs) newResult)

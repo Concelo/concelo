@@ -1,23 +1,30 @@
 module Database.Concelo.VTrie
   ( VTrie()
+  , vtrie
+  , isEmpty
   , empty
+  , isLeaf
+  , leaf
+  , value
   , firstPath
   , first
   , find
   , findValue
-  , findTrie
   , member
   , hasAll
   , hasAny
-  , triples
+  , foldrPaths
   , paths
+  , foldrPathsAndValues
   , pathsAndValues
-  , insert
-  , modify
-  , delete
+  , foldrKeys
+  , keys
+  , foldrTriples
+  , triples
+  , values
   , sub
   , super
-  , singleton
+  , superValue
   , union
   , intersectL
   , intersectR
@@ -30,252 +37,231 @@ module Database.Concelo.VTrie
 import qualified Database.Concelo.VMap as V
 import qualified Database.Concelo.Map as M
 import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.TrieLike as TL
 import qualified Database.Concelo.Path as P
 import qualified Control.Lens as L
 
-newtype VTrie k v = VTrie { run :: V.VMap k (Cell k v) }
+data Versioned v = { getVersionedVersion :: Integer
+                   , getVersionedValue :: v }
 
-instance Functor VTrie where
-  fmap f = VTrie . foldr visit V.empty . V.triples . run where
-    visit (r, k, (Cell v sub)) = V.insert r k (Cell (f v) (fmap f sub))
+data VTrie k v = VTrie { getVTrieVersioned :: Maybe (Versioned v)
+                       , getVTrieMap :: V.VMap k (VTrie k v) }
 
-instance M.FoldableWithKey VTrie where
-  foldrWithKey visit seed = foldrWithKey visit seed . run
+instance Functor Versioned where
+  fmap = L.over versionedValue
 
-data Cell k v = Cell { getCellValue :: Maybe v
-                     , getCellSubTrie :: VTrie k v }
+instance Functor (VTrie k) where
+  fmap f (VTrie v m) = VTrie (fmap f v) (fmap (fmap f) m)
 
-cellValue = L.lens getCellValue (\x v -> x { getCellValue = v })
+instance Foldable (VTrie k) where
+  foldr visit seed (VTrie v m) = case v of
+    Nothing -> below
+    Just value -> visit value below
+  where
+    below = foldr (\t r -> foldr visit r t) seed m
 
-cellSubTrie = L.lens getCellSubTrie (\x v -> x { getCellSubTrie = v })
+instance TrieLike VTrie where
+  value = value'
+  member = member'
+  foldrPairs = foldrPairs'
 
-cellIsEmpty (Cell v sub) = isNothing v && null sub
+vtrie = VTrie
 
-empty = VTrie V.empty
+isEmpty (VTrie v m) = isNothing v && null m
 
-firstPath (VTrie map) =
-  V.first map >>= \(k, (Cell v sub)) ->
-  if null sub then
-    Just $ P.singleton k v
-  else
-    P.super k Nothing <$> firstPath sub
+empty = VTrie Nothing V.empty
 
-first (VTrie map) =
-  V.first map >>= \(_, (Cell v sub)) ->
-  if null sub then
-    Just v
-  else
-    first sub
+isLeaf (VTrie _ m) = null m
 
-find path trie@(VTrie map) =
-  case P.key path of
-    Nothing -> Nothing
-    Just k ->
-      let subPath = P.sub path
-      if null subPath then
-        (\v -> (P.singleton k v, v)) <$> value trie
-      else
-        (\(p, v) -> (P.super k, v))
-        <$> ((getCellSubTrie <$> V.lookup k map) >>= find subPath)
+leaf v = VTrie (Just v) V.empty
 
-findValue path trie = snd <$> find path trie
+value = value'
 
-member path = isJust . find path
+value trie = getVersionedValue <$> getVTrieVersioned trie
 
-hasAll large small =
-  findAll $ paths small where
-    findAll [] = True
-    findAll (p:ps) = member p large && findAll ps
+firstPath (VTrie v m)
+  | null m = P.root . getVersionedValue <$> v
+  | otherwise = ((k, t) -> P.super k <$> firstPath t) <$> V.first m
 
-hasAny large small =
-  findAny $ paths small where
-    findAny [] = False
-    findAny (p:ps) = member p large || findAny ps
+first (VTrie v m)
+  | null m = getVersionedValue <$> v
+  | otherwise = first . snd <$> V.first m
 
-triples trie@(VTrie map) =
-  M.foldrWithKey visit [] map where
-    visit key (Cell v sub) result = (key, v, sub) : result
+find path trie = case P.subPair path of
+  Nothing -> trie
+  Just (k, sub) -> find sub $ sub k trie
 
-pathsAndValues trie@(VTrie map) =
-  M.foldrWithKey visit [] map where
-    visit key (Cell v sub) result =
-      ((\(p, v) -> (P.super key p, v) <$> pathsAndValues sub)
-      ++ maybe result (\v -> (P.singleton key v, v) : result) v
+findValue path trie =
+  getVersionedValue <$> (getVTrieVersioned =<< find path trie)
 
-paths trie = fst <$> pathsAndValues trie
+member = member'
 
-findTrie path trie =
-  case P.key path of
-    Nothing -> trie
-    Just k -> find' (P.sub path) (sub k trie)
+member' path = isJust . findValue path
 
-insert version key value = modify version key (const $ Just value)
+hasAll large = foldrPaths (\p -> (TL.member p large &&)) True
 
-modify version key transform (VTrie map) =
-  VTrie $ V.modify version key
-  (\case
-      Nothing -> case transform Nothing of
-        Nothing -> Nothing
+hasAny large = foldrPaths (\p -> (TL.member p large ||)) False
 
-        v -> Just $ Cell v empty
+foldrPairs' visit seed (VTrie _ m) = V.foldrKeysAndValues visit seed m
 
-      Just (Cell v sub) -> case transform v of
-        Nothing -> if null sub then
-                     Nothing
-                   else
-                     Just $ Cell Nothing sub
+foldrPathsAndValues visit seed (VTrie v m) =
+  case v of
+    Nothing -> below
+    Just value -> (P.root value, value) : below
+  where
+    below =
+      V.foldrKeysAndValues
+      (\(k, v) r ->
+        foldrPathsAndValues
+        (\(p, v) ->
+          visit (P.super k p, v))
+       r t) m
 
-        v -> Just $ Cell v sub)
-  map
+pathsAndValues = foldrPathsAndValues (:) []
 
-delete version key = modify version key (const Nothing)
+foldrKeys visit seed (VTrie _ m) = V.foldrKeysAndValues (visit . fst) seed m
 
-sub key (VTrie map) = maybe empty getCellSubTrie $ find key map
+keys = foldrKeys (:) []
 
-superKV version key value trie =
-  let new = Cell value trie in
-  if cellIsEmpty new then
-    empty
-  else
-    VTrie $ V.insert version key (Cell value trie) empty
+foldrTriples visit seed (VTrie _ m) =
+  V.foldrKeysAndValues
+  (\(k, VTrie v m) -> visit (k, getVersionedValue <$> v, m)) seed m
 
-super version key = superKV version key Nothing
+triples = foldrTriples (:) []
 
-singleton version key value = superKV version key (Just value) empty
+foldrPaths visit = foldrPathsAndValues (visit . fst)
 
-union version small (VTrie large) =
-  VTrie $ M.foldrWithKey visit large small where
-    visit k cell@(Cell sv ss) result = case V.lookup k large of
-      Nothing ->
-        V.insert version k cell result
-      Just (Cell lv ls) ->
-        V.insert version k (Cell (sv <|> lv) (union version ss ls)) result
+paths trie = foldrPaths (:) []
+
+values = foldr (:) []
+
+sub key = fromMaybe empty . V.lookup key . map
+
+single version key trie
+  | isEmpty trie = V.empty
+  | otherwise = V.singleton version key trie
+
+superValue version value key =
+  VTrie (Just (Versioned version value)) . single version key
+
+super version key = VTrie Nothing . single version key
+
+union version small (VTrie largeValue largeMap) =
+  let v = (TL.value small <|> = largeValue in
+
+  VTrie v $ TL.foldrPairs visit largeMap small where
+    visit (k, a) = V.insert version k case V.lookup k largeMap of
+      Nothing -> a
+      Just b -> union version a b
 
 intersectL = instersect $ \a _ -> a
 
 intersectR = instersect $ \_ b -> b
 
-intersect pick version small (VTrie large) =
-  VTrie $ M.foldrWithKey visit empty small where
-    visit k cell@(Cell sv ss) result = case V.lookup k large of
-      Nothing ->
-        result
-      Just (Cell lv ls) ->
-        let new = Cell (sv >> lv >> pick sv lv) (intersect version ss ls) in
-        if cellIsEmpty new then
-          result
-        else V.insert version k new result
+intersect pick version small (VTrie largeValue largeMap) =
+  let sv = TL.value small
+      lv = largeValue
+      v = sv >> lv >> pick sv lv in
 
-subtract version small (VTrie large) =
-  VTrie $ M.foldrWithKey visit large small where
-    visit k cell@(Cell sv ss) result = case V.lookup k large of
-      Nothing ->
-        result
-      Just (Cell lv ls) ->
-        let new = Cell (if isNothing sv then lv else Nothing)
-                  (subtract version ss ls) in
-        if cellIsEmpty new then
-          V.delete version k result
-        else
-          V.insert version k new result
+  VTrie v $ TL.foldrPairs visit V.empty small where
+    visit (k, a) = case V.lookup k largeMap of
+      Nothing -> id
+      Just b -> let trie = intersect pick version a b in
+        if isEmpty trie then id else V.insert version k trie
 
-subtractAll version small (VTrie large) =
-  VTrie $ M.foldrWithKey visit large small where
-    visit k cell@(Cell sv ss) result = case V.lookup k large of
-      Nothing ->
-        result
-      Just (Cell lv ls) ->
-        let new = Cell lv (subtract version ss ls) in
-        if isJust sv || cellIsEmpty new then
-          V.delete version k result
-        else
-          V.insert version k new result
+subtract version small (VTrie largeValue largeMap) =
+  let sv = TL.value small
+      lv = largeValue
+      v = if isNothing sv then lv else Nothing in
 
-insertCell k v sub (VTrie map) = VTrie $ V.insert 0 k (Cell v sub) map
+  VTrie v $ TL.foldrPairs visit large small where
+    visit (k, a) = case V.lookup k largeMap of
+      Nothing -> id
+      Just b -> let trie = subtract version a b in
+        if isEmpty trie then V.delete version k else V.insert version k trie
 
-diff (VTrie a) (VTrie b) =
-  V.foldrDiff visit (empty, empty) a b where
+subtractAll version small (VTrie largeValue largeMap) =
+  let sv = TL.value small
+      lv = largeValue in
+
+  if isJust sv then
+    empty
+  else
+    VTrie lv $ TL.foldrPairs visit large small where
+      visit (k, a) = case V.lookup k largeMap of
+        Nothing -> id
+        Just b -> let trie = subtract version a b in
+          if isEmpty trie then V.delete version k else V.insert version k trie
+
+diffMaps a b =
+  V.foldrDiff visit (M.empty, M.empty) a b where
     visit key maybeA maybeB result@(obsoletes, news) = case maybeA of
-      Just (aVersion, Cell aValue aSub) -> case maybeB of
-        Just (bVersion, Cell bValue bSub) ->
-          let (obsolete, new) = diff aSub bSub in
-          if aVersion == bVersion then
-            if null obsolete then
-              if null new then
-                result
-              else
-                (obsoletes,
-                 insertCell key Nothing new news)
-            else
-              if null new then
-                (insertCell key Nothing obsolete obsoletes,
-                 news)
-              else
-                (insertCell key Nothing obsolete obsoletes,
-                 insertCell key Nothing new news)
-          else
-            (insertCell key aValue obsolete obsoletes,
-             insertCell key bValue new news)
+      Just a -> case maybeB of
+        Just b -> let (obsolete, new) = diff a b in
+          (if null obsolete then
+             obsoletes
+           else
+             M.insert key obsolete obsoletes,
 
-        Nothing -> (insertCell key aValue aSub obsoletes,
-                    news)
+           if null new then
+             news
+           else
+             M.insert key new news)
+
+        Nothing -> (M.insert key a obsoletes, news)
+
       Nothing -> case maybeB of
-        Just b -> (obsoletes,
-                   insertCell key bValue bSub news)
+        Just b -> (obsoletes, M.insert key b news)
+
         Nothing -> result
+
+diff (VTrie aV aM) (VTrie bV bM) =
+
+  let (obsolete, new) = diffMaps aM bM in
+
+  fromJust (T.trie aV obsolete, T.trie bV new) do
+    (Versioned aR _) <- aV
+    (Versioned bR _) <- bV
+
+    if aR == aV then Just (T.Trie Nothing obsolete, T.Trie Nothing new)
+      else Nothing
 
 data MergePref = LeftPref | RightPref
 
 mergeL = merge LeftPref
 mergeR = merge RightPref
 
-insertCellVersioned tv vv k v sub =
-  VTrie $ V.insertVersioned tv vv k (Cell v sub) . run
-
-deleteCellVersioned tv k = VTrie $ V.delete tv k . run
-
 merge pref version base left right =
-  walk base left right where
-    walk (VTrie base) (VTrie left) (Vtrie right) =
-      V.foldrDiff (visit base) right left right
+  mergeTries base left right where
 
-    visit base key maybeLeft maybeRight result =
-      case V.lookupVersioned key base of
-        Just (baseVersion, Cell baseValue baseSub) -> case maybeLeft of
-          Just (leftVersion, Cell leftValue leftSub) ->
-            let (rightVersion, Cell rightValue rightSub) =
-                  fromMaybe (version, Cell Nothing empty) maybeRight
+    mergeTries (VTrie bV bM) (VTrie lV lM) (VTrie rV rM) =
+      VTrie v $ mergeMaps bM lM rM where
+        v = case bV of
+          Just (Versioned bR _) -> case lV of
+            Just (Versioned lR _) ->
+              if lR == bR || pref == RightPref then rV else lV
 
-                sub = walk baseSub leftSub rightSub
+            Nothing -> case rV of
+              Just (Versioned rR _) ->
+                if rR == bR || pref == LeftPref then lV else rV
 
-                (valueVersion, value) =
-                  if baseVersion == leftVersion || pref == RightPref then
-                    (rightVersion, rightValue)
-                  else
-                    (leftVersion, leftValue) in
+              Nothing -> Nothing
 
-            if null sub && isNothing value then
-              deleteCellVersioned version key result
-            else
-              insertCellVersioned version valueVersion key value sub result
+          Nothing ->
+            if isNothing lV || pref == RightPref then rV else lV
 
-          Nothing -> case maybeRight of
-            Just (rightVersion, Cell rightValue rightSub) ->
-              if baseVersion == rightVersion || pref == LeftPref then
-                deleteCellVersioned version key result
-              else
-                result
+    mergeMaps b l r =
+      V.foldrDiff (visit b) (if pref == LeftPref then l else r) l r
 
-            Nothing ->
-              result
+    maybeEmpty = fromMaybe empty
 
-        Nothing -> case maybeLeft of
-          Just (leftVersion, Cell leftValue leftSub) ->
-            let left = insertCellVersioned version leftVersion key leftValue
-                       leftSub result in
-            case maybeRight of
-              Just (rightVersion, Cell rightValue rightSub) -> case pref of
-                LeftPref -> left
-                RightPref -> result
-            Nothing -> left
-          Nothing -> result
+    visit base key maybeL maybeR =
+      let merged = mergeTries
+                   (maybeEmpty $ V.lookup key base)
+                   (maybeEmpty maybeL)
+                   (maybeEmpty maybeR) in
+
+      if isEmpty merged then
+        V.delete version key
+      else
+        V.insert version key merged
