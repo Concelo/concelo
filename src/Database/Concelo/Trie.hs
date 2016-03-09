@@ -27,6 +27,7 @@ module Database.Concelo.Trie
   , subtractAll ) where
 
 import qualified Database.Concelo.VTrie as V
+import qualified Database.Concelo.TrieLike as TL
 
 newtype Trie k v = Trie { run :: V.VTrie k v }
 
@@ -36,10 +37,10 @@ instance Functor (Trie k) where
 instance Foldable (Trie k) where
   foldr visit seed = foldr visit seed . run
 
-instance TrieLike Trie where
+instance TL.TrieLike Trie where
   value = value . run
   member path = member path . run
-  foldrPairs visit seed = foldrParis visit seed . run
+  foldrPairs visit seed = foldrPairs visit seed . run
 
 trie = Trie
 

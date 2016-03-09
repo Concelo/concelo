@@ -181,6 +181,8 @@ updatePublisher = do
 
   with (Pipe.pipePublisher . ignisPipe) $ Pub.update serialized
 
+whoAmI = fromMaybe $ error "I don't know who I am!"
+
 makeDiff head = do
   me <- (fmap credPublic <$> get ignisCred) >>= whoAmI
 

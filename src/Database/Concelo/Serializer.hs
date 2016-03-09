@@ -1,95 +1,205 @@
 module Database.Concelo.Serializer
   ( serialize ) where
 
-byACL path value = Path.super (getValueACL value) path
+import Database.Concelo.Control (exception, get, with, try, updateM,
+                                 patternFailure)
 
-withSerializer constructor f =
-  ignisCred >>= \case
-    Nothing -> error "cannot encrypt without private key"
-    Just cred ->
-      with ignisPRNG (f . constructor (getCredPrivate cred))
+import qualified Control.Lens as L
+import qualified Data.ByteString as BS
+import qualified Database.Concelo.Path as Path
+import qualified Database.Concelo.Protocol as P
+import qualified Database.Concelo.ACL as ACL
+import qualified Database.Concelo.Crypto as C
+import qualified Database.Concelo.Map as M
+import qualified Database.Concelo.ST as SyncTree
+import qualified Database.Concelo.Trie as T
 
-updateTrees (obsoleteValues, newValues) = do
-  with ignisACLTrees \trees ->
-    withSerializer ValueSerializer \serializer ->
-      foldr update (((T.empty, T.empty, T.empty, T.empty), trees), serializer)
-            $ T.union (T.keys obsoleteValues) (T.keys newValues) where
+data KeyPair =
+  KeyPair { getKeyPairPublic :: BS.ByteString
+          , getKeyPairPrivate :: BS.ByteString }
 
-    update acl (((allObsolete, allNew, obsoleteTrees, newTrees),
-                 trees), serializer) =
+data Tree =
+  Tree { getTreeKey :: BS.ByteString
+       , getTreeLeafSync :: ST.SyncTree P.Value
+       , getTreeACLSync :: ST.SyncTree BS.ByteString
+       , getTreeMessage :: P.Message }
 
-      (((T.union obsolete' allObsolete,
-         T.union new' allNew,
+data Forest =
+  Forest { getForestStream :: BS.ByteString
+         , getForestTreeSync :: ST.SyncTree P.Name
+         , getForestMessage :: P.Message }
 
-         if ST.null (getAnnotatedValue tree) then
-           obsoleteTrees else
-           T.insert acl tree obsoleteTrees,
+data Serializer =
+  Serializer { getSerializerKeyPair :: KeyPair
+             , getSerializerPRNG :: C.PRNG
+             , getSerializerTrees :: M.Map BS.ByteString Tree
+             , getSerializerForest :: Forest
+             , getSerializerDiff :: (T.Trie BS.ByteString P.Message,
+                                     T.Trie BS.ByteString P.Message) }
 
-         if ST.null tree' then
-           newTrees else
-           T.insert acl (Annotated tree' acl) newTrees),
+serializerKeyPair =
+  L.lens getSerializerKeyPair (\x v -> x { getSerializerKeyPair = v })
 
-        if ST.null tree' then
-          T.delete acl trees else
-          T.insert acl tree' trees),
+serializerPRNG =
+  L.lens getSerializerPRNG (\x v -> x { getSerializerPRNG = v })
 
-       serializer') where
+serializerTrees =
+  L.lens getSerializerTrees (\x v -> x { getSerializerTrees = v })
 
-        tree = fromMaybe ST.empty $ T.find (T.key acl) trees
+serializerForest =
+  L.lens getSerializerForest (\x v -> x { getSerializerForest = v })
 
-        (tree', serializer', obsolete', new') =
-          ST.update (annotatedValue tree) serializer
-          (T.sub acl obsoleteValues) (T.sub acl newValues)
+serializerDiff =
+  L.lens getSerializerDiff (\x v -> x { getSerializerDiff = v })
 
-whoAmI = fromMaybe $ error "I don't know who I am!"
+byACL path value = Path.super (ACL.hash $ L.view P.valueACL value) path
 
-updateMyTree (allObsolete, allNew, obsoleteTrees, newTrees) = do
-  cred <- get ignisCred >>= whoAmI
-  challenge <- get ignisChallenge >>= whoAmI
-  revision <- getThenUpdate ignisNextRevision (+1)
-  time <- get ignisUpdateTime
-   -- all trees from other writers using the same keypair we're using
-   -- except for the most recent published revision, if applicable:
-  obsoleteTrees <- get ignisPeerTrees
+data SyncState =
+  SyncState { getSyncStateSerialize :: a -> [BS.ByteString]
+            , getSyncStateKey :: BS.ByteString
+            , getSyncStatePRNG :: C.PRNG }
 
-  with ignisMyTree \tree ->
-    -- NB: the acl serializer will enumerate the key encrypted for all authorized readers
-    withSerializer ACLTreeSerializer \serializer ->
-      let (tree', serializer', obsolete', new') =
-            ST.update (annotatedValue tree) serializer obsoleteTrees
-            newTrees
-          annotated = (Annotate tree'
-                       (Stamp
-                        (getIgnisPublic cred) challenge revision time)) in
-      (((T.union obsolete' allObsolete,
-         T.union new' allNew,
+syncStateSerialize =
+  L.lens getSyncStateSerialize (\x v -> x { getSyncStateSerialize = v })
 
-         if ST.isEmpty (getAnnotatedValue tree) then
-           obsoleteTrees else
-           T.insert key tree obsoleteTrees,
+syncStateKey =
+  L.lens getSyncStateKey (\x v -> x { getSyncStateKey = v })
 
-         if ST.isEmpty tree' then
-           T.empty else
-           T.singleton revision annotated),
+syncStatePRNG =
+  L.lens getSyncStatePRNG (\x v -> x { getSyncStatePRNG = v })
 
-        annotated),
-       serializer')
+split maxSize s =
+  let (a, b) = BS.splitAt maxSize s in
+  if null b then
+    [a]
+  else
+    a : split maxSize b
 
-updateRootTree (allObsolete, allNew, obsoleteTrees, newTrees) = do
-  with ignisRootTree \tree ->
-    withSerializer WriterTreeSerializer \serializer ->
-      let (tree', serializer', obsolete', new') =
-            ST.update tree serializer obsoleteTrees newTrees in
-      (((T.union obsolete' allObsolete,
-         T.union new' allNew),
-        tree'),
-       serializer')
+serializeValues = P.serializeTrie . fmap P.serializeValue
 
-maybeUpdateTrees =
-  get ignisDiff >>= \case
-    Nothing -> return ()
-    Just diff ->
-      updateACLTrees $ mapPair (T.indexPaths byACL) diff
-      >>= updateMyTree
-      >>= updateRootTree
-      >>= \diff -> with ignisPublisher $ Pub.update diff
+serializeStrings = P.serializeTrie
+
+serializeNames = P.serializeNames
+
+instance ST.Serializer SyncState where
+  serialize trie = split P.leafSize <$> ($ trie) <$> get syncStateSerialize
+
+  encrypt plaintext = do
+    let length = BS.length plaintext
+
+    when (length > P.leafSize) (exception "plaintext too large")
+
+    key <- get syncStateKey
+
+    if null key then
+      return plaintext
+      else do
+      padding <- with syncStatePRNG $ C.randomBytes (P.leafSize - length)
+
+      with syncStatePRNG
+        $ C.encryptSymmetric key (plaintext `BS.append` padding)
+
+newTree = do
+  key <- with serializerPRNG $ C.randomBytes C.symmetricKeySize
+  return Tree key ST.empty ST.empty P.NoMessage
+
+sync serialize syncTree key obsolete new = do
+  prng <- get serializerPRNG
+
+  ((result, obsolete, new), SyncState _ _ prng') <-
+    try (ST.update syncTree obsolete new)
+    (SyncState serialize key prng)
+
+  set serializerPRNG prng'
+
+  update serializerDiff $ \(allObsolete, allNew) ->
+    (T.union obsolete allObsolete,
+     T.union new allNew)
+
+  return result
+
+updateTrees revision obsoleteByACL newByACL unionByACL = do
+  pair <- get serializerKeyPair
+  trees <- get serializerTrees
+  forestStream <- get (forestStream . serializerForest)
+
+  foldM visit (T.empty, T.empty) $ T.keys unionByACL where
+    unionByACL = T.union obsoleteByACL newByACL
+
+    visit stream result@(obsolete, new) = do
+      acl <- maybe patternFailure return
+             $ T.firstValue
+             $ T.sub stream unionByACL
+
+      if ACL.isWriter (getKeyPairPublic pair) acl then do
+        let currentTree = M.lookup stream trees
+
+        tree <- maybe newTree return currentTree
+
+        let key = getTreeKey tree
+
+        leafSync <-
+          sync serializeValues key (getTreeLeafSync tree)
+          (T.sub stream obsoleteByACL) (T.sub stream newByACL)
+
+        aclSync <-
+          if isJust currentTree then
+            return $ getTreeACLSync
+          else do
+            sync serializeStrings BS.empty ST.empty T.empty $ ACL.toTrie acl
+
+        message <-
+          with serializerPRNG
+          $ P.tree (getKeyPairPublic pair, getKeyPairPrivate pair) stream
+          forestStream False (C.hash [key]) revision (ST.root aclSync)
+          (ST.root leafSync)
+
+        update serializerTrees
+          $ M.insert stream . Tree key leafSync aclSync message
+
+        update serializerDiff $ \(obsolete, new) ->
+          (if isJust currentTree then
+             let oldMessage = getTreeMessage tree in
+             T.union (const oldMessage <$> P.getTreeName oldMessage) obsolete
+           else
+             obsolete,
+           T.union (const message <$> P.getTreeName message) new)
+
+        return (if isJust currentTree then
+                  T.union (P.getTreeName $ getTreeMessage tree) obsolete
+                else
+                  obsolete,
+                T.union (P.getTreeName message) new)
+
+        else
+        return result
+
+updateForest revision (obsoleteTrees, newTrees) = do
+  pair <- get serializerKeyPair
+  forest <- get serializerForest
+
+  treeSync <-
+    sync serializeNames BS.empty (getForestTreeSync forest) obsoleteTrees
+    newTrees
+
+  let old = getForestMessage forest
+
+  message <-
+    P.forest (getKeyPairPublic pair, getKeyPairPrivate pair)
+    (getForestStream forest) revision signed (P.getForestAdminRevision old)
+    (P.getForestAdminSigned old) (P.getForestACL old) (ST.root treeSync)
+
+  set serializerForest $ Forest (getForestStream forest) treeSync message
+
+  update serializerDiff $ \(obsolete, new) ->
+    (let oldMessage = getForestMessage forest in
+      T.union (const oldMessage <$> P.getForestName oldMessage) obsolete,
+     T.union (const message <$> P.getForestName message) new)
+
+serialize revision (obsolete, new) = do
+  let obsoleteByACL = T.index byACL obsolete
+      newByACL = T.index byACL new
+
+  updateTrees revision obsoleteByACL newByACL >>= updateForest revision
+
+  getThenSet serializerDiff (T.empty, T.empty)

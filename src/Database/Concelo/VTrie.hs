@@ -23,8 +23,10 @@ module Database.Concelo.VTrie
   , triples
   , values
   , sub
+  , singleton
   , super
   , superValue
+  , index
   , union
   , intersectL
   , intersectR
@@ -60,7 +62,7 @@ instance Foldable (VTrie k) where
   where
     below = foldr (\t r -> foldr visit r t) seed m
 
-instance TrieLike VTrie where
+instance TL.TrieLike VTrie where
   value = value'
   member = member'
   foldrPairs = foldrPairs'
@@ -137,6 +139,10 @@ values = foldr (:) []
 
 sub key = fromMaybe empty . V.lookup key . map
 
+isolate key = super key . sub key
+
+singleton version key = super version key . leaf
+
 single version key trie
   | isEmpty trie = V.empty
   | otherwise = V.singleton version key trie
@@ -145,6 +151,9 @@ superValue version value key =
   VTrie (Just (Versioned version value)) . single version key
 
 super version key = VTrie Nothing . single version key
+
+index f = foldrPathsAndValues visit empty where
+  visit (p, v) = T.union . f p v
 
 union version small (VTrie largeValue largeMap) =
   let v = (TL.value small <|> = largeValue in

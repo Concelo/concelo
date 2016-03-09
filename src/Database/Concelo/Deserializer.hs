@@ -1,9 +1,19 @@
 module Database.Concelo.Deserializer
   ( deserialize ) where
 
+import Database.Concelo.Control (get)
+
 import qualified Data.ByteString as BS
 import qualified Control.Lens as L
 import qualified Control.Monad.State.Class as State
+import qualified Database.Concelo.Map as M
+import qualified Database.Concelo.Path as Path
+import qualified Database.Concelo.Rules as R
+import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.BiTrie as BT
+import qualified Database.Concelo.Subscriber as Sub
+import qualified Database.Concelo.Chunks as Chunks
+import qualified Database.Concelo.Crypto as C
 
 data KeyPair =
   KeyPair { getKeyPairPublic :: BS.ByteString
@@ -54,7 +64,7 @@ visitDirty revision acl rules result =
 
         dirty' = T.sub key $ dirty
 
-        path' = path `P.append` key
+        path' = path `Path.append` key
 
         env' = if null wildcard then env else M.set wildcard key env
 
@@ -106,7 +116,9 @@ visitDirty revision acl rules result =
           if remainingDirty `T.hasAny` writeDependencies then
             T.foldrKeys visitDirty' result dirty'
           else
-            if maybe True (\v -> valueSigner v `ACL.isWriter` acl') value then
+            if maybe True (\v -> L.view P.valueSigner v `ACL.isWriter` acl')
+               value
+            then
               if remainingDirty' `T.hasAny` validateDependencies then
                 T.foldrKeys visitDirty' result dirty'
               else
@@ -191,6 +203,12 @@ updateUnsanitizedDiff' key (obsoleteUnsanitized, newUnsanitized)
             Nothing -> result
 
         _ -> patternFailure
+
+diffChunks oldChunks oldRoot newChunks newRoot = do
+  (_, obsoleteLeaves, _, newLeaves) <-
+    Chunks.diffChunks oldChunks oldRoot newChunks newRoot
+
+  return (obsoleteLeaves, newLeaves)
 
 updateUnsanitizedDiff oldForest newForest (stream, newTree) result = do
   let oldTree =

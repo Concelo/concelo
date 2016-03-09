@@ -8,6 +8,7 @@ module Database.Concelo.Control
   , getThenUpdate
   , getThenSet
   , with
+  , try
   , Exception (Exception, PatternFailure, BadForest, MissingChunks, NoParse)
   , exception
   , patternFailure
@@ -75,12 +76,15 @@ getThenUpdate lens update =
 
 getThenSet lens value = S.state $ \s -> (L.get lens s, L.set lens value s)
 
-with lens action =
-  run action <$> get lens >>= \case
+try action state =
+  run action state >>= \case
     Left error -> throwError error
-    Right (result, state) -> do
-      set lens state
-      return result
+    Right result = return result
+
+with lens action =
+  try action <$> get lens >>= \(result, state) -> do
+    set lens state
+    return result
 
 mapPair f (x, y) = (f x, f y)
 
