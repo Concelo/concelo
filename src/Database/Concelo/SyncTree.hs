@@ -20,7 +20,8 @@ class Serializer a where
 type Key = BS.ByteString
 
 data State a b =
-  State { getStateTree :: SyncTree a
+  State { getStateMaxSize :: Int
+        , getStateTree :: SyncTree a
         , getStateSerializer :: b
         , getStateObsolete :: T.Trie Key (Chunk a)
         , getStateNew :: T.Trie Key (Chunk a) }
@@ -86,7 +87,7 @@ groupTrie (Leaf _ _) _ = T.empty
 groupTrie _ trie = trie
 
 byKey chunk@(Leaf _ path) = P.super leafKey $ fmap (const chunk) path
-byKey chunk@(Group name _ _) = P.super groupKey $ P.singleton name chunk
+byKey chunk@(Group name _ _ _) = P.super groupKey $ P.singleton name chunk
 
 byReverseKeyMember chunk = groupTrie chunk $ T.index byKey $ groupMembers chunk
 
@@ -134,7 +135,7 @@ makeGroup members =
   T.firstValue members >>= fromChunks where
     fromChunks = \case
       (Leaf serialized _) -> fromLeaves serialized
-      (Group _ height _) -> fromGroups height
+      (Group _ height _ _) -> fromGroups height
 
     fromLeaves first = do
       plaintext <- oneExactly <$> serialize' (T.index leafPath members)
@@ -155,7 +156,7 @@ makeGroup members =
       return do
         list <- collect 0 $ M.values members
 
-        Just $ Group (C.hash list) (height + 1) members (BS.concat list) where
+        Just $ Group (C.hash list) (height + 1) members BS.empty where
 
           collect count = \case
             member:members ->
@@ -237,7 +238,7 @@ split path =
 
 toLeaves path = T.union $ T.super "0" <$> split path
 
-update tree obsolete new = do
+update maxSize tree obsolete new = do
   obsoleteLeaves <- foldM toLeaves T.empty $ T.paths obsolete
 
   newLeaves <- foldM toLeaves T.empty $ T.paths new
@@ -249,7 +250,7 @@ update tree obsolete new = do
       findObsoleteGroups
       addNewGroups
       updateTree
-    $ State tree serializer obsoleteLeaves newLeaves
+    $ State maxSize tree serializer obsoleteLeaves newLeaves
 
   S.set (getStateSerializer state)
 

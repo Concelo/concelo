@@ -87,6 +87,18 @@ localVersion = (-1)
 
 leafSize = 1024
 
+treeLeafLevel = "0"
+
+treeACLLevel = "1"
+
+treeLevel = "2"
+
+forestTreeLevel = "3"
+
+forestACLLevel = "4"
+
+forestLevel = "5"
+
 toText = \case
   Leaf _ _ keyHash body ->
     return $ keyHash `BS.append` body
@@ -111,42 +123,65 @@ toText = \case
 
 dummySigned = Signed BS.empty BS.empty BS.empty
 
-tree (public, private) stream forestStream optional keyHash revision acl
-  leaves = do
-    let tree = Tree BS.empty stream forestStream optional keyHash revision
-               dummySigned acl leaves
+dummyName = P.singleton ()
 
-    text <- toText tree
-
-    let hash = C.hash text
-
-    signature <- C.sign private hash
-
-    return tree { getTreeName = P.singleton treeLevel hash
-                , getTreeSigned = Signed public signature text }
-
-forest (public, private) stream revision adminRevision adminSigned acl trees
-  = do
-    let forest = Forest BS.empty stream revision dummySigned adminRevision
-                 adminSigned acl trees
-
-    text <- toText forest
-
-    let hash = C.hash text
-
-    signature <- C.sign private hash
-
-    return forest { getForestName = P.singleton forestLevel hash
-                  , getForestSigned = Signed public signature text }
-
-sign (public, private) message =
-  text <- toString message
+digest message (public, private) = do
+  text <- toText message
 
   signature <- C.sign private text
 
-  return $ Signed public signature text
+  return (text, Signed public signature text)
 
+leaf keyPair level keyHash body = do
+  let leaf = Leaf dummyName dummySigned keyHash body
 
+  (text, signed) <- digest leaf keyPair
+
+  return leaf { getLeafName = P.super level
+                              $ P.super "1"
+                              $ P.singleton (C.hash [body]) ()
+
+              , getLeafSigned = signed }
+
+group keyPair level height keyHash members = do
+  let group = Group dummyName dummySigned keyHash
+              $ foldr (\member ->
+                        T.union
+                        $ P.super level
+                        $ P.super (BS.pack $ show $ height - 1)
+                        $ P.singleton member ()) T.empty members
+
+  (text, signed) <- digest leaf keyPair
+
+  return group { getGroupName = P.super level
+                              $ P.super (BS.pack $ show height)
+                              $ P.singleton (C.hash members) ()
+
+               , getGroupSigned = signed }
+
+tree (public, private) stream forestStream optional keyHash revision acl
+  leaves = do
+    let tree = Tree dummyName stream forestStream optional keyHash revision
+               dummySigned acl leaves
+
+    (text, signed) <- digest tree keyPair
+
+    return tree { getTreeName = P.super treeLevel
+                                $ P.singleton (C.hash [text]) ()
+
+                , getTreeSigned = signed }
+
+forest (public, private) stream revision adminRevision adminSigned acl trees =
+  do
+    let forest = Forest dummyName stream revision dummySigned adminRevision
+                 adminSigned acl trees
+
+    (text, signed) <- digest tree keyPair
+
+    return forest { getForestName = P.super forestLevel
+                                    $ P.singleton (C.hash [text]) ()
+
+                  , getForestSigned = signed }
 
 getMessageKeyHash = \case
   Leaf { getLeafKeyHash = h } -> h
