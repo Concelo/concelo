@@ -1,5 +1,6 @@
 module Database.Concelo.Pipe
   ( Pipe
+  , empty
   , pipePublisher
   , pipeSubscriber
   , nextMessages ) where
@@ -12,6 +13,8 @@ data Pipe = Pipe { getPipePublisher :: Pub.Publisher
                  , getPipeSubscriber :: Pub.Subscriber
                  , getPipeLastPing :: Integer
                  , getPipePublisherSent :: Bool }
+
+empty = Pipe Pub.empty Sub.empty 0 False
 
 pipePublisher = L.lens getPipePublisher (\x v -> x { getPipePublisher = v })
 

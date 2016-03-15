@@ -268,7 +268,7 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
 
               diffChunks (getForestChunks currentForest)
                 (getTreeLeaves currentTree) received leaves
-                >>= verifyLeafDiff
+                >>= verifyLeafDiff aclTrie
 
             return $ M.insert stream
               (Tree revision stream acl aclTrie

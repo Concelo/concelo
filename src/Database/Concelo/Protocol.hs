@@ -48,19 +48,20 @@ data Message = Cred { getCredProtocolVersion :: Int
 
              | Leaf { getLeafName :: Name
                     , getLeafSigned :: Signed
-                    , getLeafKeyHash :: ByteString
+                    , getLeafTreeStream :: ByteString
+                    , getLeafForestStream :: ByteString
                     , getLeafBody :: ByteString }
 
              | Group { getGroupName :: Name
                      , getGroupSigned :: Signed
-                     , getGroupKeyHash :: ByteString
+                     , getLeafTreeStream :: ByteString
+                     , getLeafForestStream :: ByteString
                      , getGroupMembers :: Names }
 
              | Tree { getTreeName :: Name
                     , getTreeStream :: ByteString
                     , getTreeForestStream :: ByteString
                     , getTreeOptional :: Bool
-                    , getTreeKeyHash :: ByteString
                     , getTreeRevision :: Integer
                     , getTreeSigned :: Signed
                     , getTreeACL :: Name
@@ -100,16 +101,16 @@ forestACLLevel = "4"
 forestLevel = "5"
 
 toText = \case
-  Leaf _ _ keyHash body ->
-    return $ keyHash `BS.append` body
+  Leaf _ _ treeStream forestStream body ->
+    return $ BS.concat [treeStream, forestStream, body]
 
-  Group _ _ keyHash members ->
-    return $ keyHash `BS.append` serializeNames members
+  Group _ _ treeStream forestStream members ->
+    return $ BS.concat [treeStream, forestStream, serializeNames members]
 
-  Tree _ stream forestStream optional keyHash revision _ acl leaves ->
+  Tree _ stream forestStream optional revision _ acl leaves ->
     return $
     BS.concat [stream, forestStream, if optional then "1" else "0",
-               keyHash, serializeInteger revision, serializeNames acl,
+               serializeInteger revision, serializeNames acl,
                serializeNames leaves]
 
   Forest _ stream revision adminRevision adminSigned acl trees ->
@@ -132,8 +133,8 @@ digest message (public, private) = do
 
   return (text, Signed public signature text)
 
-leaf keyPair level keyHash body = do
-  let leaf = Leaf dummyName dummySigned keyHash body
+leaf keyPair level treeStream forestStream body = do
+  let leaf = Leaf dummyName dummySigned treeStream forestStream body
 
   (text, signed) <- digest leaf keyPair
 
@@ -143,8 +144,8 @@ leaf keyPair level keyHash body = do
 
               , getLeafSigned = signed }
 
-group keyPair level height keyHash members = do
-  let group = Group dummyName dummySigned keyHash
+group keyPair level height treeStream forestStream members = do
+  let group = Group dummyName dummySigned treeStream forestStream
               $ foldr (\member ->
                         T.union
                         $ P.super level
@@ -159,9 +160,9 @@ group keyPair level height keyHash members = do
 
                , getGroupSigned = signed }
 
-tree (public, private) stream forestStream optional keyHash revision acl
+tree (public, private) stream forestStream optional revision acl
   leaves = do
-    let tree = Tree dummyName stream forestStream optional keyHash revision
+    let tree = Tree dummyName stream forestStream optional revision
                dummySigned acl leaves
 
     (text, signed) <- digest tree keyPair
@@ -183,9 +184,9 @@ forest (public, private) stream revision adminRevision adminSigned acl trees =
 
                   , getForestSigned = signed }
 
-getMessageKeyHash = \case
-  Leaf { getLeafKeyHash = h } -> h
-  Group { getGroupKeyHash = h } -> h
+getMessageStreams = \case
+  Leaf { getLeafTreeStream = ts, getLeafForestStream = fs } -> (ts, fs)
+  Group { getGroupTreeStream = ts, getGroupForestStream = fs } -> (ts, fs)
   _ -> ""
 
 serializeInteger = BS.concat $ writeInteger n []
@@ -231,7 +232,6 @@ instance C.ParseState TrieState where
 parseTrie s =
   getTrieStateTrie <$> (eitherToMaybe $ exec trie $ TrieState s [] T.empty)
 
--- todo: serialize/deserialize arbitrary precision integers
 size = do
   (ord <$> character) >>= \case
     0 -> (ord <$> character) >>= \case

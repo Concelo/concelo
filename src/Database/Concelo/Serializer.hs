@@ -103,17 +103,17 @@ newTree = do
   key <- with serializerPRNG $ C.randomBytes C.symmetricKeySize
   return Tree key ST.empty ST.empty P.NoMessage
 
-chunkToMessage chunk = do
+chunkToMessage level treeStream forestStream chunk = do
   keyPair <- getKeyPair
 
   case ST.chunkHeight chunk of
-    1 -> P.leaf keyPair level keyHash $ ST.chunkBody chunk
+    1 -> P.leaf keyPair level treeStream forestStream $ ST.chunkBody chunk
 
-    _ -> P.group keyPair level (ST.chunkHeight chunk) keyHash
+    _ -> P.group keyPair level (ST.chunkHeight chunk) treeStream forestStream
          $ foldr (\member -> (ST.chunkName member :)) []
          $ ST.chunkMembers chunk
 
-sync serialize level syncTree key keyHash obsolete new = do
+sync serialize level syncTree key treeStream forestStream obsolete new = do
   keyPair <- getKeyPair
   prng <- get serializerPRNG
 
@@ -123,9 +123,11 @@ sync serialize level syncTree key keyHash obsolete new = do
 
   set serializerPRNG prng'
 
-  obsoleteMessages <- foldM chunkToMessage T.empty obsolete
+  let c2m = chunkToMessage level treeStream forestStream
 
-  newMessages <- foldM chunkToMessage T.empty new
+  obsoleteMessages <- foldM c2m T.empty obsolete
+
+  newMessages <- foldM c2m T.empty new
 
   update serializerDiff $ \(allObsolete, allNew) ->
     (T.union obsoleteMessages allObsolete,
@@ -155,24 +157,21 @@ updateTrees revision obsoleteByACL newByACL unionByACL = do
 
         tree <- maybe newTree return currentTree
 
-        let key = getTreeKey tree
-            keyHash = C.hash [key]
-
         leafSync <-
-          sync serializeValues P.treeLeafLevel key keyHash
-          (getTreeLeafSync tree) (T.sub stream obsoleteByACL)
-          (T.sub stream newByACL)
+          sync serializeValues P.treeLeafLevel (getTreeKey tree)
+          stream forestStream (getTreeLeafSync tree)
+          (T.sub stream obsoleteByACL) (T.sub stream newByACL)
 
         aclSync <-
           if isJust currentTree then
             return $ getTreeACLSync
           else do
-            sync serializeStrings P.treeACLLevel BS.empty BS.empty ST.empty
-              T.empty $ ACL.toTrie acl
+            sync serializeStrings P.treeACLLevel ST.empty BS.empty stream
+              forestStream T.empty $ ACL.toTrie acl
 
         message <-
           with serializerPRNG $ P.tree keyPair stream forestStream False
-          keyHash revision (ST.root aclSync) (ST.root leafSync)
+          revision (ST.root aclSync) (ST.root leafSync)
 
         update serializerTrees
           $ M.insert stream . Tree key leafSync aclSync message
@@ -199,8 +198,8 @@ updateForest revision (obsoleteTrees, newTrees) = do
   forest <- get serializerForest
 
   treeSync <-
-    sync serializeNames P.forestTreeLevel BS.empty (getForestTreeSync forest)
-    obsoleteTrees newTrees
+    sync serializeNames P.forestTreeLevel (getForestTreeSync forest) BS.empty
+    BS.empty (getForestStream forest) obsoleteTrees newTrees
 
   let old = getForestMessage forest
 

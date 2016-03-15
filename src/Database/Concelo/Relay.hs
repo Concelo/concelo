@@ -1,87 +1,130 @@
 module Database.Concelo.Relay
-  ( make
+  ( empty
   , receive
-  , nextMessages ) where
+  , nextMessages
+  , setRelays ) where
 
-make = Relay Sub.empty Pub.empty S.empty Nothing 0
+import qualified Database.Concelo.Protocol as P
+import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.Map as M
+import qualified Database.Concelo.Set as S
+import qualified Database.Concelo.Path as Path
+import qualified Database.Concelo.Publisher as Pub
+import qualified Database.Concelo.Subscriber as Sub
+import qualified Database.Concelo.Pipe as Pipe
+import qualified Control.Lens as L
+import qualified Control.Monad.State.Class as State
+import qualified Data.ByteString as BS
 
-share subscriber =
-  get relayRelays >>= mapM_ (setSubscriber subscriber)
+data Relay =
+  Relay { getRelayPipe :: Pipe.Pipe
+        , getRelayPendingSubscriber :: Maybe Sub.Subscriber
+        , getRelayStreams :: S.Set BS.ByteString
+        , getRelayPublicKey :: Maybe BS.ByteString
+        , getRelayChallenge :: BS.ByteString
+        , getRelayRelays :: S.Set Relay }
 
-chunks = L.get (subscriberReceived . subscriberClean)
+relayPipe =
+  L.lens getRelayPipe (\x v -> x { getRelayPipe = v })
+
+relayPendingSubscriber =
+  L.lens getRelayPendingSubscriber
+  (\x v -> x { getRelayPendingSubscriber = v })
+
+relayStreams =
+  L.lens getRelayStreams (\x v -> x { getRelayStreams = v })
+
+relayPublicKey =
+  L.lens getRelayPublicKey (\x v -> x { getRelayPublicKey = v })
+
+relayChallenge =
+  L.lens getRelayChallenge (\x v -> x { getRelayChallenge = v })
+
+relayRelays =
+  L.lens getRelayRelays (\x v -> x { getRelayRelays = v })
+
+empty = relay Pipe.empty Nothing S.empty
+
+relay pipe publicKey relays =
+  Relay pipe Nothing S.empty publicKey relays
+
+share subscriber = get relayRelays >>= mapM_ (setSubscriber subscriber)
+
+chunks = L.get (Sub.subscriberReceived . Sub.subscriberClean)
 
 setRelays = set relayRelays
 
 setSubscriber new = do
-  set relayPendingSubscriber new
+  set relayPendingSubscriber $ Just new
 
-  publicKey <- get relayPublicKey
-  case publicKey of
-    Nothing ->
-      return ()
+  get relayPublicKey >>= \case
+    Nothing -> return ()
 
-    Just key -> do
+    Just publicKey -> do
       previous <- get relaySubscriber
+
       set relaySubscriber new
 
-      keys <- updateAndGet relayKeys $ updateKeys key previous new
+      streams <-
+        updateAndGet relayStreams
+        $ updateStreams publicKey previous new
 
-      update relayPublisher $ Pub.update $ filterDiff keys
+      update relayPublisher $ Pub.update $ filterDiff streams
       $ M.diff (chunks previous) (chunks new)
 
-updateKeys publicKey oldSubscriber newSubscriber keys =
+updateStreams publicKey oldSubscriber newSubscriber streams =
   let allChunks = chunks newSubscriber in
-  updateKeys' allChunks publicKey
+  updateStreams' allChunks publicKey
   (L.get (forestTreeTrie . subscriberPublished) oldSubscriber)
   (L.get (forestTreeTrie . subscriberPublished) newSubscriber)
-  $ updateKeys' allChunks publicKey
+  $ updateStreams' allChunks publicKey
   (L.get (forestTreeTrie . subscriberPersisted) oldSubscriber)
   (L.get (forestTreeTrie . subscriberPersisted) newSubscriber)
-  keys
+  streams
 
-updateKeys' allChunks publicKey oldTrees newTrees keys =
-  foldr maybeAdd (foldr maybeRemove keys obsolete) new where
-    (obsolete, new) = M.diff oldTrees newTrees
+updateStreams' allChunks publicKey oldTrees newTrees streams =
+  foldr maybeAdd streams new where
+    (_, new) = M.diff oldTrees newTrees
 
-    getHash acl = T.find (T.super ReadKeys $ T.key publicKey) acl
-      >> T.find (T.key ReadKeyHash) acl
-
-    maybeRemove obsolete keys =
-      let acl = getTreeACL obsolete in
-      if M.member acl allChunks then
-        keys
+    maybeAdd new streams =
+      if T.member
+         (Path.super P.aclReaderKey $ P.singleton publicKey ())
+         (Sub.getTreeACL new)
+         && (not $ Sub.getTreeOptional new)
+      then
+        S.insert (Sub.getTreeStream new) streams
       else
-        maybe keys (\hash -> S.delete hash keys) (getHash acl)
+        streams
 
-    add maybeAdd keys =
-      let acl = getTreeACL obsolete in
-      maybe keys (\hash -> S.insert hash keys) (getHash acl)
-
-filterDiff keys (obsoleteChunks, newChunks) =
-  (M.foldrWithKeys maybeRemove obsoleteChunks obsoleteChunks,
-   M.foldrWithKeys maybeRemove newChunks newChunks) where
-    maybeRemove key chunk chunks =
-      case chunkKeyHash chunk of
+filterDiff streams (obsoleteChunks, newChunks) =
+  (T.foldrPathsAndValues maybeRemove obsoleteChunks obsoleteChunks,
+   T.foldrPathsAndValues maybeRemove newChunks newChunks) where
+    maybeRemove path chunk chunks =
+      case chunkTreeStream chunk of
         Nothing -> chunks
-        Just keyHash ->
-          if S.member keyHash keys then
+        Just stream ->
+          if S.member stream streams then
             chunks
           else
-            M.delete key chunks
+            T.subtract path chunks
 
-chunkKeyHash = \case
-  P.Leaf { P.getLeafKeyHash = keyHash } -> keyHash
-  P.Group { P.getGroupKeyHash = keyHash } -> keyHash
+chunkTreeStream = \case
+  P.Leaf { P.getLeafTreeStream = treeStream } -> Just treeStream
+  P.Group { P.getGroupTreeStream = treeStream } -> Just treeStream
   _ -> Nothing
 
 receive = \case
-  P.Cred request publicKey signature -> do
-    relays <- get relayRelays
-    subscriber <- get relayPendingSubscriber
-    State.set $ make relays subscriber
+  P.Cred version request publicKey signature ->
+    if version != P.version then
+      exception "unexpected protocol version: " ++ show version
+    else do
+      get relayChallenge >>= verify signature publicKey
 
-    get relayChallenge >>= verify signature publicKey
-    set relayPublicKey $ Just publicKey
+      relays <- get relayRelays
+      subscriber <- get relayPendingSubscriber
+
+      State.set $ relay (L.set Pipe.pipeSubscriber subscriber Pipe.empty)
+        (Just publicKey) relays
 
   nack@(P.Nack {}) -> do
     publicKey <- get relayPublicKey
@@ -97,32 +140,26 @@ receive = \case
       case execute (Sub.receive message) subscriber of
         Left error -> throwError error
         Right subscriber' ->
-          let revision = L.get (forestRevision . subscriberPublished) in
+          let revision =
+                L.get (Sub.forestRevision . Sub.subscriberPublished) in
           if revision subscriber' > revision subscriber then
-            share subscriber
+            share subscriber'
           else
             set relaySubscriber subscriber'
 
-ping = do
-  published <-
-    P.Published <$> get (forestName . subscriberPublished . relaySubscriber)
-
-  persisted <-
-    P.Persisted <$> get (forestName . subscriberPersisted . relaySubscriber)
-
-  return [published, persisted]
-
-nextMessages now =
+nextMessages now = do
   publicKey <- get relayPublicKey
-  lastPing <- get relayLastPing
-  case publicKey of
+  with relayPipe $ Pipe.nextMessages now case publicKey of
     Nothing ->
-      if now - lastPing > pingInterval then do
-        set relayLastPing now
-        ((:[]) . P.Challenge) <$> get relayChallenge
-      else
-        return []
+      ((:[]) . P.Challenge) <$> get relayChallenge
 
-    Just _ ->
-      PubSub.nextMessages relayPublisher relaySubscriber relayPubSent
-      relayLastPing ping
+    Just _ -> do
+      published <-
+        P.Published <$> get
+        (Sub.forestName . Sub.subscriberPublished . relaySubscriber)
+
+      persisted <-
+        P.Persisted <$> get
+        (Sub.forestName . Sub.subscriberPersisted . relaySubscriber)
+
+      return [published, persisted]
