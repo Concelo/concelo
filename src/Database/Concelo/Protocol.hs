@@ -321,6 +321,8 @@ valueBoolean = \case
   Value { getValueBody = BooleanBody b } -> Just b
   _ -> Nothing
 
+value priority body = Value BS.empty priority ACL.empty body
+
 data ValueState = ValueState { getValueStateString :: ByteString
                              , getValueStateValue :: Value }
 

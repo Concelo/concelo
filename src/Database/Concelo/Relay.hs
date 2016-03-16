@@ -2,7 +2,7 @@ module Database.Concelo.Relay
   ( empty
   , receive
   , nextMessages
-  , setRelays ) where
+  , setSubscriber ) where
 
 import qualified Database.Concelo.Protocol as P
 import qualified Database.Concelo.Trie as T
@@ -44,8 +44,6 @@ empty = relay Pipe.empty Nothing
 relay pipe publicKey =
   Relay pipe Nothing S.empty publicKey
 
-share subscriber relays = mapM_ (setSubscriber subscriber) relays
-
 chunks = L.get (Sub.subscriberReceived . Sub.subscriberClean)
 
 setSubscriber new = do
@@ -63,8 +61,10 @@ setSubscriber new = do
         updateAndGet relayStreams
         $ updateStreams publicKey previous new
 
-      update relayPublisher $ Pub.update $ filterDiff streams
-      $ M.diff (chunks previous) (chunks new)
+      update (Pipe.pipePublisher . relayPipe)
+        $ Pub.update
+        $ filterDiff streams
+        $ M.diff (chunks previous) (chunks new)
 
 updateStreams publicKey oldSubscriber newSubscriber streams =
   let allChunks = chunks newSubscriber in
@@ -107,7 +107,7 @@ chunkTreeStream = \case
   P.Group { P.getGroupTreeStream = treeStream } -> Just treeStream
   _ -> Nothing
 
-receive relays = \case
+receive = \case
   P.Cred version request publicKey signature ->
     if version != P.version then
       exception "unexpected protocol version: " ++ show version
@@ -121,7 +121,9 @@ receive relays = \case
 
   nack@(P.Nack {}) -> do
     publicKey <- get relayPublicKey
-    when (isJust publicKey) $ with relayPublisher $ Pub.receive nack
+    when (isJust publicKey)
+      $ with (Pipe.pipePublisher . relayPipe)
+      $ Pub.receive nack
 
   P.Persisted {} -> return ()
 
@@ -129,16 +131,19 @@ receive relays = \case
   -- received rather than wait until we have a complete tree
   message -> do
     publicKey <- get relayPublicKey
-    when (isJust publicKey) $ get relaySubscriber >>= \subscriber ->
-      case execute (Sub.receive message) subscriber of
-        Left error -> throwError error
-        Right subscriber' ->
-          let revision =
-                L.get (Sub.forestRevision . Sub.subscriberPublished) in
-          if revision subscriber' > revision subscriber then
-            share subscriber' relays
-          else
-            set relaySubscriber subscriber'
+    when (isJust publicKey)
+      $ get (Pipe.pipeSubscriber . relayPipe) >>= \subscriber -> do
+
+      subscriber' <- try $ exec (Sub.receive message) subscriber
+
+      let revision = L.get (Sub.forestRevision . Sub.subscriberPublished)
+
+      if revision subscriber' > revision subscriber then do
+        return $ Just subscriber'
+        else do
+        set (Pipe.pipeSubscriber . relayPipe) subscriber'
+
+        return Nothing
 
 nextMessages now = do
   publicKey <- get relayPublicKey

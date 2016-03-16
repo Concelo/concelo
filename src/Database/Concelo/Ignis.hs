@@ -100,6 +100,14 @@ maybeAuthenticate =
           >>= Just
           [P.Cred P.version (getCredRequest cred) (getCredPublic cred)]
 
+getPublishedRevision =
+  Sub.getForestRevision
+  . Sub.getSubscriberPublished
+  . Pipe.getPipeSubscriber
+  . getIgnisPipe
+
+head = getIgnisHead
+
 getPublic = bindMaybe getCredPublic $ get ignisCred
 
 unAuth = set ignisCred Nothing

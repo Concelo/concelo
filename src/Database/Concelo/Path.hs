@@ -38,6 +38,8 @@ value' = \case
 
 value = value'
 
+findValue = getPathValue
+
 toPath = Path
 
 sub = \case

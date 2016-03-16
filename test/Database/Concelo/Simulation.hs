@@ -4,7 +4,8 @@ module Database.Concelo.Simulator
 import Database.Concelo.Control (exec, update, Exception(Success))
 
 import qualified Database.Concelo.Trie as T
-import qualified Database.Concelo.Protocol as P
+import qualified Database.Concelo.Path as Pa
+import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Relay as R
 import qualified Database.Concelo.Ignis as I
 import qualified Database.Concelo.Crypto as C
@@ -13,6 +14,28 @@ import qualified Data.ByteString as BS
 import qualified Data.Sequence as Q
 import qualified Test.QuickCheck as QC
 import qualified Control.Lens as L
+
+instance QC.Arbitrary Pr.ValueBody where
+  arbitrary = oneof [ gen Pr.NullBody
+                    , Pr.NumberBody <$> arbitrary
+                    , Pr.StringBody <$> arbitrary
+                    , Pr.BooleanBody <$> arbitrary ]
+
+  shrink v = Pr.NullBody : case v of
+    Pr.NullBody -> []
+    Pr.NumberBody n -> Pr.NumberBody <$> shrink n
+    Pr.StringBody s -> Pr.StringBody <$> shrink s
+    Pr.BooleanBody b -> Pr.BooleanBody <$> shrink b
+
+instance QC.Arbitrary Pr.Value where
+  arbitrary = Pr.value Pr.defaultPriority <$> arbitrary
+
+  shrink v = Pr.value Pr.defaultPriority <$> shrink (Pr.getValueBody v)
+
+instance QC.Arbitrary (Pa.Path BS.ByteString Pr.Value) where
+  arbitrary = Pa.toPath <$> arbitrary <*> arbitrary
+
+  shrink p = zipWith Pa.toPath (shrink $ keys p) (shrink $ findValue p)
 
 data Client = Client { getClientId :: BS.ByteString
                      , getClientIsWriter :: Bool
@@ -36,7 +59,7 @@ data MessageType = ToRelay | ToIgnis deriving (Show)
 
 data Message = Message { getMessageClientId :: BS.ByteString
                        , getMessageType :: MessageType
-                       , getMessageValue :: P.Message }
+                       , getMessageValue :: Pr.Message }
                deriving (Show)
 
 data State = State { getStateMessages :: Q.Sequence Message
@@ -53,18 +76,27 @@ stateClients =
 stateNow =
   L.lens getStateNow (\x v -> x { getStateNow = v })
 
+gen = QC.elements . (:[])
+
 deliver (Message clientId type_ value) =
   (filter ((clientId /=) . getClientId) <$> get stateMessages) >>= \case
     [client] -> case type_ of
       ToRelay -> do
-        -- todo: we need some way to return the updated relays from
-        -- R.receive, or else we need to restructure the control flow
-        relays <- fmap getClientRelay <$> get stateClients
-        relay <- try $ exec (R.receive relays value) (getClientRelay client)
-        update stateClients (L.set clientRelay relay client :)
+        (newSubscriber, relay) <-
+          try $ run (R.receive relays value) (getClientRelay client)
+
+        updateM stateClients
+          $ return . replaceClient (L.set clientRelay relay client)
+          >>= case newSubscriber of
+            Just sub ->
+              mapM $ overM clientRelay $ try $ exec R.setSubscriber sub
+            Nothing ->
+              return . id
+
       ToIgnis -> do
         ignis <- try $ exec (I.receive value) (getClientIgnis client)
-        update stateClients (L.set clientIgnis ignis client :)
+        update stateClients $ replaceClient $ L.set clientIgnis ignis client
+
     _ -> return ()
 
 randomClient predicate = do
@@ -74,19 +106,40 @@ randomClient predicate = do
     else
     Just <$> (generate $ QC.elements $ filter predicate clients)
 
+removeClient client = filter ((getClientId client /=) . getClientId)
+
+replaceClient client = (L.set clientRelay relay client :) . removeClient client
+
 generate = liftIO . QC.generate
 
 consistent (State _ clients _) = case clients of
   client:clients -> consistentWith client clients
   _ -> True
   where
-    head = I.head . getClientIgnis
+    revision = I.getPublishedRevision . getClientIgnis
 
     consistentWith client = \case
-      c:cs -> head c == head client && consistentWith client cs
+      c:cs -> revision c == revision client && consistentWith client cs
       _ -> True
 
 apply = (update stateNow (+100) >>) . apply'
+
+data Task = SendFirst
+          | SendLast
+          | DropFirst
+          | Flush
+          | Reconnect
+          | Publish
+          | QueueMessages
+
+instance QC.Arbitrary Task where
+  arbitrary = QC.frequency [ (40, gen QueueMessages)
+                           , (30, gen SendFirst)
+                           , (10, gen Flush)
+                           , (10, gen Publish)
+                           , ( 5, gen SendLast)
+                           , ( 5, gen DropFirst)
+                           , ( 1, gen Reconnect) ]
 
 apply' = \case
   SendFirst -> Q.viewl <$> get stateMessages >>= \case
@@ -129,7 +182,7 @@ apply' = \case
       Just client -> do
         delay <- generate $ QC.choose (10, 1000)
 
-        update stateClients $ filter ((getClientId client /=) . getClientId))
+        update stateClients $ removeClient client
 
         mapM_ apply (generate $ QC.vector delay)
 
@@ -149,37 +202,39 @@ apply' = \case
         addCount <- generate $ QC.choose (0, pathCount)
         toAdd <- generate $ QC.vector addCount
 
+        now <- get stateNow
+
         ignis' <-
-          try $ exec (I.setHead $ T.union toAdd $ T.subtract toDelete paths)
+          try $ exec (I.update now (T.union toAdd . T.subtract toDelete) id)
           ignis
 
-        update stateClients (L.set clientIgnis ignis' writer :)
+        update stateClients $ replaceClient $ L.set clientIgnis ignis' writer
 
   QueueMessages -> do
-    now <- get stateNow
-    randomClient (clientHasMessages now) >>= \case
+    get stateNow >>= randomClient . clientHasMessages >>= \case
       Nothing -> return ()
       Just client -> do
         (relayMessages, relay') <-
-          try (run R.nextMessages $ getClientRelay client)
+          try $ run R.nextMessages $ getClientRelay client
 
         (ignisMessages, ignis') <-
-          try (run R.nextMessages $ getClientIgnis client)
+          try $ run R.nextMessages $ getClientIgnis client
 
         let append = foldr $ flip (|>)
 
         update stateMessages $ append relayMessages . append ignisMessages
 
-        update stateClients (L.set clientIgnis ignis'
-                             (L.set clientRelay relay' client) :)
+        update stateClients $ replaceClient
+          $ L.set clientIgnis ignis'
+          $ L.set clientRelay relay' client
 
 makeClient writer =
   seed <- BS.pack <$> QC.generate $ QC.vector C.seedSize
-  return Client seed writer R.empty $ I.ignis seed
+  return $ Client seed writer R.empty $ I.ignis seed
 
 run readerCount writerCount = do
-  readers <- replicateM readerCount (makeClient false)
-  writers <- replicateM writerCount (makeClient true)
+  readers <- replicateM readerCount $ makeClient false
+  writers <- replicateM writerCount $ makeClient true
 
   let state = State Q.empty (readers ++ writers) 0
 

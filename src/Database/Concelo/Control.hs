@@ -71,6 +71,9 @@ update lens update = S.state $ \s -> ((), L.over lens update s)
 
 updateM lens action = get lens >>= action >>= set lens
 
+overM lens action object =
+  (flip (L.set lens) object <$> action (L.get lens object))
+
 updateThenGet lens update =
   S.state $ \s -> let v = update $ L.get lens s in (v, L.set lens v s)
 
