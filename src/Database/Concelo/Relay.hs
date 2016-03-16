@@ -21,8 +21,7 @@ data Relay =
         , getRelayPendingSubscriber :: Maybe Sub.Subscriber
         , getRelayStreams :: S.Set BS.ByteString
         , getRelayPublicKey :: Maybe BS.ByteString
-        , getRelayChallenge :: BS.ByteString
-        , getRelayRelays :: S.Set Relay }
+        , getRelayChallenge :: BS.ByteString }
 
 relayPipe =
   L.lens getRelayPipe (\x v -> x { getRelayPipe = v })
@@ -40,19 +39,14 @@ relayPublicKey =
 relayChallenge =
   L.lens getRelayChallenge (\x v -> x { getRelayChallenge = v })
 
-relayRelays =
-  L.lens getRelayRelays (\x v -> x { getRelayRelays = v })
+empty = relay Pipe.empty Nothing
 
-empty = relay Pipe.empty Nothing S.empty
+relay pipe publicKey =
+  Relay pipe Nothing S.empty publicKey
 
-relay pipe publicKey relays =
-  Relay pipe Nothing S.empty publicKey relays
-
-share subscriber = get relayRelays >>= mapM_ (setSubscriber subscriber)
+share subscriber relays = mapM_ (setSubscriber subscriber) relays
 
 chunks = L.get (Sub.subscriberReceived . Sub.subscriberClean)
-
-setRelays = set relayRelays
 
 setSubscriber new = do
   set relayPendingSubscriber $ Just new
@@ -113,18 +107,17 @@ chunkTreeStream = \case
   P.Group { P.getGroupTreeStream = treeStream } -> Just treeStream
   _ -> Nothing
 
-receive = \case
+receive relays = \case
   P.Cred version request publicKey signature ->
     if version != P.version then
       exception "unexpected protocol version: " ++ show version
     else do
       get relayChallenge >>= verify signature publicKey
 
-      relays <- get relayRelays
       subscriber <- get relayPendingSubscriber
 
       State.set $ relay (L.set Pipe.pipeSubscriber subscriber Pipe.empty)
-        (Just publicKey) relays
+        (Just publicKey)
 
   nack@(P.Nack {}) -> do
     publicKey <- get relayPublicKey
@@ -143,7 +136,7 @@ receive = \case
           let revision =
                 L.get (Sub.forestRevision . Sub.subscriberPublished) in
           if revision subscriber' > revision subscriber then
-            share subscriber'
+            share subscriber' relays
           else
             set relaySubscriber subscriber'
 

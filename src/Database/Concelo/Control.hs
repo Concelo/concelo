@@ -9,7 +9,8 @@ module Database.Concelo.Control
   , getThenSet
   , with
   , try
-  , Exception (Exception, PatternFailure, BadForest, MissingChunks, NoParse)
+  , Exception (Exception, PatternFailure, BadForest, MissingChunks, NoParse,
+               Success)
   , exception
   , patternFailure
   , badForest
@@ -41,6 +42,8 @@ data Exception = Exception BS.ByteString
                | BadForest
                | MissingChunks
                | NoParse
+               | Success
+               deriving (Show)
 
 exception s = throwError $ Exception s
 
@@ -54,9 +57,9 @@ noParse = throwError NoParse
 
 run = runIdentity . runErrorT . runStateT
 
-exec = runIdenity . runErrorT . execStateT
+exec = runIdentity . runErrorT . execStateT
 
-eval = runIdenity . runErrorT . evalStateT
+eval = runIdentity . runErrorT . evalStateT
 
 get lens = L.view lens <$> S.get
 
@@ -76,13 +79,13 @@ getThenUpdate lens update =
 
 getThenSet lens value = S.state $ \s -> (L.get lens s, L.set lens value s)
 
-try action state =
-  run action state >>= \case
+try either =
+  either >>= \case
     Left error -> throwError error
     Right result = return result
 
 with lens action =
-  try action <$> get lens >>= \(result, state) -> do
+  try (run action <$> get lens) >>= \(result, state) -> do
     set lens state
     return result
 
