@@ -8,7 +8,8 @@ import System.Random.TF
 import System.Process (callCommand)
 import Text.Printf
 
-import qualified Database.Concelo.Simulation as Sim
+import qualified Database.Concelo.Simulation as Simulation
+import qualified Data.Tree.RBTests as RBTests
 
 check description prop = do
   printf "%-25s: " description
@@ -23,5 +24,7 @@ check description prop = do
 
 main = do
   Simulation.runTests check
+
+  RBTests.runTests check
 
   -- callCommand "make test"

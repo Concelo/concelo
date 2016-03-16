@@ -1,10 +1,11 @@
+{-# LANGUAGE LambdaCase #-}
 module Database.Concelo.VMap
   ( VMap()
   , empty
   , key
   , value
   , member
-  , lookup
+  , Database.Concelo.VMap.lookup
   , first
   , insert
   , modify
@@ -12,12 +13,12 @@ module Database.Concelo.VMap
   , pairs
   , triples
   , index
-  , foldrDiff
-  , diff ) where
+  , foldrDiff ) where
 
-import qualified Database.Concelo.Map as M
 import qualified Data.Tree.RBTree as T
 import qualified Control.Lens as L
+import Data.Maybe (fromJust)
+import Control.Applicative ((<|>))
 
 newtype VMap k v = VMap { run :: T.RBTree (Cell k v) }
 
@@ -28,11 +29,8 @@ data Cell k v = Cell { getCellVersion :: Integer
 cellVersion =
   L.lens getCellVersion (\x v -> x { getCellVersion = v })
 
-cellKey =
-  L.lens getCellKey (\x v -> x { getCellKey = v })
-
-cellValue =
-  L.lens getCellValue (\x v -> x { getCellValue = v })
+instance Eq k => Eq (Cell k v) where
+  a == b = (getCellKey a) == (getCellKey b)
 
 instance Ord k => Ord (Cell k v) where
   compare a b = compare (getCellKey a) (getCellKey b)
@@ -57,7 +55,7 @@ lookup key map = getCellValue <$> find key map
 
 find key (VMap tree) = T.searchFast (\k c -> compare k $ getCellKey c) tree key
 
-first (VMap tree) = pairKV <$> maybeCell (T.first tree)
+first (VMap tree) = pairKV <$> T.first tree
 
 insert version key value map = modify version key (const $ Just value) map
 
@@ -77,11 +75,11 @@ triples = foldrTriples (:) []
 
 index version f = foldr (\v -> insert version (f v) v) empty
 
-pairKV (Cell _ _ k v) = (k, v)
+pairKV (Cell _ k v) = (k, v)
 
-pairRV (Cell _ r _ v) = (r, v)
+pairRV (Cell r _ v) = (r, v)
 
-triple (Cell _ r k v) = (r, k, v)
+triple (Cell r k v) = (r, k, v)
 
 visitor visit a b =
   visit
@@ -91,10 +89,3 @@ visitor visit a b =
 
 foldrDiff visit seed a b =
   T.foldrDiffVersioned cellVersionsEqual compare (visitor visit) seed a b
-
-insertCell (Just (_, k, v)) map = M.insert k v map
-insertCell _ map = map
-
-diff a b =
-  foldrDiff (\a b (as, bs) -> (insertCell a as, insertCell b bs))
-  (M.empty, M.empty) a b

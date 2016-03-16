@@ -6,7 +6,6 @@ module Database.Concelo.Set
   , delete ) where
 
 import qualified Database.Concelo.Map as M
-import qualified Control.Lens as L
 
 newtype Set v = Set { run :: M.Map v () }
 

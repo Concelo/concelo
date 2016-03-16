@@ -80,12 +80,6 @@ endOfInput expression = do
   update fieldString skipSpace
   endOfStream expression
 
-skipSpace = BS.dropWhile isSpace
-
-terminal t = do
-  update fieldString skipSpace
-  prefix t
-
 ternary parser = do
   a <- boolean
   terminal "?"

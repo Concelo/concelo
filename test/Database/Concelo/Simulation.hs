@@ -1,4 +1,4 @@
-module Database.Concelo.Simulator
+module Database.Concelo.Simulation
   ( runTests ) where
 
 import Database.Concelo.Control (exec, update, Exception(Success))
@@ -244,5 +244,5 @@ run readerCount writerCount = do
       error -> QC.counterexample (show error) False
     Right _ -> undefined
 
-runTests test = do
-  test "one reader, one writer" $ run 1 1
+runTests check = do
+  check "one reader, one writer" $ run 1 1

@@ -1,13 +1,20 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes #-}
 module Database.Concelo.Control
   ( get
   , set
   , setThenGet
   , update
   , updateM
+  , overM
   , updateThenGet
   , getThenUpdate
   , getThenSet
   , with
+  , run
+  , exec
+  , eval
   , try
   , Exception (Exception, PatternFailure, BadForest, MissingChunks, NoParse,
                Success)
@@ -31,13 +38,16 @@ module Database.Concelo.Control
   , bindMaybe
   , bindMaybe2 ) where
 
-import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS
+import qualified Data.Char as C
 import qualified Control.Lens as L
-import qualified Control.Monad.State.Class as S
+import qualified Control.Monad.State as S
+import qualified Control.Monad.Except as E
+import qualified Control.Monad.Identity as I
 
-type Action s a = StateT s (ErrorT Exception Identity) a
+type Action s a = S.StateT s (E.ExceptT Exception I.Identity) a
 
-data Exception = Exception BS.ByteString
+data Exception = Exception String
                | PatternFailure
                | BadForest
                | MissingChunks
@@ -45,21 +55,26 @@ data Exception = Exception BS.ByteString
                | Success
                deriving (Show)
 
-exception s = throwError $ Exception s
+exception :: E.MonadError Exception m => String -> m a
+exception = E.throwError . Exception
 
-patternFailure = throwError PatternFailure
+patternFailure :: E.MonadError Exception m => m a
+patternFailure = E.throwError PatternFailure
 
-badForest = throwError BadForest
+badForest :: E.MonadError Exception m => m a
+badForest = E.throwError BadForest
 
-missingChunks = throwError MissingChunks
+missingChunks :: E.MonadError Exception m => m a
+missingChunks = E.throwError MissingChunks
 
-noParse = throwError NoParse
+noParse :: E.MonadError Exception m => m a
+noParse = E.throwError NoParse
 
-run = runIdentity . runErrorT . runStateT
+run action = I.runIdentity . E.runExceptT . S.runStateT action
 
-exec = runIdentity . runErrorT . execStateT
+exec action = I.runIdentity . E.runExceptT . S.execStateT action
 
-eval = runIdentity . runErrorT . evalStateT
+eval action = I.runIdentity . E.runExceptT . S.evalStateT action
 
 get lens = L.view lens <$> S.get
 
@@ -69,24 +84,30 @@ setThenGet lens value = S.state $ \s -> (value, L.set lens value s)
 
 update lens update = S.state $ \s -> ((), L.over lens update s)
 
+updateM :: S.MonadState s m => L.Lens' s a -> (a -> m a) -> m ()
 updateM lens action = get lens >>= action >>= set lens
 
+overM :: S.MonadState s m => L.Lens' s a -> (a -> m a) -> s -> m s
 overM lens action object =
-  (flip (L.set lens) object <$> action (L.get lens object))
+  flip (L.set lens) object <$> action (L.view lens object)
 
+updateThenGet :: S.MonadState s m => L.Lens' s a -> (a -> a) -> m a
 updateThenGet lens update =
-  S.state $ \s -> let v = update $ L.get lens s in (v, L.set lens v s)
+  S.state $ \s -> let v = update $ L.view lens s in (v, L.set lens v s)
 
+getThenUpdate :: S.MonadState s m => L.Lens' s a -> (a -> a) -> m a
 getThenUpdate lens update =
-  S.state $ \s -> (L.get lens s, L.over lens update s)
+  S.state $ \s -> (L.view lens s, L.over lens update s)
 
-getThenSet lens value = S.state $ \s -> (L.get lens s, L.set lens value s)
+getThenSet :: S.MonadState s m => L.Lens' s a -> a -> m a
+getThenSet lens value = S.state $ \s -> (L.view lens s, L.set lens value s)
 
 try either =
   either >>= \case
-    Left error -> throwError error
-    Right result = return result
+    Left error -> E.throwError error
+    Right result -> return result
 
+with :: L.Lens' s a -> Action a b -> Action s b
 with lens action =
   try (run action <$> get lens) >>= \(result, state) -> do
     set lens state
@@ -119,12 +140,14 @@ eitherToMaybe = \case
   Right v -> Just v
 
 maybeToAction error = \case
-  Nothing -> throwError error
+  Nothing -> E.throwError error
   Just v -> return v
 
 class ParseState s where
-  parseString :: Lens s t a b
+  parseString :: L.Lens' s a
 
+character :: (ParseState s, S.MonadState s m, E.MonadError Exception m) =>
+             m Char
 character = do
   s <- get parseString
   case BS.uncons s of
@@ -139,45 +162,54 @@ subtractPrefix p s =
 
 prefix t =
   subtractPrefix t <$> get parseString >>= \case
-    Just s' -> do
-      set fieldString s'
+    Just s -> do
+      set parseString s
       return t
     Nothing -> noParse
+
+skipSpace = BS.dropWhile C.isSpace
+
+terminal t = do
+  update parseString skipSpace
+  prefix t
 
 a >>| b = do
   s <- S.get
   case run a s of
     Right (x, s') -> S.put s' >> return x
     Left NoParse -> b
-    Left error -> throwError error
+    Left error -> E.throwError error
 
 zeroOrMore parser =
   optional parser >>= \case
-    Just a -> (a:) <$> parser >>| [a]
+    Just a -> ((a:) <$> zeroOrMore parser) >>| return [a]
     Nothing -> return []
 
-optional parser
-  =   Just <$> parser
-  >>| return Nothing
+optional parser = (Just <$> parser) >>| return Nothing
 
 endOfStream expression = do
   s <- get parseString
-  if null s then return expression else noParse
+  if BS.null s then return expression else noParse
 
 stringLiteralBody delimiter =
   character >>= unescaped where
     unescaped c
       | c == delimiter = return []
       | c == '\\' = character >>= escaped
-      | otherwise = character >>= (c:) <$> unescaped
+      | otherwise = (c:) <$> (character >>= unescaped)
 
     escaped c
-      | c == delimiter = character >>= (c:) <$> unescaped
-      | otherwise = character >>= ('\\':c:) <$> unescaped
+      | c == delimiter = (c:) <$> (character >>= unescaped)
+      | otherwise = ('\\':) . (c:) <$> (character >>= unescaped)
 
 stringLiteralDelimited delimiter = do
-  terminal [delimiter]
+  _ <- terminal $ BS.singleton delimiter
   s <- stringLiteralBody delimiter
   return $ BS.pack s
 
+stringLiteral :: (ParseState s,
+                  S.MonadState s m,
+                  E.MonadError Exception m,
+                  Monad n) =>
+                 m (n BS.ByteString)
 stringLiteral = return <$> stringLiteralDelimited '"'

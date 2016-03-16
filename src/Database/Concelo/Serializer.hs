@@ -11,7 +11,7 @@ import qualified Database.Concelo.Protocol as P
 import qualified Database.Concelo.ACL as ACL
 import qualified Database.Concelo.Crypto as C
 import qualified Database.Concelo.Map as M
-import qualified Database.Concelo.ST as SyncTree
+import qualified Database.Concelo.SyncTree as ST
 import qualified Database.Concelo.Trie as T
 
 data KeyPair =

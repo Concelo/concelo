@@ -19,7 +19,7 @@ import Crypto.Number.Serialize (i2osp, os2ip)
 import Crypto.Cipher.AES (AES256())
 import Crypto.Cipher.Types (CryptoFailable(CryptoPassed, CryptoFailed), makeIV)
 import Crypto.Random.Types (ChaChaDRG)
-import Cryoto.Random (withRandomBytes)
+import Crypto.Random (withRandomBytes)
 
 import Database.Concelo.Control (exception)
 

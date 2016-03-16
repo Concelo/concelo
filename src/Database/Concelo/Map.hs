@@ -1,11 +1,10 @@
 module Database.Concelo.Map
   ( Map()
-  , FoldableWithKey(foldrWithKey)
   , empty
   , key
   , value
   , member
-  , lookup
+  , Database.Concelo.Map.lookup
   , first
   , pairs
   , insert
@@ -17,11 +16,7 @@ import qualified Database.Concelo.VMap as V
 
 newtype Map k v = Map { run :: V.VMap k v }
 
-class FoldableWithKey t where
-  foldrWithKey :: (k -> a -> b -> b) -> b -> t k a -> b
-
-instance FoldableWithKey Map where
-  foldrWithKey visit seed = foldrWithKey visit seed . run
+noVersion = -1
 
 empty = Map V.empty
 
@@ -37,10 +32,10 @@ first = V.first . run
 
 pairs = V.pairs . run
 
-insert k v = Map . V.insert 0 k v . run
+insert k v = Map . V.insert noVersion k v . run
 
-modify k f = Map . V.modify 0 k f . run
+modify k f = Map . V.modify noVersion k f . run
 
-delete k = Map . V.delete 0 k . run
+delete k = Map . V.delete noVersion k . run
 
-index f = Map . V.index 0 f
+index f = Map . V.index noVersion f
