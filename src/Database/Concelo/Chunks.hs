@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 module Database.Concelo.Chunks
   ( diffChunks ) where
 

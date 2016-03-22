@@ -2,10 +2,16 @@
 module Database.Concelo.Crypto
   ( derivePrivate
   , derivePublic
+  , serializePublic
+  , serializePrivate
+  , serializeSymmetric
   , decryptPrivate
   , decryptSymmetric
   , encryptSymmetric
   , randomBytes
+  , PublicKey()
+  , PrivateKey()
+  , SymmetricKey()
   , PRNG()
   , makePRNG
   , sign
@@ -34,11 +40,11 @@ import qualified Control.Monad.State.Class as S
 
 newtype PRNG = PRNG ChaChaDRG
 
-newtype PrivateKey = PrivateKey BS.ByteString
+newtype PrivateKey = PrivateKey { serializePrivate :: BS.ByteString }
 
-newtype PublicKey = PublicKey BS.ByteString
+newtype PublicKey = PublicKey { serializePublic :: BS.ByteString }
 
-newtype SymmetricKey = SymmetricKey BS.ByteString
+newtype SymmetricKey = SymmetricKey { serializeSymmetric :: BS.ByteString }
 
 type Cipher = AES256
 

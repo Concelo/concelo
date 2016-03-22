@@ -27,7 +27,10 @@ module Database.Concelo.Control
   , ParseState (parseString)
   , character
   , (>>|)
+  , prefix
+  , zeroOrOne
   , zeroOrMore
+  , oneOrMore
   , endOfStream
   , stringLiteral
   , stringLiteralDelimited
@@ -145,7 +148,7 @@ maybeToAction error = \case
   Just v -> return v
 
 class ParseState s where
-  parseString :: L.Lens' s a
+  parseString :: L.Lens' s BS.ByteString
 
 character :: (ParseState s, S.MonadState s m, E.MonadError Exception m) =>
              m Char
@@ -182,11 +185,14 @@ a >>| b = do
     Left error -> E.throwError error
 
 zeroOrMore parser =
-  optional parser >>= \case
+  zeroOrOne parser >>= \case
     Just a -> ((a:) <$> zeroOrMore parser) >>| return [a]
     Nothing -> return []
 
-optional parser = (Just <$> parser) >>| return Nothing
+oneOrMore parser =
+  parser >>= \a -> ((a:) <$> zeroOrMore parser) >>| return [a]
+
+zeroOrOne parser = (Just <$> parser) >>| return Nothing
 
 endOfStream expression = do
   s <- get parseString

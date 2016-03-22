@@ -212,6 +212,8 @@ apply' = \case
         update stateClients $ replaceClient $ L.set clientIgnis ignis' writer
 
   QueueMessages -> do
+    -- todo: serialize and deserialize messages to maximize code
+    -- coverage
     get stateNow >>= randomClient . clientHasMessages >>= \case
       Nothing -> return ()
       Just client -> do

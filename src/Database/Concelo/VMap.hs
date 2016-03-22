@@ -3,8 +3,6 @@ module Database.Concelo.VMap
   ( VMap()
   , empty
   , singleton
-  , key
-  , value
   , member
   , Database.Concelo.VMap.lookup
   , first
@@ -51,14 +49,6 @@ cellVersionsEqual (Cell a _ _) (Cell b _ _) = a == b
 empty = VMap T.Leaf
 
 singleton version key value = insert version key value empty
-
-maybeCell = \case
-  VMap T.Leaf -> Nothing
-  VMap (T.Node _ c _ _) -> Just c
-
-key map = getCellKey <$> maybeCell map
-
-value map = getCellValue <$> maybeCell map
 
 member key map = maybe False (const True) $ find key map
 

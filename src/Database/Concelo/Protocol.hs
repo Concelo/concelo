@@ -1,44 +1,107 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Database.Concelo.Protocol
-  ( Message(Cred, Challenge, Published, Nack, Leaf, Group, Tree, Forest)
-  , getTreeStream
+  ( Message(Cred, Challenge, Published, Persisted, Nack, Leaf, Group, Tree,
+            Forest, NoMessage)
+  , Signed(Signed)
+  , getSignedSigner
+  , getSignedSignature
+  , getSignedText
   , getCredProtocolVersion
+  , getCredRequest
+  , getCredPublic
+  , getCredSignedChallenge
   , getChallengeProtocolVersion
-  , aclWriter
-  , aclReader
-  , Value()
-  , valueNumber
-  , valueString
-  , valueBoolean
-  , valuePriority
+  , getChallengeBody
+  , getPublishedForest
+  , getPersistedForest
+  , getNackNames
+  , getLeafName
+  , getLeafSigned
+  , getLeafTreeStream
+  , getLeafForestStream
+  , getLeafBody
+  , getGroupName
+  , getGroupSigned
+  , getGroupTreeStream
+  , getGroupForestStream
+  , getGroupMembers
+  , getTreeName
+  , getTreeStream
+  , getTreeForestStream
+  , getTreeOptional
+  , getTreeRevision
+  , getTreeSigned
+  , getTreeACL
+  , getTreeLeaves
+  , getForestName
+  , getForestStream
+  , getForestRevision
+  , getForestSigned
+  , getForestAdminRevision
+  , getForestAdminSigned
+  , getForestACL
+  , getForestTrees
+  , aclWriterKey
+  , aclReaderKey
   , rulesKey
+  , localVersion
+  , leafSize
+  , treeLeafLevel
+  , treeACLLevel
+  , treeLevel
+  , forestTreeLevel
+  , forestACLLevel
+  , forestLevel
+  , Value()
+  , getValueSigner
+  , getValuePriority
+  , getValueACL
+  , getValueBody
+  , value
+  , serializeValue
+  , serializeTrie
+  , parseValue
+  , parseTrie
+  , leaf
+  , group
+  , tree
+  , forest
   , version ) where
 
-import Data.ByteString (ByteString)
-
 import Database.Concelo.Control (character, prefix, (>>|), exec, eitherToMaybe,
-                                 zeroOrMore, endOfStream)
+                                 zeroOrOne, zeroOrMore, oneOrMore, endOfStream,
+                                 patternFailure, get, set, update, noParse,
+                                 exception)
+
+import Data.Bits ((.&.), shiftR, shiftL)
 
 import qualified Database.Concelo.Path as P
 import qualified Database.Concelo.Trie as T
-import qualified Database.Concelo.Control as C
+import qualified Database.Concelo.TrieLike as TL
+import qualified Database.Concelo.Control as Co
+import qualified Database.Concelo.Crypto as Cr
 import qualified Database.Concelo.ACL as ACL
 import qualified Control.Lens as L
+import qualified Data.ByteString.Char8 as BS
+import qualified Data.Char as Ch
 
-type Name = P.Path ByteString ()
+type Name = P.Path BS.ByteString ()
 
-type Names = T.Trie ByteString ()
+type Names = T.Trie BS.ByteString ()
 
-data Signed = Signed { getSignedSigner :: ByteString
-                     , getSignedSignature :: ByteString
-                     , getSignedText :: ByteString }
+data Signed = Signed { getSignedSigner :: Cr.PublicKey
+                     , getSignedSignature :: BS.ByteString
+                     , getSignedText :: BS.ByteString }
 
 data Message = Cred { getCredProtocolVersion :: Int
                     , getCredRequest :: Integer
-                    , getCredPublic :: ByteString
-                    , getCredSignedChallenge :: ByteString }
+                    , getCredPublic :: BS.ByteString
+                    , getCredSignedChallenge :: BS.ByteString }
 
              | Challenge { getChallengeProtocolVersion :: Int
-                         , getChallengeBody :: ByteString }
+                         , getChallengeBody :: BS.ByteString }
 
              | Published { getPublishedForest :: Name }
 
@@ -48,19 +111,19 @@ data Message = Cred { getCredProtocolVersion :: Int
 
              | Leaf { getLeafName :: Name
                     , getLeafSigned :: Signed
-                    , getLeafTreeStream :: ByteString
-                    , getLeafForestStream :: ByteString
-                    , getLeafBody :: ByteString }
+                    , getLeafTreeStream :: BS.ByteString
+                    , getLeafForestStream :: BS.ByteString
+                    , getLeafBody :: BS.ByteString }
 
              | Group { getGroupName :: Name
                      , getGroupSigned :: Signed
-                     , getLeafTreeStream :: ByteString
-                     , getLeafForestStream :: ByteString
+                     , getGroupTreeStream :: BS.ByteString
+                     , getGroupForestStream :: BS.ByteString
                      , getGroupMembers :: Names }
 
              | Tree { getTreeName :: Name
-                    , getTreeStream :: ByteString
-                    , getTreeForestStream :: ByteString
+                    , getTreeStream :: BS.ByteString
+                    , getTreeForestStream :: BS.ByteString
                     , getTreeOptional :: Bool
                     , getTreeRevision :: Integer
                     , getTreeSigned :: Signed
@@ -68,7 +131,7 @@ data Message = Cred { getCredProtocolVersion :: Int
                     , getTreeLeaves :: Name }
 
              | Forest { getForestName :: Name
-                      , getForestStream :: ByteString
+                      , getForestStream :: BS.ByteString
                       , getForestRevision :: Integer
                       , getForestSigned :: Signed
                       , getForestAdminRevision :: Integer
@@ -78,27 +141,27 @@ data Message = Cred { getCredProtocolVersion :: Int
 
              | NoMessage
 
-aclWriterKey = "w"
+aclWriterKey = ACL.writerKey
 
-aclReaderKey = "r"
+aclReaderKey = ACL.readerKey
 
-rulesKey = ".rules"
+rulesKey = ".rules" :: BS.ByteString
 
-localVersion = (-1)
+localVersion = (-1) :: Integer
 
-leafSize = 1024
+leafSize = 1024 :: Int
 
-treeLeafLevel = "0"
+treeLeafLevel = "0" :: BS.ByteString
 
-treeACLLevel = "1"
+treeACLLevel = "1" :: BS.ByteString
 
-treeLevel = "2"
+treeLevel = "2" :: BS.ByteString
 
-forestTreeLevel = "3"
+forestTreeLevel = "3" :: BS.ByteString
 
-forestACLLevel = "4"
+forestACLLevel = "4" :: BS.ByteString
 
-forestLevel = "5"
+forestLevel = "5" :: BS.ByteString
 
 toText = \case
   Leaf _ _ treeStream forestStream body ->
@@ -110,57 +173,72 @@ toText = \case
   Tree _ stream forestStream optional revision _ acl leaves ->
     return $
     BS.concat [stream, forestStream, if optional then "1" else "0",
-               serializeInteger revision, serializeNames acl,
-               serializeNames leaves]
+               serializeInteger revision, serializeName acl,
+               serializeName leaves]
 
-  Forest _ stream revision adminRevision adminSigned acl trees ->
+  Forest _ stream revision _ adminRevision adminSigned acl trees ->
     return $
     BS.concat [stream, serializeInteger revision,
-               serializeInteger adminRevision, getSignedSigner adminSigned,
+               serializeInteger adminRevision,
+               Cr.serializePublic $ getSignedSigner adminSigned,
                getSignedSignature adminSigned, getSignedText adminSigned,
-               serializeNames acl, serializeNames trees]
+               serializeName acl, serializeName trees]
 
   _ -> patternFailure
 
-dummySigned = Signed BS.empty BS.empty BS.empty
+dummySigned = Signed undefined undefined undefined
 
-dummyName = P.singleton ()
+dummyName = P.leaf ()
 
 digest message (public, private) = do
   text <- toText message
 
-  signature <- C.sign private text
+  signature <- Cr.sign private text
 
   return (text, Signed public signature text)
 
 leaf keyPair level treeStream forestStream body = do
   let leaf = Leaf dummyName dummySigned treeStream forestStream body
 
-  (text, signed) <- digest leaf keyPair
+  (_, signed) <- digest leaf keyPair
 
   return leaf { getLeafName = P.super level
                               $ P.super "1"
-                              $ P.singleton (C.hash [body]) ()
+                              $ P.singleton (Cr.hash [body]) ()
 
               , getLeafSigned = signed }
 
+bsShow :: Show s => s -> BS.ByteString
+bsShow = BS.pack . show
+
+bsRead :: Read r => BS.ByteString -> r
+bsRead = read . BS.unpack
+
+group :: Foldable t =>
+         (Cr.PublicKey, Cr.PrivateKey) ->
+         Int ->
+         Int ->
+         BS.ByteString ->
+         BS.ByteString ->
+         t BS.ByteString ->
+         Co.Action Cr.PRNG Message
 group keyPair level height treeStream forestStream members = do
   let group = Group dummyName dummySigned treeStream forestStream
               $ foldr (\member ->
                         T.union
-                        $ P.super level
-                        $ P.super (BS.pack $ show $ height - 1)
+                        $ P.super (bsShow level)
+                        $ P.super (bsShow $ height - 1)
                         $ P.singleton member ()) T.empty members
 
-  (text, signed) <- digest leaf keyPair
+  (_, signed) <- digest group keyPair
 
-  return group { getGroupName = P.super level
-                              $ P.super (BS.pack $ show height)
-                              $ P.singleton (C.hash members) ()
+  return group { getGroupName = P.super (bsShow level)
+                              $ P.super (bsShow height)
+                              $ P.singleton (Cr.hash members) ()
 
                , getGroupSigned = signed }
 
-tree (public, private) stream forestStream optional revision acl
+tree keyPair stream forestStream optional revision acl
   leaves = do
     let tree = Tree dummyName stream forestStream optional revision
                dummySigned acl leaves
@@ -168,119 +246,136 @@ tree (public, private) stream forestStream optional revision acl
     (text, signed) <- digest tree keyPair
 
     return tree { getTreeName = P.super treeLevel
-                                $ P.singleton (C.hash [text]) ()
+                                $ P.singleton (Cr.hash [text]) ()
 
                 , getTreeSigned = signed }
 
-forest (public, private) stream revision adminRevision adminSigned acl trees =
+forest keyPair stream revision adminRevision adminSigned acl trees =
   do
     let forest = Forest dummyName stream revision dummySigned adminRevision
                  adminSigned acl trees
 
-    (text, signed) <- digest tree keyPair
+    (text, signed) <- digest forest keyPair
 
     return forest { getForestName = P.super forestLevel
-                                    $ P.singleton (C.hash [text]) ()
+                                    $ P.singleton (Cr.hash [text]) ()
 
                   , getForestSigned = signed }
 
-getMessageStreams = \case
-  Leaf { getLeafTreeStream = ts, getLeafForestStream = fs } -> (ts, fs)
-  Group { getGroupTreeStream = ts, getGroupForestStream = fs } -> (ts, fs)
-  _ -> ""
+serializeInteger :: Integer -> BS.ByteString
+serializeInteger n = BS.pack $ writeInteger n []
 
-serializeInteger = BS.concat $ writeInteger n []
-
+writeInteger :: Integer -> String -> String
 writeInteger = \case
-  0 -> (0:0:)
+  0 -> (toEnum 0 :) . (toEnum 0 :)
   n -> (case n .&. 255 of
-           0 -> (0:1:)
-           b -> (b:)) . writeInteger (n `shiftR` 8)
+           0 -> (toEnum 0 :) . (toEnum 1 :)
+           b -> (toEnum (fromIntegral b) :))
+       . writeInteger (n `shiftR` 8)
 
+writeString :: BS.ByteString -> [BS.ByteString] -> [BS.ByteString]
 writeString s =
-  let length = BS.length s in
-  writeInteger length . (s:)
+  let length = fromIntegral $ BS.length s in
+  (serializeInteger length :) . (s :)
 
+serializeNames :: Names -> BS.ByteString
 serializeNames = serializeTrie . fmap (const BS.empty)
 
+serializeName :: Name -> BS.ByteString
+serializeName = serializeNames . flip T.union T.empty
+
+serializeTrie :: T.Trie BS.ByteString BS.ByteString -> BS.ByteString
 serializeTrie trie = BS.concat $ writeTrie trie []
 
+writeTrie :: T.Trie BS.ByteString BS.ByteString ->
+             [BS.ByteString] ->
+             [BS.ByteString]
 writeTrie trie =
   case TL.value trie of
     Nothing -> id
-    Just v -> if null v then ("n":) else ("v":) . writeString v
+    Just v -> if BS.null v then ("n":) else ("v":) . writeString v
   . TL.foldrPairs visit id trie where
-    visit (k, a) = (("k":) . writeString k . writeTrie a . ("u":) .)
+    visit (k, a) = ((("k":) . writeString k . writeTrie a . ("u":)) .)
 
 data TrieState =
-  TrieState { getTrieStateString :: ByteString
-            , getTrieStatePath :: [ByteString]
-            , getTrieStateTrie :: T.Trie ByteString ByteString }
+  TrieState { getTrieStateString :: BS.ByteString
+            , getTrieStatePath :: [BS.ByteString]
+            , getTrieStateTrie :: T.Trie BS.ByteString BS.ByteString }
 
+trieStateString :: L.Lens' TrieState BS.ByteString
 trieStateString =
   L.lens getTrieStateString (\x v -> x { getTrieStateString = v })
 
+trieStatePath :: L.Lens' TrieState [BS.ByteString]
 trieStatePath =
   L.lens getTrieStatePath (\x v -> x { getTrieStatePath = v })
 
 trieStateTrie =
   L.lens getTrieStateTrie (\x v -> x { getTrieStateTrie = v })
 
-instance C.ParseState TrieState where
+instance Co.ParseState TrieState where
   parseString = trieStateString
 
 parseTrie s =
   getTrieStateTrie <$> (eitherToMaybe $ exec trie $ TrieState s [] T.empty)
 
+size :: Co.ParseState s => Co.Action s Integer
 size = do
-  (ord <$> character) >>= \case
-    0 -> (ord <$> character) >>= \case
+  (Ch.ord <$> character) >>= \case
+    0 -> (Ch.ord <$> character) >>= \case
       0 -> return 0
       _ -> (`shiftL` 8) <$> size
-    n -> ((+n) . (`shiftL` 8)) <$> size
+    n -> ((+ fromIntegral n) . (`shiftL` 8)) <$> size
 
+stringOfSize :: Co.ParseState s => Integer -> Co.Action s BS.ByteString
 stringOfSize size = do
-  s <- get parseString
-  if length s >= size then
-    let (a, b) = splitAt size s in do
-      set parseString b
+  s <- get Co.parseString
+  let isize = fromIntegral size
+  if BS.length s >= isize then
+    let (a, b) = BS.splitAt isize s in do
+      set Co.parseString b
       return a
     else
     noParse
 
+key :: Co.Action TrieState ()
 key = do
   prefix "k"
   size >>= stringOfSize >>= \s -> update trieStatePath (s:)
 
 path = oneOrMore key
 
-value = (prefix "n" >> BS.empty) >>| (prefix "v" >> size >>= stringOfSize)
+parseLeaf
+  =   (prefix "n" >> return BS.empty)
+  >>| (prefix "v" >> size >>= stringOfSize)
 
 pathToValue =
-  path >> value >>= \v -> do
+  path >> parseLeaf >>= \v -> do
     p <- get trieStatePath
-    update trieStateTrie $ T.union $ P.toPath p $ v
+    update trieStateTrie $ T.union $ P.toPath p v
 
 up = do
   prefix "u"
-  trieStatePath >>= \case
-    [] -> error "stack underflow"
-    (_, ks) -> set trieStatePath ks
+  get trieStatePath >>= \case
+    [] -> exception "stack underflow"
+    _:ks -> set trieStatePath ks
 
 done = prefix "d"
 
-trie = zeroOrMore (pathToValue >>| up) >> done
+trie = zeroOrMore (pathToValue >>| up) >> done >> return ()
 
+serializeValue :: Value -> BS.ByteString
 serializeValue value = BS.concat $ writeValue value []
 
+writeValue :: Value -> [BS.ByteString] -> [BS.ByteString]
 writeValue (Value _ priority _ body) =
   if priority /= defaultPriority then
-    ("p":) . writeSize priority
+    ("p":) . (serializeInteger (fromIntegral priority) :)
   else
     id
   . case body of
     NullBody -> ("_":)
-    NumberBody n -> ("n":) . writeString (show n)
+    NumberBody n -> ("n":) . writeString (bsShow n)
     StringBody s -> ("s":) . writeString s
     BooleanBody True -> ("t":)
     BooleanBody False -> ("f":)
@@ -289,87 +384,96 @@ defaultPriority = 0
 
 data ValueBody = NullBody
                | NumberBody Double
-               | StringBody ByteString
+               | StringBody BS.ByteString
                | BooleanBody Bool
 
-data Value = Value { getValueSigner :: ByteString
+data Value = Value { getValueSigner :: Cr.PublicKey
                    , getValuePriority :: Int
                    , getValueACL :: ACL.ACL
                    , getValueBody :: ValueBody }
 
-valueSigner =
-  L.lens getValueSigner (\x v -> x { getValueSigner = v })
+-- valueSigner :: L.Lens' Value Cr.PublicKey
+-- valueSigner =
+--   L.lens getValueSigner (\x v -> x { getValueSigner = v })
 
+valuePriority :: L.Lens' Value Int
 valuePriority =
   L.lens getValuePriority (\x v -> x { getValuePriority = v })
 
-valueAcl =
-  L.lens getValueAcl (\x v -> x { getValueAcl = v })
+-- valueACL :: L.Lens' Value ACL.ACL
+-- valueACL =
+--   L.lens getValueACL (\x v -> x { getValueACL = v })
 
 valueBody =
   L.lens getValueBody (\x v -> x { getValueBody = v })
 
-valueNumber = \case
-  Value { getValueBody = NumberBody n } -> Just n
-  _ -> Nothing
+-- valueNumber = \case
+--   Value { getValueBody = NumberBody n } -> Just n
+--   _ -> Nothing
 
-valueString = \case
-  Value { getValueBody = StringBody s } -> Just s
-  _ -> Nothing
+-- valueString = \case
+--   Value { getValueBody = StringBody s } -> Just s
+--   _ -> Nothing
 
-valueBoolean = \case
-  Value { getValueBody = BooleanBody b } -> Just b
-  _ -> Nothing
+-- valueBoolean = \case
+--   Value { getValueBody = BooleanBody b } -> Just b
+--   _ -> Nothing
 
-value priority body = Value BS.empty priority ACL.empty body
+value priority body = Value undefined priority ACL.empty body
 
-data ValueState = ValueState { getValueStateString :: ByteString
+data ValueState = ValueState { getValueStateString :: BS.ByteString
                              , getValueStateValue :: Value }
 
+valueStateString :: L.Lens' ValueState BS.ByteString
 valueStateString =
   L.lens getValueStateString (\x v -> x { getValueStateString = v })
 
+valueStateValue :: L.Lens' ValueState Value
 valueStateValue =
   L.lens getValueStateValue (\x v -> x { getValueStateValue = v })
 
-instance C.ParseState ValueState where
+instance Co.ParseState ValueState where
   parseString = valueStateString
 
 parseValue signer acl s =
   getValueStateValue
-  <$> (eitherToMaybe $ exec value $ ValueState s
+  <$> (eitherToMaybe $ exec parseValue' $ ValueState s
        $ Value signer defaultPriority acl NullBody)
 
+priority :: Co.Action ValueState ()
 priority = do
   prefix "p"
-  size >>= set (valuePriority . valueStateValue)
+  (fromIntegral <$> size) >>= set (valueStateValue . valuePriority)
 
-nullBody =
+nullBody = do
   prefix "_"
-  set (valueBody . valueStateValue) NullBody
+  set (valueStateValue . valueBody) NullBody
 
 -- todo: use an efficient binary encoding
-numberBody =
+numberBody = do
   prefix "n"
   size
   >>= stringOfSize
-  >>= set (valueBody . valueStateValue) . NumberBody . read
+  >>= set (valueStateValue . valueBody) . NumberBody . bsRead
 
-stringBody =
+stringBody = do
   prefix "s"
   size
   >>= stringOfSize
-  >>= set (valueBody . valueStateValue) . StringBody
+  >>= set (valueStateValue . valueBody) . StringBody
 
-booleanBody = do
+booleanBody =
+  let put = set (valueStateValue . valueBody) . BooleanBody in
   (prefix "t" >>| prefix "f")
-  >>= set (valueBody . valueStateValue) . BooleanBody . \case
-    "t" -> True
-    "f" -> False
+  >>= \case
+    "t" -> put True
+    "f" -> put False
+    _ -> patternFailure
 
-value
-  =  (optional priority)
-  >> (nullBody >>| numberBody >>| stringBody >>| booleanBody)
-  >> endOfStream
+parseValue' :: Co.Action ValueState ()
+parseValue' = do
+  zeroOrOne priority
+  nullBody >>| numberBody >>| stringBody >>| booleanBody
+  endOfStream ()
 
-version = 0
+version = 0 :: Integer

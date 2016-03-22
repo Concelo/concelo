@@ -16,6 +16,8 @@ module Database.Concelo.Trie
   , paths
   , foldrPathsAndValues
   , pathsAndValues
+  , foldrKeys
+  , keys
   , sub
   , super
   , superValue
@@ -75,6 +77,10 @@ paths = V.paths . run
 foldrPathsAndValues visit seed = V.foldrPathsAndValues visit seed . run
 
 pathsAndValues = V.pathsAndValues . run
+
+foldrKeys visit seed = V.foldrKeys visit seed . run
+
+keys = V.keys . run
 
 sub k = Trie . V.sub k . run
 
