@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 module Database.Concelo.Path
   ( Path()
   , leaf
@@ -5,26 +6,18 @@ module Database.Concelo.Path
   , toPath
   , keys
   , value
+  , valueHere
   , sub
   , super ) where
-
-import qualified Database.Concelo.TrieLike as TL
 
 data Path k v = Path { getPathKeys :: [k]
                      , getPathValue :: v }
 
-instance Functor Path where
+instance Functor (Path k) where
   fmap f (Path ks v) = Path ks (f v)
 
 instance Foldable (Path k) where
   foldr visit seed (Path _ v) = visit v seed
-
-instance TL.TrieLike Path where
-  value = value'
-  member (Path as _) (Path bs _) = as == bs
-  foldrPairs visit seed = \case
-    Path (k:ks) v -> visit (k, Path ks v) seed
-    _ -> seed
 
 leaf v = Path [] v
 
@@ -32,18 +25,16 @@ singleton k v = Path [k] v
 
 keys = getPathKeys
 
-value' = \case
+value = getPathValue
+
+valueHere = \case
   Path [] v -> Just v
   _ -> Nothing
-
-value = value'
-
-findValue = getPathValue
 
 toPath = Path
 
 sub = \case
-  Path (k:ks) v -> Just (Path ks v)
-  p -> Nothing
+  Path (k:ks) v -> Just (k, Path ks v)
+  _ -> Nothing
 
 super k (Path ks v) = Path (k:ks) v

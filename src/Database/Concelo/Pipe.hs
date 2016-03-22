@@ -5,16 +5,18 @@ module Database.Concelo.Pipe
   , pipeSubscriber
   , nextMessages ) where
 
-import Database.Concelo.Control (with, getAndSet)
+import Database.Concelo.Control (with, getThenSet)
 
 import qualified Control.Lens as L
+import qualified Database.Concelo.Publisher as P
+import qualified Database.Concelo.Subscriber as S
 
-data Pipe = Pipe { getPipePublisher :: Pub.Publisher
-                 , getPipeSubscriber :: Pub.Subscriber
+data Pipe = Pipe { getPipePublisher :: P.Publisher
+                 , getPipeSubscriber :: S.Subscriber
                  , getPipeLastPing :: Integer
                  , getPipePublisherSent :: Bool }
 
-empty = Pipe Pub.empty Sub.empty 0 False
+empty = Pipe P.empty S.empty 0 False
 
 pipePublisher = L.lens getPipePublisher (\x v -> x { getPipePublisher = v })
 
@@ -28,8 +30,8 @@ pipePublisherSent =
 pingInterval = 1000
 
 nextMessages now ping = do
-  subMessage <- with pipeSubscriber Sub.nextMessage
-  pubMessage <- with pipePublisher Pub.nextMessage
+  subMessage <- with pipeSubscriber S.nextMessage
+  pubMessage <- with pipePublisher P.nextMessage
 
   pubMessages <- case pubMessage of
     Nothing -> do

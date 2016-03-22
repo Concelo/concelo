@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 module Database.Concelo.BiTrie
   ( empty
   , insert
@@ -5,7 +6,7 @@ module Database.Concelo.BiTrie
   , reverseDelete
   , delete
   , reverseSubtract
-  , subtract
+  , Database.Concelo.BiTrie.subtract
   , reverseFind
   , find ) where
 
@@ -18,8 +19,11 @@ type Trie k = T.Trie k ()
 data BiTrie k = BiTrie { getForward :: Trie k
                        , getReverse :: Trie k }
 
+forward :: L.Lens' (BiTrie k) (Trie k)
 forward = L.lens getForward (\x v -> x { getForward = v })
-reverse = L.lens getReverse (\x v -> x { getReverse = v })
+
+reverse' :: L.Lens' (BiTrie k) (Trie k)
+reverse' = L.lens getReverse (\x v -> x { getReverse = v })
 
 empty = BiTrie T.empty T.empty
 
@@ -32,14 +36,20 @@ insert key value biTrie = BiTrie
 insertTrie key trie biTrie =
   T.foldrPaths (insert key) biTrie trie
 
-reverseDelete value = delete' value reverse forward
+reverseDelete value = delete' value reverse' forward
 
-delete key = delete' key forward reverse
+delete key = delete' key forward reverse'
 
+delete' :: Ord k =>
+           P.Path k () ->
+           L.Lens' (BiTrie k) (Trie k) ->
+           L.Lens' (BiTrie k) (Trie k) ->
+           BiTrie k ->
+           BiTrie k
 delete' path a b biTrie =
-  L.set b (T.foldrPaths (\p -> T.subtract (p `append` path)) (b biTrie)
-           $ T.find path $ a biTrie)
-  $ L.set a (T.subtractAll path $ a biTrie) biTrie
+  L.set b (T.foldrPaths (\p -> T.subtract (p `append` path)) (L.view b biTrie)
+           $ T.find path $ L.view a biTrie)
+  $ L.set a (T.subtractAll path $ L.view a biTrie) biTrie
 
 reverseSubtract values = subtract' values reverseDelete
 

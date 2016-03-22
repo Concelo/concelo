@@ -2,7 +2,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
 module Database.Concelo.Control
-  ( get
+  ( Action
+  , get
   , set
   , setThenGet
   , update
@@ -203,7 +204,7 @@ stringLiteralBody delimiter =
       | otherwise = ('\\':) . (c:) <$> (character >>= unescaped)
 
 stringLiteralDelimited delimiter = do
-  _ <- terminal $ BS.singleton delimiter
+  terminal $ BS.singleton delimiter
   s <- stringLiteralBody delimiter
   return $ BS.pack s
 

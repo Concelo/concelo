@@ -16,14 +16,13 @@ module Database.Concelo.Trie
   , paths
   , foldrPathsAndValues
   , pathsAndValues
-  , values
   , sub
   , super
   , superValue
   , union
   , intersectL
   , intersectR
-  , subtract
+  , Database.Concelo.Trie.subtract
   , subtractAll ) where
 
 import qualified Database.Concelo.VTrie as V
@@ -31,16 +30,19 @@ import qualified Database.Concelo.TrieLike as TL
 
 newtype Trie k v = Trie { run :: V.VTrie k v }
 
-instance Functor (Trie k) where
+instance Ord k => Functor (Trie k) where
   fmap f = Trie . fmap f . run
 
 instance Foldable (Trie k) where
   foldr visit seed = foldr visit seed . run
 
 instance TL.TrieLike Trie where
-  value = value . run
-  member path = member path . run
-  foldrPairs visit seed = foldrPairs visit seed . run
+  value = TL.value . run
+  member path = TL.member path . run
+  foldrPairs visit seed =
+    TL.foldrPairs (\(k, a) -> visit (k, Trie a)) seed . run
+
+noRevision = -1
 
 trie = Trie
 
@@ -56,7 +58,7 @@ firstPath = V.firstPath . run
 
 first = V.first . run
 
-find path = V.find path . run
+find path = Trie . V.find path . run
 
 findValue path = V.findValue path . run
 
@@ -64,32 +66,28 @@ member path = V.member path . run
 
 hasAll a b = V.hasAll (run a) (run b)
 
-triples trie = (\(k, v, sub) -> (k, v, Trie sub)) <$> run trie
+hasAny a b = V.hasAny (run a) (run b)
+
+foldrPaths visit seed = V.foldrPaths visit seed . run
 
 paths = V.paths . run
 
+foldrPathsAndValues visit seed = V.foldrPathsAndValues visit seed . run
+
 pathsAndValues = V.pathsAndValues . run
 
-insert k v (Trie r t) = Trie r $ V.insert r k v t
+sub k = Trie . V.sub k . run
 
-modify k f (Trie r t) = Trie r $ V.modify r k f t
+superValue k v = Trie . V.superValue noRevision k v . run
 
-delete k (Trie r t) = Trie r $ V.delete r k t
+super k = Trie . V.super noRevision k . run
 
-sub k (Trie r t) = Trie r $ V.sub k t
+union a = Trie . V.union noRevision a . run
 
-superKV k v (Trie r t) = Trie r $ V.superKV r k v t
+intersectL a = Trie . V.intersectL noRevision a . run
 
-super k (Trie r t) = Trie r $ V.super r k t
+intersectR a = Trie . V.intersectR noRevision a . run
 
-singleton r k v = Trie r $ V.singleton r k v
+subtract a = Trie . V.subtract noRevision a . run
 
-union a (Trie r t) = Trie r $ V.union r a t
-
-intersectL a (Trie r t) = Trie r $ V.intersectL r a t
-
-intersectR a (Trie r t) = Trie r $ V.intersectR r a t
-
-subtract a (Trie r t) = Trie r $ V.subtract r a t
-
-subtractAll a (Trie r t) = Trie r $ V.subtractAll r a t
+subtractAll a = Trie . V.subtractAll noRevision a . run

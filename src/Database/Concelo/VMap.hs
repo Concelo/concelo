@@ -2,6 +2,7 @@
 module Database.Concelo.VMap
   ( VMap()
   , empty
+  , singleton
   , key
   , value
   , member
@@ -10,7 +11,9 @@ module Database.Concelo.VMap
   , insert
   , modify
   , delete
+  , foldrPairs
   , pairs
+  , foldrTriples
   , triples
   , index
   , foldrDiff ) where
@@ -21,6 +24,12 @@ import Data.Maybe (fromJust)
 import Control.Applicative ((<|>))
 
 newtype VMap k v = VMap { run :: T.RBTree (Cell k v) }
+
+instance Ord k => Functor (VMap k) where
+  fmap f = foldrTriples (\(r, k, v) -> insert r k $ f v) empty
+
+instance Foldable (VMap k) where
+  foldr visit seed = foldr (\(Cell _ _ v) -> visit v) seed . run
 
 data Cell k v = Cell { getCellVersion :: Integer
                      , getCellKey :: k
@@ -41,6 +50,8 @@ cellVersionsEqual (Cell a _ _) (Cell b _ _) = a == b
 
 empty = VMap T.Leaf
 
+singleton version key value = insert version key value empty
+
 maybeCell = \case
   VMap T.Leaf -> Nothing
   VMap (T.Node _ c _ _) -> Just c
@@ -57,13 +68,13 @@ find key (VMap tree) = T.searchFast (\k c -> compare k $ getCellKey c) tree key
 
 first (VMap tree) = pairKV <$> T.first tree
 
-insert version key value map = modify version key (const $ Just value) map
+insert version key value = modify version key (const $ Just value)
 
 modify version key transform (VMap tree) =
   VMap $ T.modifyVersioned (L.set cellVersion version) compareKey tree
   key ((Cell version key <$>) . transform . (getCellValue <$>))
 
-delete version key map = modify version key (const Nothing) map
+delete version key = modify version key (const Nothing)
 
 foldrPairs visit seed = foldr (visit . pairKV) seed . run
 
@@ -77,15 +88,14 @@ index version f = foldr (\v -> insert version (f v) v) empty
 
 pairKV (Cell _ k v) = (k, v)
 
-pairRV (Cell r _ v) = (r, v)
-
 triple (Cell r k v) = (r, k, v)
 
 visitor visit a b =
   visit
   (fromJust ((getCellKey <$> a) <|> (getCellKey <$> b)))
-  (pairRV <$> a)
-  (pairRV <$> b)
+  (getCellValue <$> a)
+  (getCellValue <$> b)
 
 foldrDiff visit seed a b =
-  T.foldrDiffVersioned cellVersionsEqual compare (visitor visit) seed a b
+  T.foldrDiffVersioned cellVersionsEqual compare (visitor visit) seed
+  (run a) (run b)

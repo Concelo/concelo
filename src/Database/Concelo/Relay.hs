@@ -129,6 +129,13 @@ receive = \case
 
   -- todo: stream (authenticated) chunks to subscribers as they are
   -- received rather than wait until we have a complete tree
+
+  -- todo: enforce bandwidth and storage limits for this forest
+  -- stream.  Consider both soft and hard storage limits, where no new
+  -- revision can exceed the soft limit and the combined size of all
+  -- partial revisions and the latest full revision cannot exceed the
+  -- hard limit.
+
   message -> do
     publicKey <- get relayPublicKey
     when (isJust publicKey)
@@ -154,10 +161,15 @@ nextMessages now = do
     Just _ -> do
       published <-
         P.Published <$> get
-        (Sub.forestName . Sub.subscriberPublished . relaySubscriber)
+        (Sub.forestName . Sub.subscriberPublished . Pipe.pipeSubscriber
+         . relayPipe)
 
       persisted <-
+        -- todo: actually persist incoming revisions to durable
+        -- storage and send P.Persisted messages only once they are
+        -- safely stored
         P.Persisted <$> get
-        (Sub.forestName . Sub.subscriberPersisted . relaySubscriber)
+        (Sub.forestName . Sub.subscriberPublished . Pipe.pipeSubscriber
+         . relayPipe)
 
       return [published, persisted]

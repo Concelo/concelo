@@ -18,7 +18,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Database.Concelo.Ignis
-  ghc-options:         -Wall -fno-warn-missing-signatures -fno-warn-name-shadowing -Werror
+  ghc-options:         -Wall -fno-warn-missing-signatures -fno-warn-name-shadowing -fno-warn-unused-do-bind -Werror
   hs-source-dirs:      src
   -- other-modules:
   -- other-extensions:

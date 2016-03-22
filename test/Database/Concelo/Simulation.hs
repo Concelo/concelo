@@ -116,6 +116,7 @@ consistent (State _ clients _) = case clients of
   client:clients -> consistentWith client clients
   _ -> True
   where
+    todo -- compare the head tries, not just the revisions
     revision = I.getPublishedRevision . getClientIgnis
 
     consistentWith client = \case

@@ -4,12 +4,11 @@ module Database.Concelo.Ignis
 import qualified Control.Lens as L
 import qualified Data.ByteString as BS
 import qualified Database.Concelo.Crypto as C
-import qualified Database.Concelo.Protocol as Pro
-import qualified Database.Concelo.Revision as R
-import qualified Database.Concelo.Pipe as Pipe
-import qualified Database.Concelo.Serializer as Ser
-import qualified Database.Concelo.Deserializer as Des
-import qualified Database.Concelo.Path as Path
+import qualified Database.Concelo.Protocol as Pr
+import qualified Database.Concelo.Pipe as Pi
+import qualified Database.Concelo.Serializer as S
+import qualified Database.Concelo.Deserializer as D
+import qualified Database.Concelo.Path as Pa
 import qualified Database.Concelo.VTrie as VT
 import qualified Database.Concelo.Trie as T
 
@@ -27,11 +26,11 @@ data Cred = Cred { getCredPrivate :: BS.ByteString
 data Ignis = Ignis { getIgnisCred :: Maybe Cred
                    , getIgnisChallenge :: Maybe BS.ByteString
                    , getIgnisNextRequest :: Int
-                   , getIgnisHead :: R.Revision
-                   , getIgnisDiff :: R.ValueTrie
-                   , getIgnisPipe :: Pipe.Pipe
-                   , getIgnisSerializer :: Ser.Serializer
-                   , getIgnisDeserializer :: Des.Deserializer
+                   , getIgnisHead :: VT.VTrie BS.ByteString Pr.Value
+                   , getIgnisDiff :: (T.Trie, T.Trie)
+                   , getIgnisPipe :: Pi.Pipe
+                   , getIgnisSerializer :: S.Serializer
+                   , getIgnisDeserializer :: D.Deserializer
                    , getIgnisPRNG :: C.PRNG }
 
 ignisCred =
