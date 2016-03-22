@@ -4,23 +4,35 @@ module Database.Concelo.Chunks
 
 import Database.Concelo.Control (badForest, maybeM2)
 
-import qualified Database.Concelo.Protocol as P
+import Control.Monad (foldM)
+
+import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.Path as Pa
+import qualified Database.Concelo.Control as C
+import qualified Data.ByteString as BS
 
 chunkIsLeaf = \case
-  P.Leaf {} -> True
+  Pr.Leaf {} -> True
   _ -> False
 
 chunkMembers = \case
-  P.Group { P.getGroupMembers = m } -> m
+  Pr.Group { Pr.getGroupMembers = m } -> m
   _ -> T.empty
 
 findNewChunks oldChunks newChunks newRoot =
-  visit newRoot (T.empty, T.empty, T.empty) where
-    visit name (new, newLeaves, found) =
-      case T.find name oldChunks of
-        Just chunk ->
-          return (new, newLeaves, T.union (const chunk <$> name) found)
+  visit (T.empty, T.empty, T.empty) newRoot where
+    visit :: (T.Trie BS.ByteString Pr.Message,
+              T.Trie BS.ByteString Pr.Message,
+              T.Trie BS.ByteString ()) ->
+             Pa.Path BS.ByteString () ->
+             C.Action s (T.Trie BS.ByteString Pr.Message,
+                         T.Trie BS.ByteString Pr.Message,
+                         T.Trie BS.ByteString ())
+    visit (new, newLeaves, found) name =
+      case T.findValue name oldChunks of
+        Just _ ->
+          return (new, newLeaves, T.union name found)
 
         Nothing -> maybeM2 T.findValue name newChunks >>= \chunk ->
           -- we do not allow a given chunk to have more than one
@@ -33,20 +45,25 @@ findNewChunks oldChunks newChunks newRoot =
                            T.union (const chunk <$> name) newLeaves
                          else
                            newLeaves,
-                         found) (chunkMembers chunk)
+                         found) (T.paths $ chunkMembers chunk)
 
 findObsoleteChunks oldChunks oldRoot found =
-  visit oldRoot (T.empty, T.empty) where
-    visit name result@(obsolete, obsoleteLeaves) =
+  visit (T.empty, T.empty) oldRoot where
+    visit :: (T.Trie BS.ByteString Pr.Message,
+              T.Trie BS.ByteString Pr.Message) ->
+             Pa.Path BS.ByteString () ->
+             C.Action s (T.Trie BS.ByteString Pr.Message,
+                         T.Trie BS.ByteString Pr.Message)
+    visit result@(obsolete, obsoleteLeaves) name =
       if T.member name found then
-        result
+        return result
       else
         maybeM2 T.findValue name oldChunks >>= \chunk ->
           foldM visit (T.union (const chunk <$> name) obsolete,
                        if chunkIsLeaf chunk then
                          T.union (const chunk <$> name) obsoleteLeaves
                        else
-                         obsoleteLeaves) (chunkMembers chunk)
+                         obsoleteLeaves) (T.paths $ chunkMembers chunk)
 
 diffChunks oldChunks oldRoot newChunks newRoot = do
   (new, newLeaves, found) <- findNewChunks oldChunks newChunks newRoot

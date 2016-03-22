@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 module Database.Concelo.Subscriber
   ( receive
   , subscriberPublished
@@ -69,13 +70,13 @@ subscriberStream =
   L.lens getSubscriberStream (\x v -> x { getSubscriberStream = v })
 
 subscriberPersisted =
-  L.lens getSubscriberPersisted (\x v -> x { getSubscriberPersisted = v }
+  L.lens getSubscriberPersisted (\x v -> x { getSubscriberPersisted = v })
 
 subscriberPublished =
-  L.lens getSubscriberPublished (\x v -> x { getSubscriberPublished = v }
+  L.lens getSubscriberPublished (\x v -> x { getSubscriberPublished = v })
 
 subscriberClean =
-  L.lens getSubscriberClean (\x v -> x { getSubscriberClean = v }
+  L.lens getSubscriberClean (\x v -> x { getSubscriberClean = v })
 
 subscriberDiff =
   L.lens getSubscriberDiff (\x v -> x { getSubscriberDiff = v })
