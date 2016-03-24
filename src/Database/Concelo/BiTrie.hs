@@ -1,6 +1,9 @@
 {-# LANGUAGE RankNTypes #-}
 module Database.Concelo.BiTrie
-  ( empty
+  ( BiTrie()
+  , empty
+  , trie
+  , reverseTrie
   , insert
   , insertTrie
   , reverseDelete
@@ -10,54 +13,75 @@ module Database.Concelo.BiTrie
   , reverseFind
   , find ) where
 
+import Data.Maybe (fromMaybe)
+
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Path as P
 import qualified Control.Lens as L
 
-type Trie k = T.Trie k ()
+data BiTrie k = BiTrie { getForward :: T.Trie k (T.Trie k ())
+                       , getReverse :: T.Trie k (T.Trie k ()) }
 
-data BiTrie k = BiTrie { getForward :: Trie k
-                       , getReverse :: Trie k }
-
-forward :: L.Lens' (BiTrie k) (Trie k)
+forward :: L.Lens' (BiTrie k) (T.Trie k (T.Trie k ()))
 forward = L.lens getForward (\x v -> x { getForward = v })
 
-reverse' :: L.Lens' (BiTrie k) (Trie k)
+reverse' :: L.Lens' (BiTrie k) (T.Trie k (T.Trie k ()))
 reverse' = L.lens getReverse (\x v -> x { getReverse = v })
 
 empty = BiTrie T.empty T.empty
 
-append a b = foldr P.super b $ P.keys a
+trie = getForward
+
+reverseTrie = getReverse
+
+insert' key value trie =
+  T.union (const values' <$> key) trie where
+    values' = case T.findValue key trie of
+      Nothing -> T.fromTrieLike value
+      Just values -> T.union value values
 
 insert key value biTrie = BiTrie
-  (T.union (value `append` key) (getForward biTrie))
-  (T.union (key `append` value) (getReverse biTrie))
+  (insert' key value (getForward biTrie))
+  (insert' value key (getReverse biTrie))
 
 insertTrie key trie biTrie =
   T.foldrPaths (insert key) biTrie trie
 
-reverseDelete value = delete' value reverse' forward
+reverseDelete value = deleteFromBoth value reverse' forward
 
-delete key = delete' key forward reverse'
+delete key = deleteFromBoth key forward reverse'
 
-delete' :: Ord k =>
-           P.Path k () ->
-           L.Lens' (BiTrie k) (Trie k) ->
-           L.Lens' (BiTrie k) (Trie k) ->
-           BiTrie k ->
-           BiTrie k
-delete' path a b biTrie =
-  L.set b (T.foldrPaths (\p -> T.subtract (p `append` path)) (L.view b biTrie)
-           $ T.find path $ L.view a biTrie)
-  $ L.set a (T.subtractAll path $ L.view a biTrie) biTrie
+deleteFromBoth :: Ord k =>
+                  P.Path k () ->
+                  L.Lens' (BiTrie k) (T.Trie k (T.Trie k ())) ->
+                  L.Lens' (BiTrie k) (T.Trie k (T.Trie k ())) ->
+                  BiTrie k ->
+                  BiTrie k
+deleteFromBoth path a b biTrie =
+  L.over b (deleteFromEach path
+            $ fromMaybe T.empty
+            $ T.findValue path
+            $ L.view a biTrie)
+  $ L.over a (T.subtract path) biTrie
+
+deleteFromEach value keys trie =
+  T.foldrPaths visit trie keys where
+    visit key = case T.findValue key trie of
+      Nothing -> id
+      Just values ->
+        let values' = T.subtract value values in
+        if null values' then
+          T.subtract key
+        else
+          T.union (const values' <$> key)
 
 reverseSubtract values = subtract' values reverseDelete
 
 subtract keys = subtract' keys delete
 
 subtract' trie visit biTrie =
-  foldr visit biTrie $ T.paths trie
+  T.foldrPaths visit biTrie trie
 
-reverseFind value = T.find value . getReverse
+reverseFind value = fromMaybe T.empty . T.findValue value . getReverse
 
-find key = T.find key . getForward
+find key = fromMaybe T.empty . T.findValue key . getForward

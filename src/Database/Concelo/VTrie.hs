@@ -1,3 +1,4 @@
+{-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE LambdaCase #-}
 module Database.Concelo.VTrie
   ( VTrie()
@@ -8,12 +9,14 @@ module Database.Concelo.VTrie
   , leaf
   , value
   , firstPath
-  , first
-  , find
+  , firstValue
+  , findTrie
   , findValue
   , member
   , hasAll
   , hasAny
+  , foldrPairs
+  , pairs
   , foldrPaths
   , paths
   , foldrPathsAndValues
@@ -22,6 +25,7 @@ module Database.Concelo.VTrie
   , keys
   , foldrTriples
   , triples
+  , fromTrieLike
   , sub
   , singleton
   , super
@@ -32,7 +36,6 @@ module Database.Concelo.VTrie
   , intersectL
   , intersectR
   , Database.Concelo.VTrie.subtract
-  , subtractAll
   , diff
   , mergeL
   , mergeR ) where
@@ -69,6 +72,7 @@ instance TL.TrieLike VTrie where
   value = value'
   member = member'
   foldrPairs = foldrPairs'
+  foldrPaths = foldrPaths'
 
 vtrie = VTrie
 
@@ -88,18 +92,17 @@ firstPath (VTrie v m)
   | null m = P.leaf . getVersionedValue <$> v
   | otherwise = V.first m >>= (\(k, t) -> P.super k <$> firstPath t)
 
-first (VTrie v m)
+firstValue (VTrie v m)
   | null m = getVersionedValue <$> v
-  | otherwise = V.first m >>= first . snd
+  | otherwise = V.first m >>= firstValue . snd
 
-find path trie = case P.sub path of
+findTrie path trie = case P.sub path of
   Nothing -> trie
-  Just (k, p) -> find p $ sub k trie
+  Just (k, p) -> findTrie p $ sub k trie
 
 findValue path trie =
-  getVersionedValue <$> (getVTrieVersioned $ find path trie)
+  getVersionedValue <$> (getVTrieVersioned $ findTrie path trie)
 
-member :: Ord k => P.Path k v0 -> VTrie k v -> Bool
 member = member'
 
 member' path = isJust . findValue path
@@ -108,7 +111,11 @@ hasAll large = foldrPaths (\p -> (TL.member p large &&)) True
 
 hasAny large = foldrPaths (\p -> (TL.member p large ||)) False
 
+foldrPairs = foldrPairs'
+
 foldrPairs' visit seed (VTrie _ m) = V.foldrPairs visit seed m
+
+pairs = foldrPairs (:) []
 
 foldrPathsAndValues visit seed (VTrie v m) =
   case v of
@@ -135,9 +142,13 @@ foldrTriples visit seed (VTrie _ m) =
 
 triples = foldrTriples (:) []
 
-foldrPaths visit = foldrPathsAndValues (visit . fst)
+foldrPaths = foldrPaths'
+
+foldrPaths' visit = foldrPathsAndValues (visit . fst)
 
 paths = foldrPaths (:) []
+
+fromTrieLike version trieLike = union version trieLike empty
 
 sub key = fromMaybe empty . V.lookup key . getVTrieMap
 
@@ -157,8 +168,6 @@ super version key = VTrie Nothing . single version key
 index version f = foldrPathsAndValues visit empty where
   visit (p, v) = union version $ f p v
 
-union :: (TL.TrieLike t, Ord k) =>
-         Integer -> t k v -> VTrie k v -> VTrie k v
 union version small (VTrie largeVersioned largeMap) =
   let v = TL.value small <|> (getVersionedValue <$> largeVersioned) in
 
@@ -166,20 +175,10 @@ union version small (VTrie largeVersioned largeMap) =
     visit (k, a) = V.insert version k $ union version a $ fromMaybe empty
                    $ V.lookup k largeMap
 
-intersectL :: (TL.TrieLike t, Ord k) =>
-              Integer -> t k v -> VTrie k v -> VTrie k v
 intersectL = intersect $ \a _ -> a
 
-intersectR :: (TL.TrieLike t, Ord k) =>
-              Integer -> t k v -> VTrie k v -> VTrie k v
 intersectR = intersect $ \_ b -> b
 
-intersect :: (TL.TrieLike t, Ord k) =>
-             (Maybe v -> Maybe v -> Maybe v) ->
-             Integer ->
-             t k v ->
-             VTrie k v ->
-             VTrie k v
 intersect pick version small (VTrie largeVersioned largeMap) =
   let sv = TL.value small
       lv = getVersionedValue <$> largeVersioned
@@ -194,12 +193,8 @@ intersect pick version small (VTrie largeVersioned largeMap) =
         else
           V.insert version k trie
 
-subtract :: (TL.TrieLike t, Ord k) =>
-            Integer -> t k v -> VTrie k v -> VTrie k v
 subtract = subtract'
 
-subtract' :: (TL.TrieLike t, Ord k) =>
-             Integer -> t k v -> VTrie k v -> VTrie k v
 subtract' version small (VTrie largeVersioned largeMap) =
   let sv = TL.value small
       lv = getVersionedValue <$> largeVersioned
@@ -213,24 +208,6 @@ subtract' version small (VTrie largeVersioned largeMap) =
           V.delete version k
         else
           V.insert version k trie
-
-subtractAll :: (TL.TrieLike t, Ord k) =>
-               Integer -> t k v -> VTrie k v -> VTrie k v
-subtractAll version small (VTrie largeVersioned largeMap) =
-  let sv = TL.value small
-      lv = getVersionedValue <$> largeVersioned in
-
-  if isJust sv then
-    empty
-  else
-    VTrie (Versioned version <$> lv) $ TL.foldrPairs visit largeMap small where
-      visit (k, a) = case V.lookup k largeMap of
-        Nothing -> id
-        Just b -> let trie = subtractAll version a b in
-          if isEmpty trie then
-            V.delete version k
-          else
-            V.insert version k trie
 
 diffMaps version a b =
   V.foldrDiff visit (V.empty, V.empty) a b where
@@ -269,10 +246,8 @@ diff version (VTrie aV aM) (VTrie bV bM) =
 
 data MergePref = LeftPref | RightPref deriving (Eq)
 
-mergeL :: Ord k => Integer -> VTrie k v -> VTrie k v -> VTrie k v -> VTrie k v
 mergeL = merge LeftPref
 
-mergeR :: Ord k => Integer -> VTrie k v -> VTrie k v -> VTrie k v -> VTrie k v
 mergeR = merge RightPref
 
 merge pref version base left right =

@@ -5,6 +5,8 @@ module Database.Concelo.Protocol
   ( Message(Cred, Challenge, Published, Persisted, Nack, Leaf, Group, Tree,
             Forest, NoMessage)
   , Signed(Signed)
+  , Name
+  , Names
   , getSignedSigner
   , getSignedSignature
   , getSignedText
@@ -59,6 +61,10 @@ module Database.Concelo.Protocol
   , getValuePriority
   , getValueACL
   , getValueBody
+  , valuePriority
+  , valueNumber
+  , valueString
+  , valueBoolean
   , value
   , serializeValue
   , serializeTrie
@@ -396,7 +402,6 @@ data Value = Value { getValueSigner :: Cr.PublicKey
 -- valueSigner =
 --   L.lens getValueSigner (\x v -> x { getValueSigner = v })
 
-valuePriority :: L.Lens' Value Int
 valuePriority =
   L.lens getValuePriority (\x v -> x { getValuePriority = v })
 
@@ -407,17 +412,17 @@ valuePriority =
 valueBody =
   L.lens getValueBody (\x v -> x { getValueBody = v })
 
--- valueNumber = \case
---   Value { getValueBody = NumberBody n } -> Just n
---   _ -> Nothing
+valueNumber = \case
+  Value { getValueBody = NumberBody n } -> Just n
+  _ -> Nothing
 
--- valueString = \case
---   Value { getValueBody = StringBody s } -> Just s
---   _ -> Nothing
+valueString = \case
+  Value { getValueBody = StringBody s } -> Just s
+  _ -> Nothing
 
--- valueBoolean = \case
---   Value { getValueBody = BooleanBody b } -> Just b
---   _ -> Nothing
+valueBoolean = \case
+  Value { getValueBody = BooleanBody b } -> Just b
+  _ -> Nothing
 
 value priority body = Value undefined priority ACL.empty body
 

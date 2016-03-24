@@ -7,8 +7,11 @@ module Database.Concelo.ACL
   , getListsWhiteList
   , getACLReadLists
   , getACLWriteLists
+  , aclReadLists
+  , aclWriteLists
   , writerKey
   , readerKey
+  , Lists()
   , whiteList
   , whiteListAll
   , permitNone
@@ -24,6 +27,14 @@ import qualified Control.Lens as L
 data ACL = ACL { getACLReadLists :: Lists
                , getACLWriteLists :: Lists
                , getACLHash :: BS.ByteString }
+
+aclReadLists :: L.Lens' ACL Lists
+aclReadLists =
+  L.lens getACLReadLists (\x v -> x { getACLReadLists = v })
+
+aclWriteLists :: L.Lens' ACL Lists
+aclWriteLists =
+  L.lens getACLWriteLists (\x v -> x { getACLWriteLists = v })
 
 aclHash =
   L.lens getACLHash (\x v -> x { getACLHash = v })

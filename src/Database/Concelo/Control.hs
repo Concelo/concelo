@@ -1,5 +1,7 @@
+{-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 module Database.Concelo.Control
   ( Action
@@ -25,13 +27,18 @@ module Database.Concelo.Control
   , missingChunks
   , noParse
   , ParseState (parseString)
+  , void
+  , group
   , character
   , (>>|)
   , prefix
+  , terminal
+  , skipSpace
   , zeroOrOne
   , zeroOrMore
   , oneOrMore
   , endOfStream
+  , endOfInput
   , stringLiteral
   , stringLiteralDelimited
   , mapPair
@@ -59,19 +66,14 @@ data Exception = Exception String
                | Success
                deriving (Show)
 
-exception :: E.MonadError Exception m => String -> m a
 exception = E.throwError . Exception
 
-patternFailure :: E.MonadError Exception m => m a
 patternFailure = E.throwError PatternFailure
 
-badForest :: E.MonadError Exception m => m a
 badForest = E.throwError BadForest
 
-missingChunks :: E.MonadError Exception m => m a
 missingChunks = E.throwError MissingChunks
 
-noParse :: E.MonadError Exception m => m a
 noParse = E.throwError NoParse
 
 run action = I.runIdentity . E.runExceptT . S.runStateT action
@@ -150,8 +152,14 @@ maybeToAction error = \case
 class ParseState s where
   parseString :: L.Lens' s BS.ByteString
 
-character :: (ParseState s, S.MonadState s m, E.MonadError Exception m) =>
-             m Char
+void = return ()
+
+group parser = do
+  terminal "("
+  a <- parser
+  terminal ")"
+  return a
+
 character = do
   s <- get parseString
   case BS.uncons s of
@@ -194,9 +202,13 @@ oneOrMore parser =
 
 zeroOrOne parser = (Just <$> parser) >>| return Nothing
 
-endOfStream expression = do
+endOfStream result = do
   s <- get parseString
-  if BS.null s then return expression else noParse
+  if BS.null s then return result else noParse
+
+endOfInput result = do
+  update parseString skipSpace
+  endOfStream result
 
 stringLiteralBody delimiter =
   character >>= unescaped where
@@ -214,9 +226,4 @@ stringLiteralDelimited delimiter = do
   s <- stringLiteralBody delimiter
   return $ BS.pack s
 
-stringLiteral :: (ParseState s,
-                  S.MonadState s m,
-                  E.MonadError Exception m,
-                  Monad n) =>
-                 m (n BS.ByteString)
 stringLiteral = return <$> stringLiteralDelimited '"'

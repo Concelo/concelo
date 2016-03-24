@@ -11,7 +11,7 @@ module Database.Concelo.Path
   , super ) where
 
 data Path k v = Path { getPathKeys :: [k]
-                     , getPathValue :: v }
+                     , getPathValue :: v } deriving Eq
 
 instance Functor (Path k) where
   fmap f (Path ks v) = Path ks (f v)

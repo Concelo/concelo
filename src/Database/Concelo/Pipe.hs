@@ -1,11 +1,12 @@
+{-# LANGUAGE RankNTypes #-}
 module Database.Concelo.Pipe
   ( Pipe
-  , empty
+  , pipe
   , pipePublisher
   , pipeSubscriber
   , nextMessages ) where
 
-import Database.Concelo.Control (with, getThenSet)
+import Database.Concelo.Control (with, getThenSet, get, set)
 
 import qualified Control.Lens as L
 import qualified Database.Concelo.Publisher as P
@@ -16,14 +17,19 @@ data Pipe = Pipe { getPipePublisher :: P.Publisher
                  , getPipeLastPing :: Integer
                  , getPipePublisherSent :: Bool }
 
-empty = Pipe P.empty S.empty 0 False
+pipe adminACL publicKey stream =
+  Pipe P.publisher (S.subscriber adminACL publicKey stream) 0 False
 
+pipePublisher :: L.Lens' Pipe P.Publisher
 pipePublisher = L.lens getPipePublisher (\x v -> x { getPipePublisher = v })
 
+pipeSubscriber :: L.Lens' Pipe S.Subscriber
 pipeSubscriber = L.lens getPipeSubscriber (\x v -> x { getPipeSubscriber = v })
 
+pipeLastPing :: L.Lens' Pipe Integer
 pipeLastPing = L.lens getPipeLastPing (\x v -> x { getPipeLastPing = v })
 
+pipePublisherSent :: L.Lens' Pipe Bool
 pipePublisherSent =
   L.lens getPipePublisherSent (\x v -> x { getPipePublisherSent = v })
 
@@ -50,4 +56,4 @@ nextMessages now ping = do
       set pipePublisherSent True
       return [message]
 
-  return maybe pubMessages (:pubMessages) subMessage
+  return $ maybe pubMessages (:pubMessages) subMessage

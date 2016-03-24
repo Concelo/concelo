@@ -157,7 +157,7 @@ sign (PrivateKey privateKey) text = do
 
 stringToPublic s = ECDSA.PublicKey curve $ stringToPoint s
 
-verify publicKey signature text =
+verify (PublicKey publicKey) signature text =
   ECDSA.verify hashAlgorithm (stringToPublic publicKey)
   (stringToSignature signature) text
 
