@@ -46,6 +46,7 @@ module Database.Concelo.Control
   , maybeM2
   , eitherToMaybe
   , maybeToAction
+  , eitherToAction
   , bindMaybe
   , bindMaybe2 ) where
 
@@ -148,6 +149,10 @@ eitherToMaybe = \case
 maybeToAction error = \case
   Nothing -> E.throwError error
   Just v -> return v
+
+eitherToAction = \case
+  Left error -> E.throwError error
+  Right v -> return v
 
 class ParseState s where
   parseString :: L.Lens' s BS.ByteString

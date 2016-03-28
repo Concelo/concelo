@@ -8,7 +8,8 @@ module Database.Concelo.Path
   , value
   , valueHere
   , sub
-  , super ) where
+  , super
+  , append ) where
 
 data Path k v = Path { getPathKeys :: [k]
                      , getPathValue :: v } deriving Eq
@@ -38,3 +39,5 @@ sub = \case
   _ -> Nothing
 
 super k (Path ks v) = Path (k:ks) v
+
+append (Path ks v) k = Path (ks ++ [k]) v

@@ -1,35 +1,37 @@
+{-# LANGUAGE LambdaCase #-}
 module Database.Concelo.Deserializer
   ( deserialize ) where
 
-import Database.Concelo.Control (get)
+import Database.Concelo.Control (get, patternFailure)
+import Data.Maybe (fromMaybe)
+import Control.Applicative ((<|>))
+import Control.Monad (foldM)
 
 import qualified Data.ByteString as BS
 import qualified Control.Lens as L
-import qualified Control.Monad.State.Class as State
+import qualified Control.Monad.State as St
 import qualified Database.Concelo.Map as M
-import qualified Database.Concelo.Path as Path
+import qualified Database.Concelo.Path as Pa
+import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Rules as R
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.BiTrie as BT
-import qualified Database.Concelo.Subscriber as Sub
-import qualified Database.Concelo.Chunks as Chunks
-import qualified Database.Concelo.Crypto as C
-
-data KeyPair =
-  KeyPair { getKeyPairPublic :: BS.ByteString
-          , getKeyPairPrivate :: BS.ByteString }
+import qualified Database.Concelo.Subscriber as Su
+import qualified Database.Concelo.Chunks as Ch
+import qualified Database.Concelo.Crypto as Cr
+import qualified Database.Concelo.ACL as ACL
 
 data Deserializer =
-  Deserializer { getDesKeyPair :: KeyPair
+  Deserializer { getDesPrivateKey :: Cr.PrivateKey
                , getDesPermitAdmins :: ACL.ACL
                , getDesPermitNone :: ACL.ACL
                , getDesUnsanitized :: T.Trie BS.ByteString UnsanitizedElement
                , getDesRules :: R.Rules
                , getDesDependencies :: BT.BiTrie BS.ByteString
-               , getDesSanitized :: T.Trie BS.ByteString P.Value }
+               , getDesSanitized :: T.Trie BS.ByteString Pr.Value }
 
-desKeyPair =
-  L.lens getDesKeyPair (\x v -> x { getDesKeyPair = v })
+desPrivateKey =
+  L.lens getDesPrivateKey (\x v -> x { getDesPrivateKey = v })
 
 desPermitAdmins =
   L.lens getDesPermitAdmins (\x v -> x { getDesPermitAdmins = v })
@@ -49,8 +51,16 @@ desDependencies =
 desSanitized =
   L.lens getDesSanitized (\x v -> x { getDesSanitized = v })
 
+maybeHead = \case
+  x:_ -> Just x
+  _ -> Nothing
+
+maybeTail = \case
+  _:xs -> Just xs
+  _ -> Nothing
+
 visitDirty revision acl rules result =
-  T.foldrKeys (visit M.empty (Path.root ()) rules acl dirty) result dirty
+  T.foldrKeys (visit M.empty (Pa.leaf ()) rules acl dirty) result dirty
   where
     (dirty, _, _) = result
 
@@ -64,9 +74,9 @@ visitDirty revision acl rules result =
 
         dirty' = T.sub key $ dirty
 
-        path' = path `Path.append` key
+        path' = path `Pa.append` key
 
-        env' = if null wildcard then env else M.set wildcard key env
+        env' = if null wildcard then env else M.insert wildcard key env
 
         possibleValues =
           fromMaybe M.empty (getUnsanitizedElementMap <$> T.value dirty')
@@ -77,7 +87,7 @@ visitDirty revision acl rules result =
 
               root = R.rootVisitor $ updateTrie path' value sanitized
 
-              visitor = foldr R.visitorChild rootVisitor $ Path.keys path'
+              visitor = foldr R.visitorChild root $ Pa.keys path'
 
               context = R.Context env' revision root visitor T.empty
 
@@ -102,7 +112,7 @@ visitDirty revision acl rules result =
               next value = case maybeTail values of
                 Just tail ->
                   visitValues (remainingDirty, sanitized, dependencies')
-                  (firstValid <|> (L.set P.valueACL acl' <$> value)) tail
+                  (firstValid <|> (L.set Pr.valueACL acl' <$> value)) tail
 
                 Nothing ->
                   T.foldrKeys visitDirty'
@@ -116,13 +126,13 @@ visitDirty revision acl rules result =
           if remainingDirty `T.hasAny` writeDependencies then
             T.foldrKeys visitDirty' result dirty'
           else
-            if maybe True (\v -> L.view P.valueSigner v `ACL.isWriter` acl')
+            if maybe True (\v -> L.view Pr.valueSigner v `ACL.isWriter` acl')
                value
             then
               if remainingDirty' `T.hasAny` validateDependencies then
                 T.foldrKeys visitDirty' result dirty'
               else
-                next if validateResult then value else Nothing
+                next $ if validateResult then value else Nothing
             else
               next Nothing
 
@@ -152,7 +162,7 @@ updateSanitized revision acl currentSanitized updatedUnsanitized
 
 newtype UnsanitizedElement =
   UnsanitizedElement
-  { getUnsanitizedElementMap :: M.Map BS.ByteString P.Value }
+  { getUnsanitizedElementMap :: M.Map BS.ByteString Pr.Value }
 
 unionUnsanitized signer small large =
   T.foldrPathsAndValues visit large small where
@@ -165,7 +175,7 @@ unionUnsanitized signer small large =
           T.union ((const $ update element new) <$> path) result
 
     update element@(UnsanitizedElement map) new =
-      case P.parseValue signer new of
+      case Pr.parseValue signer new of
         Nothing -> element
         Just v -> UnsanitizedElement $ M.insert new v map
 
@@ -185,20 +195,20 @@ subtractUnsanitized small large =
 updateUnsanitizedDiff' key (obsoleteUnsanitized, newUnsanitized)
   (obsoleteLeaves, newLeaves) = do
 
-  obsolete <- foldM (visit false) obsoleteUnsanitized obsoleteLeaves
+  obsolete <- foldM (visit False) obsoleteUnsanitized obsoleteLeaves
 
-  new <- foldM (visit true) newUnsanitized newLeaves
+  new <- foldM (visit True) newUnsanitized newLeaves
 
   return (obsolete, new) where
 
     visit leaf result =
       case leaf of
-        P.Leaf { P.getLeafSigned = signed
-               , P.getLeafBody = body } ->
-          return case P.parseTrie (C.decryptSymmetric key body) of
+        Pr.Leaf { Pr.getLeafSigned = signed
+               , Pr.getLeafBody = body } ->
+          return $ case Pr.parseTrie (Cr.decryptSymmetric key body) of
             -- todo: handle defragmentation
             Just trie ->
-              unionUnsanitized (P.getSignedSigner signed) trie result
+              unionUnsanitized (Pr.getSignedSigner signed) trie result
 
             Nothing -> result
 
@@ -206,88 +216,89 @@ updateUnsanitizedDiff' key (obsoleteUnsanitized, newUnsanitized)
 
 diffChunks oldChunks oldRoot newChunks newRoot = do
   (_, obsoleteLeaves, _, newLeaves) <-
-    Chunks.diffChunks oldChunks oldRoot newChunks newRoot
+    Ch.diffChunks oldChunks oldRoot newChunks newRoot
 
   return (obsoleteLeaves, newLeaves)
 
 updateUnsanitizedDiff oldForest newForest (stream, newTree) result = do
+  privateKey <- get desPrivateKey
+
   let oldTree =
-        fromMaybe Sub.emptyTree $ M.lookup stream
-        $ Sub.getForestTreeMap old
+        fromMaybe Su.emptyTree $ M.lookup stream
+        $ Su.getForestTreeMap oldForest
 
       maybeKey =
         T.findValue
-        (Path.super P.aclReaderKey $ Path.singleton publicKey ())
-        (Sub.getTreeLeaves newTree)
+        (Pa.super Pr.aclReaderKey
+         $ Pa.singleton (Cr.fromPublic $ Cr.derivePublic privateKey) ())
+        (Su.getTreeLeaves newTree)
 
   case maybeKey of
     Nothing -> return result
 
     Just encryptedKey -> do
-      keyPair <- get desKeyPair
-
       diffChunks
-        (Sub.getForestChunks oldForest)
-        (Sub.getTreeLeaves oldTree)
-        (Sub.getForestChunks newForest)
-        (Sub.getTreeLeaves newTree)
+        (Su.getForestChunks oldForest)
+        (Su.getTreeLeaves oldTree)
+        (Su.getForestChunks newForest)
+        (Su.getTreeLeaves newTree)
         >>= updateUnsanitizedDiff'
-        (C.decryptAsymmetric (getKeyPairPrivate keyPair) encryptedKey)
+        (Cr.decryptAsymmetric privateKey encryptedKey)
         result
 
 updateUnsanitized (obsolete, new) currentUnsanitized =
   unionUnsanitized new (subtractUnsanitized obsolete currentUnsanitized)
 
 deserialize old new = do
-  keyPair <- get desKeyPair
+  privateKey <- get desPrivateKey
   permitAdmins <- get desPermitAdmins
 
   unsanitizedDiff@(obsoleteUnsanitized, newUnsanitized) <-
     foldM (updateUnsanitizedDiff old new) unsanitized
-    (M.pairs $ Sub.getForestTreeMap new)
+    (M.pairs $ Su.getForestTreeMap new)
 
   unsanitized <- get desUnsanitized >>= updateUnsanitized unsanitizedDiff
 
   permitNone <-
-    if Sub.getForestACL old == Sub.getForestACL new then
+    if Su.getForestACL old == Su.getForestACL new then
       get desPermitNone
     else
-      return $ ACL.permitNone $ Sub.getForestACLTrie new
+      return $ ACL.permitNone $ Su.getForestACLTrie new
 
-  let des = Deserializer keyPair permitAdmins permitNone unsanitized
+  let des = Deserializer privateKey permitAdmins permitNone unsanitized
 
-  if null (T.sub P.rulesKey obsoleteUnsanitized)
-     && null (T.sub P.rulesKey newUnsanitized) then
-    let rules = Sub.getForestRules old
+  if null (T.sub Pr.rulesKey obsoleteUnsanitized)
+     && null (T.sub Pr.rulesKey newUnsanitized) then
+    let rules = Su.getForestRules old
 
         (sanitized, dependencies) =
           updateSanitized
-          (Sub.getForestRevision new)
+          (Su.getForestRevision new)
           permitNone
-          (Sub.getForestSanitized old)
+          (Su.getForestSanitized old)
           unsanitized
           rules
-          (Sub.getForestDependencies old)
+          (Su.getForestDependencies old)
           unsanitizedDiff in
 
-    State.set $ des rules dependencies sanitized permitNone
+    St.set $ des rules dependencies sanitized permitNone
     else do
     let (sanitizedRules, _) =
           updateSanitized
           0
           permitAdmins
-          (T.sub P.rulesKey (Sub.getForestSanitized old))
-          (T.sub P.rulesKey unsanitized)
+          (T.sub Pr.rulesKey (Su.getForestSanitized old))
+          (T.sub Pr.rulesKey unsanitized)
           R.emptyRules
           BT.empty
-          ((T.sub P.rulesKey obsoleteUnsanitized),
-           (T.sub P.rulesKey newUnsanitized))
+          ((T.sub Pr.rulesKey obsoleteUnsanitized),
+           (T.sub Pr.rulesKey newUnsanitized))
 
     rules <- compileRules sanitizedRules
 
     let (sanitized, dependencies) =
           updateSanitized
-          (Sub.getForestRevision new)
+          (Su.getForestRevision new)
           permitNone
           T.empty
           unsanitized
@@ -295,4 +306,4 @@ deserialize old new = do
           BT.empty
           (T.empty, unsanitized)
 
-    State.set $ des rules dependencies sanitized permitNone
+    St.set $ des rules dependencies sanitized permitNone

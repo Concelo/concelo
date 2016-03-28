@@ -5,8 +5,13 @@ module Database.Concelo.Subscriber
   , subscriber
   , receive
   , Tree()
+  , emptyTree
   , getTreeStream
+  , getTreeLeaves
   , Forest()
+  , getForestChunks
+  , getForestTreeMap
+  , getForestTrees
   , subscriberPublished
   , getForestRevision
   , nextMessage ) where
@@ -175,7 +180,7 @@ verify (Pr.Signed { Pr.getSignedSigner = signer
                   , Pr.getSignedSignature = signature
                   , Pr.getSignedText = text }) acl =
   if T.member (Pa.super Pr.aclWriterKey
-               $ Pa.singleton (Cr.serializePublic signer) ()) acl then
+               $ Pa.singleton (Cr.fromPublic signer) ()) acl then
     if Cr.verify signer signature text then
       return ()
     else
@@ -317,7 +322,7 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
                 Just k ->
                   ((not optional || Se.member stream requested)
                    && T.member (Pa.super Pr.aclReaderKey
-                                $ Pa.singleton (Cr.serializePublic k) ())
+                                $ Pa.singleton (Cr.fromPublic k) ())
                    aclTrie)
 
           when descend $ do

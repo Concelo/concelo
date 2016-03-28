@@ -1,11 +1,17 @@
+{-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 module Database.Concelo.Crypto
   ( derivePrivate
   , derivePublic
-  , serializePublic
-  , serializePrivate
-  , serializeSymmetric
+  , fromPublic
+  , toPublic
+  , fromPrivate
+  , toPrivate
+  , fromSymmetric
   , decryptPrivate
+  , decryptAsymmetric
+  , encryptAsymmetric
   , decryptSymmetric
   , encryptSymmetric
   , randomBytes
@@ -18,149 +24,182 @@ module Database.Concelo.Crypto
   , verify
   , hash ) where
 
-import Crypto.PubKey.ECC.Generate (generateQ)
-import Crypto.PubKey.ECC.Types (getCurveByName, CurveName(SEC_p521r1),
-                                Point(Point, PointO))
-import Crypto.PubKey.ECC.ECDSA (KeyPair(KeyPair), toPrivateKey,
-                                Signature(Signature))
-import Crypto.Hash (SHA256(SHA256), hashInitWith, hashUpdate, hashFinalize)
-import Crypto.KDF.PBKDF2 (prfHMAC, generate, Parameters(Parameters))
-import Crypto.Number.Serialize (i2osp, os2ip)
-import Crypto.Cipher.AES (AES256())
-import Crypto.Cipher.Types (makeIV, cipherInit, ctrCombine)
-import Crypto.Random (ChaChaDRG, withRandomBytes, drgNewTest, withDRG)
-import Crypto.Error (CryptoFailable(CryptoPassed, CryptoFailed))
-
-import Database.Concelo.Control (exception, Action)
-
-import qualified Crypto.PubKey.ECC.ECDSA as ECDSA
+import qualified Crypto.Error as E
+import qualified Crypto.Random as R
+import qualified Crypto.Cipher.Types as CT
+import qualified Crypto.Cipher.AES as AES
+import qualified Crypto.Hash as H
+import qualified Crypto.PubKey.RSA as RSA
+import qualified Crypto.PubKey.RSA.Types as RSAT
+import qualified Crypto.PubKey.RSA.PKCS15 as PKCS15
+import qualified Crypto.KDF.PBKDF2 as PBKDF2
 import qualified Data.ByteString as BS
 import qualified Data.ByteArray as BA
-import qualified Control.Monad.State.Class as S
+import qualified Control.Lens as L
+import qualified Control.Monad as M
+import qualified Control.Monad.State as S
+import qualified Database.Concelo.Bytes as B
+import qualified Database.Concelo.Control as C
 
-newtype PRNG = PRNG ChaChaDRG
+newtype PRNG = PRNG R.ChaChaDRG
 
-newtype PrivateKey = PrivateKey { serializePrivate :: BS.ByteString }
+newtype PrivateKey = PrivateKey { getPrivateKey :: RSAT.PrivateKey }
 
-newtype PublicKey = PublicKey { serializePublic :: BS.ByteString }
+newtype PublicKey = PublicKey { _getPublicKey :: RSAT.PublicKey }
 
-newtype SymmetricKey = SymmetricKey { serializeSymmetric :: BS.ByteString }
+newtype SymmetricKey = SymmetricKey { fromSymmetric :: BS.ByteString }
 
-type Cipher = AES256
+newtype ParseState = ParseState { getParseStateString :: BS.ByteString }
 
-hashAlgorithm = SHA256
+parseStateString :: L.Lens' ParseState BS.ByteString
+parseStateString =
+    L.lens getParseStateString (\x v -> x { getParseStateString = v })
+
+instance C.ParseState ParseState where
+  parseString = parseStateString
+
+type Cipher = AES.AES256
+
+hashAlgorithm = H.SHA256
 
 -- todo: does WebCrypto support Scrypt or Bcrypt?  If so, use one of them.
-prf = prfHMAC hashAlgorithm
+prf = PBKDF2.prfHMAC hashAlgorithm
 
 iterations = 4096
 
-asymmetricKeySize = 64
-
-makePRNG = PRNG . drgNewTest
-
-decryptPrivate :: BS.ByteString -> BS.ByteString -> Action () PrivateKey
-decryptPrivate password privateKey =
-  PrivateKey <$> decryptSymmetric
-  (SymmetricKey $ deriveKey symmetricKeySize password privateKey) privateKey
-
-decryptSymmetric :: SymmetricKey -> BS.ByteString -> Action () BS.ByteString
-decryptSymmetric (SymmetricKey key) ciphertext = do
-  let (nonce, tail) = BS.splitAt 16 ciphertext
-  case cipherInit key :: CryptoFailable Cipher of
-    CryptoPassed cipher -> case makeIV nonce of
-      Nothing -> exception "unable to make initialization vector"
-
-      Just iv -> return $ ctrCombine cipher iv tail
-
-    CryptoFailed message -> exception $ show message
-
-encryptSymmetric :: SymmetricKey -> BS.ByteString -> Action PRNG BS.ByteString
-encryptSymmetric (SymmetricKey key) plaintext = do
-  nonce <- randomBytes 16
-  case cipherInit key :: CryptoFailable Cipher of
-    CryptoPassed cipher -> case makeIV nonce of
-      Nothing -> exception "unable to make initialization vector"
-
-      Just iv -> return $ nonce `BS.append` ctrCombine cipher iv plaintext
-
-    CryptoFailed error -> exception $ show error
+asymmetricKeySize = 1920
 
 symmetricKeySize = 32
 
-randomBytes :: Int -> Action PRNG BS.ByteString
+seedSize = 40
+
+defaultExponent = 65537
+
+makePRNG = PRNG . R.drgNewTest
+
+decryptPrivate password privateKey =
+  decryptSymmetric
+  (SymmetricKey $ deriveKey symmetricKeySize password privateKey) privateKey
+  >>= C.eitherToAction . toPrivate
+
+-- todo: use standard serialization formats for public and private keys
+
+fromPrivate (PrivateKey key) =
+  BS.concat [fromPublic $ PublicKey $ RSAT.private_pub key,
+             B.fromInteger $ RSAT.private_d key]
+
+parsePrivate = do
+  public <- parsePublic
+  d <- B.toInteger
+  return $ PrivateKey $ RSAT.PrivateKey public d 0 0 0 0 0
+
+toPrivate s = C.eval parsePrivate $ ParseState s
+
+fromPublic (PublicKey key) =
+  BS.concat [B.fromInteger $ RSAT.public_size key,
+             B.fromInteger $ RSAT.public_n key,
+             B.fromInteger $ RSAT.public_e key]
+
+parsePublic =
+  M.liftM3 RSAT.PublicKey
+  B.toInteger
+  B.toInteger
+  B.toInteger
+
+toPublic s = PublicKey <$> C.eval parsePublic (ParseState s)
+
+decryptAsymmetric (PrivateKey key) ciphertext = do
+  PRNG drg <- S.get
+
+  let (result, drg') = R.withDRG drg $ PKCS15.decryptSafer key ciphertext
+
+  S.put $ PRNG drg'
+
+  case result of
+    Left error -> C.exception $ show error
+    Right plaintext -> return plaintext
+
+encryptAsymmetric (PublicKey key) plaintext = do
+   PRNG drg <- S.get
+
+   let (result, drg') = R.withDRG drg $ PKCS15.encrypt key plaintext
+
+   S.put $ PRNG drg'
+
+   case result of
+     Left error -> C.exception $ show error
+     Right ciphertext -> return ciphertext
+
+decryptSymmetric (SymmetricKey key) ciphertext = do
+  let (nonce, tail) = BS.splitAt 16 ciphertext
+  case CT.cipherInit key :: E.CryptoFailable Cipher of
+    E.CryptoPassed cipher -> case CT.makeIV nonce of
+      Nothing -> C.exception "unable to make initialization vector"
+
+      Just iv -> return $ CT.ctrCombine cipher iv tail
+
+    E.CryptoFailed message -> C.exception $ show message
+
+encryptSymmetric (SymmetricKey key) plaintext = do
+  nonce <- randomBytes 16
+  case CT.cipherInit key :: E.CryptoFailable Cipher of
+    E.CryptoPassed cipher -> case CT.makeIV nonce of
+      Nothing -> C.exception "unable to make initialization vector"
+
+      Just iv -> return $ nonce `BS.append` CT.ctrCombine cipher iv plaintext
+
+    E.CryptoFailed error -> C.exception $ show error
+
+withRandomBytes :: R.DRG g => g -> Int -> (BS.ByteString, g)
+withRandomBytes drg count = R.withRandomBytes drg count id
+
 randomBytes count = do
   PRNG drg <- S.get
 
-  let (result, drg') = withRandomBytes drg count id
+  let (result, drg') = withRandomBytes drg count
 
   S.put $ PRNG drg'
 
   return result
 
-deriveKey size = generate prf $ Parameters iterations size
+toWord64 = BS.foldl' (\x y -> x * 256 + fromIntegral y) 0
 
-derivePrivate :: BS.ByteString -> BS.ByteString -> PrivateKey
+toSeed s = (toWord64 a,
+            toWord64 b,
+            toWord64 c,
+            toWord64 d,
+            toWord64 e)
+  where (a, as) = BS.splitAt 8 s
+        (b, bs) = BS.splitAt 8 as
+        (c, cs) = BS.splitAt 8 bs
+        (d, ds) = BS.splitAt 8 cs
+        (e,  _) = BS.splitAt 8 ds
+
+deriveSeed password salt = toSeed $ deriveKey seedSize password salt
+
+deriveKey size = PBKDF2.generate prf $ PBKDF2.Parameters iterations size
+
 derivePrivate password salt =
-  PrivateKey $ deriveKey asymmetricKeySize password salt
+  PrivateKey $ snd $ fst $ R.withDRG (R.drgNewTest $ deriveSeed password salt)
+  $ RSA.generate asymmetricKeySize defaultExponent
 
--- todo: some experts are suspicious of the NIST curves, so find one
--- that's more generally trusted
-curve = getCurveByName SEC_p521r1
+derivePublic = PublicKey . RSAT.private_pub . getPrivateKey
 
-derivePublic = PublicKey . pointToString . generateQ curve . stringToInteger
-
-stringToInteger :: BS.ByteString -> Integer
-stringToInteger = os2ip
-
-integerToString :: Integer -> BS.ByteString
-integerToString = i2osp
-
-stringToIntegerPair s = (stringToInteger x, stringToInteger y) where
-  (c, cs) = case BS.uncons s of
-    Nothing -> error "empty point"
-    Just pair -> pair
-
-  (x, y) = BS.splitAt (fromIntegral c) cs
-
-integerPairToString (ai, bi) =
-  BS.concat [ BS.singleton $ fromIntegral $ count a, a, b ] where
-    a = integerToString ai
-    b = integerToString bi
-    count a = let c = BS.length a in
-      if c > 255 then error "string too large" else c
-
-pointToString = \case
-  Point x y -> integerPairToString (x, y)
-  PointO -> error "infinity probably isn't what we want"
-
-stringToPoint s = Point x y where (x, y) = stringToIntegerPair s
-
-stringToPrivate s = toPrivateKey $ KeyPair curve (generateQ curve i) i where
-  i = stringToInteger s
-
-stringToSignature s = Signature x y where (x, y) = stringToIntegerPair s
-
-signatureToString (Signature x y) = integerPairToString (x, y)
-
-sign :: PrivateKey -> BS.ByteString -> Action PRNG BS.ByteString
-sign (PrivateKey privateKey) text = do
+sign (PrivateKey key) text = do
   PRNG drg <- S.get
 
   let (result, drg') =
-        withDRG drg
-        (ECDSA.sign (stringToPrivate privateKey) hashAlgorithm text)
+        R.withDRG drg $ PKCS15.signSafer (Just hashAlgorithm) key text
 
   S.put $ PRNG drg'
 
-  return $ signatureToString result
+  case result of
+    Left error -> C.exception $ show error
+    Right s -> return s
 
-stringToPublic s = ECDSA.PublicKey curve $ stringToPoint s
-
-verify (PublicKey publicKey) signature text =
-  ECDSA.verify hashAlgorithm (stringToPublic publicKey)
-  (stringToSignature signature) text
+verify (PublicKey key) signature text =
+  PKCS15.verify (Just hashAlgorithm) key text signature
 
 hash :: Foldable t => t BS.ByteString -> BS.ByteString
-hash = BA.convert . hashFinalize
-       . foldr (flip hashUpdate) (hashInitWith hashAlgorithm)
+hash = BA.convert . H.hashFinalize
+       . foldr (flip H.hashUpdate) (H.hashInitWith hashAlgorithm)

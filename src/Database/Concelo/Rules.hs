@@ -17,8 +17,12 @@ module Database.Concelo.Rules
   , visitorPath
   , visitorTrie
   , visitorChild
+  , Rules()
   , emptyRules
   , subRules
+  , getRulesRead
+  , getRulesWrite
+  , getRulesValidate
   , rulesRead
   , rulesWrite
   , rulesValidate

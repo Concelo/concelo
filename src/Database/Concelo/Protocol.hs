@@ -65,6 +65,8 @@ module Database.Concelo.Protocol
   , valueNumber
   , valueString
   , valueBoolean
+  , valueSigner
+  , valueACL
   , value
   , serializeValue
   , serializeTrie
@@ -76,12 +78,10 @@ module Database.Concelo.Protocol
   , forest
   , version ) where
 
-import Database.Concelo.Control (character, prefix, (>>|), exec, eitherToMaybe,
+import Database.Concelo.Control (prefix, (>>|), exec, eitherToMaybe,
                                  zeroOrOne, zeroOrMore, oneOrMore, endOfStream,
                                  patternFailure, get, set, update, noParse,
                                  exception)
-
-import Data.Bits ((.&.), shiftR, shiftL)
 
 import qualified Database.Concelo.Path as P
 import qualified Database.Concelo.Trie as T
@@ -89,9 +89,9 @@ import qualified Database.Concelo.TrieLike as TL
 import qualified Database.Concelo.Control as Co
 import qualified Database.Concelo.Crypto as Cr
 import qualified Database.Concelo.ACL as ACL
+import qualified Database.Concelo.Bytes as B
 import qualified Control.Lens as L
 import qualified Data.ByteString.Char8 as BS
-import qualified Data.Char as Ch
 
 type Name = P.Path BS.ByteString ()
 
@@ -179,14 +179,14 @@ toText = \case
   Tree _ stream forestStream optional revision _ acl leaves ->
     return $
     BS.concat [stream, forestStream, if optional then "1" else "0",
-               serializeInteger revision, serializeName acl,
+               B.fromInteger revision, serializeName acl,
                serializeName leaves]
 
   Forest _ stream revision _ adminRevision adminSigned acl trees ->
     return $
-    BS.concat [stream, serializeInteger revision,
-               serializeInteger adminRevision,
-               Cr.serializePublic $ getSignedSigner adminSigned,
+    BS.concat [stream, B.fromInteger revision,
+               B.fromInteger adminRevision,
+               Cr.fromPublic $ getSignedSigner adminSigned,
                getSignedSignature adminSigned, getSignedText adminSigned,
                serializeName acl, serializeName trees]
 
@@ -268,21 +268,8 @@ forest keyPair stream revision adminRevision adminSigned acl trees =
 
                   , getForestSigned = signed }
 
-serializeInteger :: Integer -> BS.ByteString
-serializeInteger n = BS.pack $ writeInteger n []
-
-writeInteger :: Integer -> String -> String
-writeInteger = \case
-  0 -> (toEnum 0 :) . (toEnum 0 :)
-  n -> (case n .&. 255 of
-           0 -> (toEnum 0 :) . (toEnum 1 :)
-           b -> (toEnum (fromIntegral b) :))
-       . writeInteger (n `shiftR` 8)
-
 writeString :: BS.ByteString -> [BS.ByteString] -> [BS.ByteString]
-writeString s =
-  let length = fromIntegral $ BS.length s in
-  (serializeInteger length :) . (s :)
+writeString s = (B.fromInteger (BS.length s) :) . (s :)
 
 serializeNames :: Names -> BS.ByteString
 serializeNames = serializeTrie . fmap (const BS.empty)
@@ -325,14 +312,6 @@ instance Co.ParseState TrieState where
 parseTrie s =
   getTrieStateTrie <$> (eitherToMaybe $ exec trie $ TrieState s [] T.empty)
 
-size :: Co.ParseState s => Co.Action s Integer
-size = do
-  (Ch.ord <$> character) >>= \case
-    0 -> (Ch.ord <$> character) >>= \case
-      0 -> return 0
-      _ -> (`shiftL` 8) <$> size
-    n -> ((+ fromIntegral n) . (`shiftL` 8)) <$> size
-
 stringOfSize :: Co.ParseState s => Integer -> Co.Action s BS.ByteString
 stringOfSize size = do
   s <- get Co.parseString
@@ -347,13 +326,13 @@ stringOfSize size = do
 key :: Co.Action TrieState ()
 key = do
   prefix "k"
-  size >>= stringOfSize >>= \s -> update trieStatePath (s:)
+  B.toInteger >>= stringOfSize >>= \s -> update trieStatePath (s:)
 
 path = oneOrMore key
 
 parseLeaf
   =   (prefix "n" >> return BS.empty)
-  >>| (prefix "v" >> size >>= stringOfSize)
+  >>| (prefix "v" >> B.toInteger >>= stringOfSize)
 
 pathToValue =
   path >> parseLeaf >>= \v -> do
@@ -376,7 +355,7 @@ serializeValue value = BS.concat $ writeValue value []
 writeValue :: Value -> [BS.ByteString] -> [BS.ByteString]
 writeValue (Value _ priority _ body) =
   if priority /= defaultPriority then
-    ("p":) . (serializeInteger (fromIntegral priority) :)
+    ("p":) . (B.fromInteger priority :)
   else
     id
   . case body of
@@ -398,16 +377,16 @@ data Value = Value { getValueSigner :: Cr.PublicKey
                    , getValueACL :: ACL.ACL
                    , getValueBody :: ValueBody }
 
--- valueSigner :: L.Lens' Value Cr.PublicKey
--- valueSigner =
---   L.lens getValueSigner (\x v -> x { getValueSigner = v })
+valueSigner :: L.Lens' Value Cr.PublicKey
+valueSigner =
+  L.lens getValueSigner (\x v -> x { getValueSigner = v })
 
 valuePriority =
   L.lens getValuePriority (\x v -> x { getValuePriority = v })
 
--- valueACL :: L.Lens' Value ACL.ACL
--- valueACL =
---   L.lens getValueACL (\x v -> x { getValueACL = v })
+valueACL :: L.Lens' Value ACL.ACL
+valueACL =
+  L.lens getValueACL (\x v -> x { getValueACL = v })
 
 valueBody =
   L.lens getValueBody (\x v -> x { getValueBody = v })
@@ -448,7 +427,7 @@ parseValue signer acl s =
 priority :: Co.Action ValueState ()
 priority = do
   prefix "p"
-  (fromIntegral <$> size) >>= set (valueStateValue . valuePriority)
+  B.toInteger >>= set (valueStateValue . valuePriority)
 
 nullBody = do
   prefix "_"
@@ -457,13 +436,13 @@ nullBody = do
 -- todo: use an efficient binary encoding
 numberBody = do
   prefix "n"
-  size
+  B.toInteger
   >>= stringOfSize
   >>= set (valueStateValue . valueBody) . NumberBody . bsRead
 
 stringBody = do
   prefix "s"
-  size
+  B.toInteger
   >>= stringOfSize
   >>= set (valueStateValue . valueBody) . StringBody
 
