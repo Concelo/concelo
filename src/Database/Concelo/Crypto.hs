@@ -9,6 +9,7 @@ module Database.Concelo.Crypto
   , fromPrivate
   , toPrivate
   , fromSymmetric
+  , toSymmetric
   , decryptPrivate
   , decryptAsymmetric
   , encryptAsymmetric
@@ -76,6 +77,8 @@ seedSize = 40
 defaultExponent = 65537
 
 makePRNG = PRNG . R.drgNewTest
+
+toSymmetric = SymmetricKey
 
 decryptPrivate password privateKey =
   decryptSymmetric

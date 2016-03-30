@@ -4,7 +4,8 @@ module Database.Concelo.Set
   , member
   , insert
   , delete
-  , union ) where
+  , union
+  , Database.Concelo.Set.subtract ) where
 
 import qualified Database.Concelo.Map as M
 
@@ -23,3 +24,5 @@ insert v = Set . M.insert v () . run
 delete v = Set . M.delete v . run
 
 union small large = foldr insert large small
+
+subtract small large = foldr delete large small

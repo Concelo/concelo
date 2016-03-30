@@ -15,6 +15,7 @@ module Database.Concelo.ACL
   , whiteList
   , whiteListAll
   , permitNone
+  , fromTries
   , isWriter
   , hash ) where
 
@@ -54,7 +55,8 @@ whiteListAll lens acl =
              S.empty
              (S.union (getListsWhiteList lists) (getListsBlackList lists))) acl
 
-isWriter key = S.member key . getListsWhiteList . getACLWriteLists
+isWriter key =
+  S.member (C.fromPublic key) . getListsWhiteList . getACLWriteLists
 
 readerKey = "r"
 
@@ -62,9 +64,23 @@ writerKey = "w"
 
 permitNone trie =
   setHash $ ACL
-  (Lists (foldr S.insert S.empty $ T.keys $ T.sub readerKey trie) S.empty)
-  (Lists (foldr S.insert S.empty $ T.keys $ T.sub writerKey trie) S.empty)
+  (Lists (T.foldrKeys S.insert S.empty $ T.sub readerKey trie) S.empty)
+  (Lists (T.foldrKeys S.insert S.empty $ T.sub writerKey trie) S.empty)
   undefined
+
+fromTries localTrie globalTrie =
+  setHash
+  $ ACL (Lists readBlack readWhite) (Lists writeBlack writeWhite) undefined
+  where
+    readWhite = T.foldrKeys S.insert S.empty $ T.sub readerKey localTrie
+
+    readBlack = S.subtract readWhite
+                $ T.foldrKeys S.insert S.empty $ T.sub readerKey globalTrie
+
+    writeWhite = T.foldrKeys S.insert S.empty $ T.sub writerKey localTrie
+
+    writeBlack = S.subtract writeWhite
+                 $ T.foldrKeys S.insert S.empty $ T.sub writerKey globalTrie
 
 empty =
   setHash $ ACL (Lists S.empty S.empty) (Lists S.empty S.empty) undefined

@@ -1,21 +1,22 @@
+{-# LANGUAGE LambdaCase #-}
 module Database.Concelo.SyncTree
   ( Serializer(serialize, encrypt)
   , empty ) where
 
-import Database.Concelo.Control (Action, get, update, patternFailure,
-                                 exception)
+import Database.Concelo.Control (get, patternFailure, exception)
 
 import qualified Control.Lens as L
-import qualified Control.Monad.State.Class as S
+import qualified Control.Monad.State as S
 import qualified Data.ByteString as BS
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Map as M
 import qualified Database.Concelo.Path as P
-import qualified Database.Concelo.Crypto as C
+import qualified Database.Concelo.Crypto as Cr
+import qualified Database.Concelo.Control as Co
 
 class Serializer a where
-  serialize :: Trie b -> Action a [BS.ByteString]
-  encrypt :: BS.ByteString -> Action a ByteString
+  serialize :: T.Trie b -> Co.Action a [BS.ByteString]
+  encrypt :: BS.ByteString -> Co.Action a BS.ByteString
 
 type Key = BS.ByteString
 
@@ -43,7 +44,7 @@ data Chunk a = Group { getGroupName :: Key
                      , getGroupMembers :: M.Map Key (Chunk a)
                      , getGroupBody :: BS.ByteString }
 
-             | Leaf { getLeafSerialized :: ByteString
+             | Leaf { getLeafSerialized :: BS.ByteString
                     , getLeafPath :: P.Path Key a }
 
 data SyncTree a = SyncTree { getTreeByReverseKeyMember :: T.Trie Key (Chunk a)
@@ -62,8 +63,9 @@ groupKey = "g"
 
 empty = SyncTree Nothing T.empty T.empty
 
-findObsolete chunk = do
-  (T.find (byKey chunk) <$> get (treeByReverseKeyMember . stateTree))
+findObsolete chunk =
+  let path = byKey chunk in
+  (T.findValue path <$> get (treeByReverseKeyMember . stateTree))
     >>= \case
     Nothing -> patternFailure
     Just group -> do
@@ -71,17 +73,17 @@ findObsolete chunk = do
       if T.member path obsolete then
         return ()
         else
-        update stateObsolete $ T.union (byHeightVacancy group)
+        Co.update stateObsolete $ T.union (byHeightVacancy group)
 
-        update stateNew
-        $ T.union $ T.index byHeightVacancy $ groupMembers group
+        Co.update stateNew
+        $ T.union $ T.index byHeightVacancy $ getGroupMembers group
 
         findObsolete group
 
 findObsoleteGroups = do
   get stateObsolete >>= mapM_ findObsolete
   obsolete <- get stateObsolete
-  update stateNew (T.subtract obsolete)
+  Co.update stateNew (T.subtract obsolete)
 
 groupTrie (Leaf _ _) _ = T.empty
 groupTrie _ trie = trie
@@ -89,17 +91,18 @@ groupTrie _ trie = trie
 byKey chunk@(Leaf _ path) = P.super leafKey $ fmap (const chunk) path
 byKey chunk@(Group name _ _ _) = P.super groupKey $ P.singleton name chunk
 
-byReverseKeyMember chunk = groupTrie chunk $ T.index byKey $ groupMembers chunk
+byReverseKeyMember chunk =
+  groupTrie chunk $ T.index byKey $ getGroupMembers chunk
 
 byHeightVacancy chunk =
   groupTrie chunk
-  $ T.super (groupHeight chunk)
+  $ T.super (getGroupHeight chunk)
   $ byVacancy chunk
 
 byVacancy chunk =
   groupTrie chunk
-  $ T.super (groupVacancy chunk)
-  $ T.singleton (groupName chunk) chunk
+  $ T.super (getGroupVacancy chunk)
+  $ T.singleton (getGroupName chunk) chunk
 
 -- attempt to combine the most empty existing group with the most
 -- empty new group to minimize fragmentation
@@ -119,13 +122,13 @@ oneExactly _ = Nothing
 
 single = check . foldr (:) [] where
   check = \case
-    [_] = True
-    _ = False
+    [_] -> True
+    _ -> False
 
 twoOrMore = check . foldr (:) [] where
   check = \case
-    _:_:_ = True
-    _ = False
+    _:_:_ -> True
+    _ -> False
 
 serialize' trie = with stateSerializer $ serialize trie
 
@@ -146,17 +149,17 @@ makeGroup members =
         Nothing ->
           return Nothing
 
-        Just text ->
+        Just text -> do
           ciphertext <- encrypt' text
-          return $ Just $ Group (C.hash [ciphertext]) 1 members ciphertext
+          return $ Just $ Group (Cr.hash [ciphertext]) 1 members ciphertext
 
     fromGroups height = do
       maxSize <- get stateMaxSize
 
-      return do
+      return $ do
         list <- collect 0 $ M.values members
 
-        Just $ Group (C.hash list) (height + 1) members BS.empty where
+        Just $ Group (Cr.hash list) (height + 1) members BS.empty where
 
           collect count = \case
             member:members ->
@@ -174,7 +177,7 @@ addNewGroupsForHeight height =
   do
     new <- T.isolate (BS.pack $ show height) <$> get stateNew
 
-    if height == 0 || twoOrMore new then
+    if height == 0 || twoOrMore new then do
       -- todo: consider (psuedo)randomly inserting new leaves among
       -- existing and new groups.  Is there a way to do this that
       -- doesn't result in disproportionate network traffic?
@@ -188,8 +191,8 @@ addNewGroupsForHeight height =
 
       (newGroups', obsoleteGroups') <- combineVacant newGroups oldGroups
 
-      update stateObsolete (T.union $ T.super above obsoleteGroups')
-      update stateNew (T.union $ T.super above newGroups')
+      Co.update stateObsolete (T.union $ T.super above obsoleteGroups')
+      Co.update stateNew (T.union $ T.super above newGroups')
       else
       return ()
   where
@@ -203,7 +206,7 @@ addNewGroupsForHeight height =
 
         Just group ->
           makeGroup $ T.union orphan $ groupMembers group >>= \case
-            Nothing ->
+            Nothing -> do
               orphanGroup <- makeGroup orphan
 
               return $ T.union
@@ -246,10 +249,9 @@ update maxSize tree obsolete new = do
   serializer <- S.get
 
   (_, state) <-
-    try do
-      findObsoleteGroups
-      addNewGroups
-      updateTree
+    try (do findObsoleteGroups
+            addNewGroups
+            updateTree)
     $ State maxSize tree serializer obsoleteLeaves newLeaves
 
   S.set (getStateSerializer state)

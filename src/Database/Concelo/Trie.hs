@@ -27,6 +27,7 @@ module Database.Concelo.Trie
   , sub
   , super
   , superValue
+  , index
   , union
   , intersectL
   , intersectR
@@ -108,6 +109,8 @@ sub k = Trie . V.sub k . run
 superValue k v = Trie . V.superValue noRevision k v . run
 
 super k = Trie . V.super noRevision k . run
+
+index f = Trie . V.index noRevision f
 
 union a = Trie . V.union noRevision a . run
 

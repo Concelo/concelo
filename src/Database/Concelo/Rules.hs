@@ -6,12 +6,13 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 module Database.Concelo.Rules
   ( parse
-  , Context(Context)
+  , Context()
   , contextNow
   , contextEnv
   , contextRoot
   , contextVisitor
   , contextDependencies
+  , context
   , rootVisitor
   , visitorParent
   , visitorPath
@@ -32,7 +33,7 @@ module Database.Concelo.Rules
 import Database.Concelo.Control (noParse, maybeToAction, stringLiteral,
                                  update, skipSpace, terminal, zeroOrOne,
                                  (>>|), void, group, get, set, run, eval,
-                                 endOfInput)
+                                 endOfInput, eitherToAction)
 
 import Control.Monad (liftM2, liftM3, foldM)
 import Data.Fixed (mod')
@@ -79,6 +80,8 @@ contextVisitor =
 
 contextDependencies =
   L.lens getContextDependencies (\x v -> x { getContextDependencies = v })
+
+context now env root visitor = Context now BS.empty env root visitor T.empty
 
 data RuleState = RuleState { getRuleStateString :: BS.ByteString
                            , getRuleStateEnv :: S.Set BS.ByteString
@@ -505,4 +508,4 @@ parseTrie env =
           _ -> parseTrie env sub >>= \r ->
             return $ L.over rulesMap (M.insert k r) rules
 
-parse = parseTrie S.empty
+parse = eitherToAction . parseTrie S.empty

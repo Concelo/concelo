@@ -8,10 +8,14 @@ module Database.Concelo.Subscriber
   , emptyTree
   , getTreeStream
   , getTreeLeaves
+  , getTreeACLTrie
+  , getTreeACLFromTries
   , Forest()
   , getForestChunks
   , getForestTreeMap
   , getForestTrees
+  , getForestACL
+  , getForestACLTrie
   , subscriberPublished
   , getForestRevision
   , nextMessage ) where
@@ -31,6 +35,7 @@ import qualified Database.Concelo.Path as Pa
 import qualified Database.Concelo.Crypto as Cr
 import qualified Database.Concelo.Chunks as Ch
 import qualified Database.Concelo.Control as Co
+import qualified Database.Concelo.ACL as ACL
 import qualified Control.Lens as L
 import qualified Control.Monad.State as St
 import qualified Control.Monad.Except as E
@@ -230,6 +235,7 @@ data Tree = Tree { getTreeRevision :: Integer
                  , getTreeStream :: BS.ByteString
                  , getTreeACL :: Pr.Name
                  , getTreeACLTrie :: T.Trie BS.ByteString BS.ByteString
+                 , getTreeACLFromTries :: ACL.ACL
                  , getTreeLeaves :: Pr.Name }
 
 -- treeRevision :: L.Lens' Tree Integer
@@ -252,7 +258,7 @@ data Tree = Tree { getTreeRevision :: Integer
 -- treeLeaves =
 --   L.lens getTreeLeaves (\x v -> x { getTreeLeaves = v })
 
-emptyTree stream = Tree (-1) stream (Pa.leaf ()) T.empty (Pa.leaf ())
+emptyTree stream = Tree (-1) stream (Pa.leaf ()) T.empty ACL.empty (Pa.leaf ())
 
 updateTrees :: T.Trie BS.ByteString BS.ByteString ->
                Forest ->
@@ -335,6 +341,7 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
 
           return $ M.insert stream
             (Tree revision stream acl aclTrie
+             (ACL.fromTries aclTrie forestACLTrie)
              $ if descend then leaves else (Pa.leaf ())) trees
 
         _ -> patternFailure

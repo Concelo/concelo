@@ -9,11 +9,15 @@ module Database.Concelo.VMap
   , insert
   , modify
   , delete
+  , foldrKeys
+  , keys
   , foldrPairs
   , pairs
   , foldrTriples
   , triples
   , index
+  , union
+  , Database.Concelo.VMap.subtract
   , foldrDiff ) where
 
 import qualified Data.Tree.RBTree as T
@@ -66,6 +70,10 @@ modify version key transform (VMap tree) =
 
 delete version key = modify version key (const Nothing)
 
+foldrKeys visit seed = foldr (visit . getCellKey) seed . run
+
+keys = foldrKeys (:) []
+
 foldrPairs visit seed = foldr (visit . pairKV) seed . run
 
 pairs = foldrPairs (:) []
@@ -75,6 +83,11 @@ foldrTriples visit seed = foldr (visit . triple) seed . run
 triples = foldrTriples (:) []
 
 index version f = foldr (\v -> insert version (f v) v) empty
+
+union version small large =
+  foldrPairs (\(k, v) -> insert version k v) large small
+
+subtract version small large = foldrKeys (delete version) large small
 
 pairKV (Cell _ k v) = (k, v)
 

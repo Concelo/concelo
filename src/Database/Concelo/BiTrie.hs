@@ -52,7 +52,7 @@ reverseDelete value = deleteFromBoth value reverse' forward
 delete key = deleteFromBoth key forward reverse'
 
 deleteFromBoth :: Ord k =>
-                  P.Path k () ->
+                  P.Path k v ->
                   L.Lens' (BiTrie k) (T.Trie k (T.Trie k ())) ->
                   L.Lens' (BiTrie k) (T.Trie k (T.Trie k ())) ->
                   BiTrie k ->

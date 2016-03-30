@@ -4,12 +4,16 @@ module Database.Concelo.Map
   , member
   , Database.Concelo.Map.lookup
   , first
+  , foldrKeys
+  , keys
   , foldrPairs
   , pairs
   , insert
   , modify
   , delete
-  , index ) where
+  , index
+  , union
+  , Database.Concelo.Map.subtract) where
 
 import qualified Database.Concelo.VMap as V
 
@@ -28,6 +32,10 @@ lookup k = V.lookup k . run
 
 first = V.first . run
 
+foldrKeys visit seed = V.foldrKeys visit seed . run
+
+keys = V.keys . run
+
 foldrPairs visit seed = V.foldrPairs visit seed . run
 
 pairs = V.pairs . run
@@ -39,3 +47,7 @@ modify k f = Map . V.modify noVersion k f . run
 delete k = Map . V.delete noVersion k . run
 
 index f = Map . V.index noVersion f
+
+union small large = foldrPairs (\(k, v) -> insert k v) large small
+
+subtract small large = foldrKeys delete large small
