@@ -4,6 +4,7 @@ module Database.Concelo.Map
   , member
   , Database.Concelo.Map.lookup
   , first
+  , firstValue
   , foldrKeys
   , keys
   , foldrPairs
@@ -31,6 +32,8 @@ member k = V.member k . run
 lookup k = V.lookup k . run
 
 first = V.first . run
+
+firstValue = V.firstValue . run
 
 foldrKeys visit seed = V.foldrKeys visit seed . run
 

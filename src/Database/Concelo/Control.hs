@@ -3,6 +3,9 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
+
+-- todo: this file has become home to a lot of little utilities
+-- unrelated to control flow; split them out
 module Database.Concelo.Control
   ( Action
   , get
@@ -48,7 +51,9 @@ module Database.Concelo.Control
   , maybeToAction
   , eitherToAction
   , bindMaybe
-  , bindMaybe2 ) where
+  , bindMaybe2
+  , bsShow
+  , bsRead ) where
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Char as C
@@ -232,3 +237,9 @@ stringLiteralDelimited delimiter = do
   return $ BS.pack s
 
 stringLiteral = return <$> stringLiteralDelimited '"'
+
+bsShow :: Show s => s -> BS.ByteString
+bsShow = BS.pack . show
+
+bsRead :: Read r => BS.ByteString -> r
+bsRead = read . BS.unpack

@@ -82,7 +82,7 @@ empty = VTrie Nothing V.empty
 
 isLeaf (VTrie _ m) = null m
 
-leaf v = VTrie (Just v) V.empty
+leaf version value = VTrie (Just (Versioned version value)) V.empty
 
 value = value'
 
@@ -154,7 +154,7 @@ sub key = fromMaybe empty . V.lookup key . getVTrieMap
 
 isolate version key = super version key . sub key
 
-singleton version key = super version key . leaf
+singleton version key = super version key . leaf version
 
 single version key trie
   | isEmpty trie = V.empty
@@ -165,8 +165,8 @@ superValue version value key =
 
 super version key = VTrie Nothing . single version key
 
-index version f = foldrPathsAndValues visit empty where
-  visit (p, v) = union version $ f p v
+index version f = foldr visit empty where
+  visit v = union version $ f v
 
 union version small (VTrie largeVersioned largeMap) =
   let v = TL.value small <|> (getVersionedValue <$> largeVersioned) in

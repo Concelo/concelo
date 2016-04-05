@@ -81,7 +81,7 @@ module Database.Concelo.Protocol
 import Database.Concelo.Control (prefix, (>>|), exec, eitherToMaybe,
                                  zeroOrOne, zeroOrMore, oneOrMore, endOfStream,
                                  patternFailure, get, set, update, noParse,
-                                 exception)
+                                 exception, bsShow, bsRead)
 
 import qualified Database.Concelo.Path as P
 import qualified Database.Concelo.Trie as T
@@ -213,12 +213,6 @@ leaf keyPair level treeStream forestStream body = do
                               $ P.singleton (Cr.hash [body]) ()
 
               , getLeafSigned = signed }
-
-bsShow :: Show s => s -> BS.ByteString
-bsShow = BS.pack . show
-
-bsRead :: Read r => BS.ByteString -> r
-bsRead = read . BS.unpack
 
 group :: Foldable t =>
          (Cr.PublicKey, Cr.PrivateKey) ->

@@ -1,55 +1,73 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE NoMonomorphismRestriction #-}
 module Database.Concelo.SyncTree
   ( Serializer(serialize, encrypt)
-  , empty ) where
+  , empty
+  , update ) where
 
-import Database.Concelo.Control (get, patternFailure, exception)
+import Database.Concelo.Control (get, patternFailure, with, updateM,
+                                 set, bsShow, bsRead, maybeToAction,
+                                 eitherToAction, run)
+import Control.Applicative ((<|>))
+import Control.Monad (foldM)
 
 import qualified Control.Lens as L
 import qualified Control.Monad.State as S
-import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS
+import qualified Data.Foldable as F
 import qualified Database.Concelo.Trie as T
-import qualified Database.Concelo.Map as M
-import qualified Database.Concelo.Path as P
+import qualified Database.Concelo.TrieLike as TL
+import qualified Database.Concelo.Protocol as Pr
+import qualified Database.Concelo.Path as Pa
 import qualified Database.Concelo.Crypto as Cr
 import qualified Database.Concelo.Control as Co
 
-class Serializer a where
-  serialize :: T.Trie b -> Co.Action a [BS.ByteString]
-  encrypt :: BS.ByteString -> Co.Action a BS.ByteString
+class Serializer s where
+  serialize :: TL.TrieLike t =>
+               t BS.ByteString Pr.Value ->
+               Co.Action s [BS.ByteString]
+
+  encrypt :: BS.ByteString ->
+             Co.Action s BS.ByteString
 
 type Key = BS.ByteString
 
-data State a b =
-  State { getStateMaxSize :: Int
-        , getStateTree :: SyncTree a
-        , getStateSerializer :: b
-        , getStateObsolete :: T.Trie Key (Chunk a)
-        , getStateNew :: T.Trie Key (Chunk a) }
+data State s =
+  State { getStateTree :: SyncTree
+        , getStateSerializer :: s
+        , getStateObsolete :: T.Trie Key Chunk
+        , getStateNew :: T.Trie Key Chunk }
 
 stateTree =
   L.lens getStateTree (\e v -> e { getStateTree = v })
 
+stateSerializer :: L.Lens' (State s) s
 stateSerializer =
   L.lens getStateSerializer (\e v -> e { getStateSerializer = v })
 
+stateObsolete :: L.Lens' (State s) (T.Trie Key Chunk)
 stateObsolete =
   L.lens getStateObsolete (\e v -> e { getStateObsolete = v })
 
+stateNew :: L.Lens' (State s) (T.Trie Key Chunk)
 stateNew =
   L.lens getStateNew (\e v -> e { getStateNew = v })
 
-data Chunk a = Group { getGroupName :: Key
-                     , getGroupHeight :: Key
-                     , getGroupMembers :: M.Map Key (Chunk a)
-                     , getGroupBody :: BS.ByteString }
+data Chunk = Group { getGroupName :: Key
+                   , getGroupHeight :: Int
+                   , getGroupMembers :: T.Trie Key Chunk
+                   , getGroupBody :: BS.ByteString }
 
-             | Leaf { getLeafSerialized :: BS.ByteString
-                    , getLeafPath :: P.Path Key a }
+             | Leaf { _getLeafSerialized :: BS.ByteString
+                    , getLeafPath :: Pa.Path Key Pr.Value }
 
-data SyncTree a = SyncTree { getTreeByReverseKeyMember :: T.Trie Key (Chunk a)
-                           , getTreeByHeightVacancy :: T.Trie Key (Chunk a) }
+data SyncTree = SyncTree { getTreeByReverseKeyMember :: T.Trie Key Chunk
+                         , getTreeByHeightVacancy :: T.Trie Key Chunk }
 
+treeByReverseKeyMember :: L.Lens' SyncTree (T.Trie Key Chunk)
 treeByReverseKeyMember =
   L.lens getTreeByReverseKeyMember
   (\t v -> t { getTreeByReverseKeyMember = v })
@@ -61,22 +79,22 @@ leafKey = "l"
 
 groupKey = "g"
 
-empty = SyncTree Nothing T.empty T.empty
+empty = SyncTree T.empty T.empty
 
 findObsolete chunk =
   let path = byKey chunk in
-  (T.findValue path <$> get (treeByReverseKeyMember . stateTree))
+  (T.findValue path <$> get (stateTree . treeByReverseKeyMember))
     >>= \case
     Nothing -> patternFailure
     Just group -> do
       obsolete <- get stateObsolete
       if T.member path obsolete then
         return ()
-        else
+        else do
         Co.update stateObsolete $ T.union (byHeightVacancy group)
 
         Co.update stateNew
-        $ T.union $ T.index byHeightVacancy $ getGroupMembers group
+          $ T.union $ T.index byHeightVacancy $ getGroupMembers group
 
         findObsolete group
 
@@ -88,37 +106,54 @@ findObsoleteGroups = do
 groupTrie (Leaf _ _) _ = T.empty
 groupTrie _ trie = trie
 
-byKey chunk@(Leaf _ path) = P.super leafKey $ fmap (const chunk) path
-byKey chunk@(Group name _ _ _) = P.super groupKey $ P.singleton name chunk
+getGroupVacancy group = Pr.leafSize - BS.length (getGroupBody group)
+
+byKey chunk@(Leaf _ path) = Pa.super leafKey $ fmap (const chunk) path
+byKey chunk@(Group name _ _ _) = Pa.super groupKey $ Pa.singleton name chunk
 
 byReverseKeyMember chunk =
   groupTrie chunk $ T.index byKey $ getGroupMembers chunk
 
 byHeightVacancy chunk =
   groupTrie chunk
-  $ T.super (getGroupHeight chunk)
+  $ T.super (bsShow (getGroupHeight chunk))
   $ byVacancy chunk
 
 byVacancy chunk =
   groupTrie chunk
-  $ T.super (getGroupVacancy chunk)
+  $ T.super (bsShow $ getGroupVacancy chunk)
   $ T.singleton (getGroupName chunk) chunk
+
+byName chunk =
+  groupTrie chunk
+  $ T.singleton (getGroupName chunk) chunk
+
+byLeafPath chunk = const chunk <$> getLeafPath chunk
 
 -- attempt to combine the most empty existing group with the most
 -- empty new group to minimize fragmentation
 combineVacant new old =
   case (,) <$> T.firstValue old <*> T.firstValue new of
-    Nothing -> (T.empty, new)
-    Just (oldFirst, newFirst) -> do
-      combination <-
-        makeGroup $ T.union (groupMembers oldFirst) (groupMembers newFirst)
+    Nothing -> return (new, T.empty)
 
-      return (byVacancy oldFirst,
-              T.union (byVacancy combination)
-              $ T.subtract (byVacancy newFirst) new)
+    Just (oldFirst, newFirst) ->
+      (makeGroup $ T.union (getGroupMembers oldFirst)
+        (getGroupMembers newFirst)) >>= \case
+        Just combination ->
+          return (T.union (byVacancy combination)
+                  $ T.subtract (byVacancy newFirst) new,
+                  byVacancy oldFirst)
 
-oneExactly [x] = Just x
-oneExactly _ = Nothing
+        Nothing -> return (new, T.empty)
+
+oneExactly = \case
+  [x] -> Just x
+  _ -> Nothing
+
+firstValue = extract . foldr (:) [] where
+  extract = \case
+    x:_ -> Just x
+    _ -> Nothing
 
 single = check . foldr (:) [] where
   check = \case
@@ -134,50 +169,52 @@ serialize' trie = with stateSerializer $ serialize trie
 
 encrypt' text = with stateSerializer $ encrypt text
 
-makeGroup members =
-  T.firstValue members >>= fromChunks where
-    fromChunks = \case
-      (Leaf serialized _) -> fromLeaves serialized
-      (Group _ height _ _) -> fromGroups height
+makeGroup members = (case firstValue members of
+                        Nothing -> return Nothing
+                        Just first -> fromChunks first) where
+  fromChunks = \case
+    (Leaf serialized _) -> fromLeaves serialized
+    (Group _ height _ _) -> fromGroups height
 
-    fromLeaves first = do
-      plaintext <- oneExactly <$> serialize' (T.index leafPath members)
+  fromLeaves first = do
+    plaintext <- oneExactly <$> (serialize' $ T.index getLeafPath members)
 
-      let fragment = if single members then Just first else Nothing
+    let fragment = if single members then Just first else Nothing
 
-      case plaintext <|> fragment of
-        Nothing ->
-          return Nothing
+    case plaintext <|> fragment of
+      Nothing ->
+        return Nothing
 
-        Just text -> do
-          ciphertext <- encrypt' text
-          return $ Just $ Group (Cr.hash [ciphertext]) 1 members ciphertext
+      Just text -> do
+        ciphertext <- encrypt' text
+        return $ Just $ Group (Cr.hash [ciphertext]) 1
+          (T.index byLeafPath members) ciphertext
 
-    fromGroups height = do
-      maxSize <- get stateMaxSize
+  fromGroups height = return $ do
+    list <- collect 0 $ F.toList members
 
-      return $ do
-        list <- collect 0 $ M.values members
+    Just $ Group (Cr.hash list) (height + 1) (T.index byName members)
+      BS.empty where
 
-        Just $ Group (Cr.hash list) (height + 1) members BS.empty where
+      collect count = \case
+        member:members ->
+          let name = getGroupName member
+              count' = count + BS.length name in
 
-          collect count = \case
-            member:members ->
-              let name = groupName member
-                  count' = count a + BS.length name in
+          if count' > Pr.leafSize then
+            Nothing
+          else
+            (name:) <$> collect count' members
 
-              if count' > maxSize then
-                Nothing
-              else
-                (name:) <$> collect count' members
+        _ -> Just []
 
-            _ -> Just []
+isolate key = T.super key . T.sub key
 
 addNewGroupsForHeight height =
   do
-    new <- T.isolate (BS.pack $ show height) <$> get stateNew
+    new <- isolate height <$> get stateNew
 
-    if height == 0 || twoOrMore new then do
+    if height == "0" || twoOrMore new then do
       -- todo: consider (psuedo)randomly inserting new leaves among
       -- existing and new groups.  Is there a way to do this that
       -- doesn't result in disproportionate network traffic?
@@ -187,7 +224,7 @@ addNewGroupsForHeight height =
       obsolete <- T.sub above <$> get stateObsolete
 
       oldGroups <- T.subtract obsolete . T.sub above
-                   <$> get (treeByHeightVacancy . stateTree)
+                   <$> get (stateTree . treeByHeightVacancy)
 
       (newGroups', obsoleteGroups') <- combineVacant newGroups oldGroups
 
@@ -197,22 +234,20 @@ addNewGroupsForHeight height =
       return ()
   where
 
-    above = height + 1
+    above = bsShow ((bsRead height :: Int) + 1)
 
-    group groups ophan =
+    group groups orphan = do
+      orphanGroup <-
+        makeGroup orphan >>=
+        maybeToAction (Co.Exception "could not make a single-member group")
+
       case T.firstValue groups of
         Nothing ->
           return $ byHeightVacancy orphanGroup
 
         Just group ->
-          makeGroup $ T.union orphan $ groupMembers group >>= \case
-            Nothing -> do
-              orphanGroup <- makeGroup orphan
-
-              return $ T.union
-              (byHeightVacancy
-               $ fromMaybe (exception "could not make a single-member group")
-               orphanGroup) groups
+          (makeGroup $ T.union orphan $ getGroupMembers group) >>= \case
+            Nothing -> return $ T.union (byHeightVacancy orphanGroup) groups
 
             Just combined ->
               return
@@ -230,31 +265,31 @@ updateIndex index trie = do
     $ T.subtract (T.index index obsolete) trie
 
 updateTree = do
-  updateM (treeByReverseKeyMember . stateTree) (updateIndex byReverseKeyMember)
-  updateM (treeByHeightVacancy . stateTree) (updateIndex byHeightVacancy)
+  updateM (stateTree . treeByReverseKeyMember) (updateIndex byReverseKeyMember)
+  updateM (stateTree . treeByHeightVacancy) (updateIndex byHeightVacancy)
 
 split path =
-  foldr visit (0, T.empty) <$> serialize' path where
+  snd . foldr visit (0 :: Int, T.empty) <$> serialize' path where
     visit string (count, trie) =
       (count + 1, T.union (const (Leaf string path') <$> path') trie) where
-        path' = T.super (BS.pack $ show count) path
+        path' = Pa.super (bsShow count) path
 
-toLeaves path = T.union $ T.super "0" <$> split path
+toLeaves leaves path = flip T.union leaves . T.super "0" <$> split path
 
-update maxSize tree obsolete new = do
-  obsoleteLeaves <- foldM toLeaves T.empty $ T.paths obsolete
-
-  newLeaves <- foldM toLeaves T.empty $ T.paths new
-
+update tree obsolete new = do
   serializer <- S.get
 
   (_, state) <-
-    try (do findObsoleteGroups
-            addNewGroups
-            updateTree)
-    $ State maxSize tree serializer obsoleteLeaves newLeaves
+    eitherToAction $ run
+    (do foldM toLeaves T.empty (T.paths obsolete) >>= set stateObsolete
+        foldM toLeaves T.empty (T.paths new) >>= set stateNew
 
-  S.set (getStateSerializer state)
+        findObsoleteGroups
+        addNewGroups
+        updateTree)
+    $ State tree serializer T.empty T.empty
+
+  S.put (getStateSerializer state)
 
   return (getStateTree state,
           getStateObsolete state,

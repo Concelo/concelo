@@ -27,6 +27,7 @@ module Database.Concelo.Trie
   , sub
   , super
   , superValue
+  , singleton
   , index
   , union
   , intersectL
@@ -61,7 +62,7 @@ empty = Trie $ V.empty
 
 isLeaf = V.isLeaf . run
 
-leaf v = Trie $ V.leaf v
+leaf = Trie . V.leaf noRevision
 
 value = V.value . run
 
@@ -109,6 +110,8 @@ sub k = Trie . V.sub k . run
 superValue k v = Trie . V.superValue noRevision k v . run
 
 super k = Trie . V.super noRevision k . run
+
+singleton k = Trie . V.singleton noRevision k
 
 index f = Trie . V.index noRevision f
 
