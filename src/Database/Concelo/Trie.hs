@@ -32,7 +32,8 @@ module Database.Concelo.Trie
   , union
   , intersectL
   , intersectR
-  , Database.Concelo.Trie.subtract ) where
+  , Database.Concelo.Trie.subtract
+  , diff ) where
 
 import qualified Database.Concelo.VTrie as V
 import qualified Database.Concelo.TrieLike as TL
@@ -45,6 +46,10 @@ instance Ord k => Functor (Trie k) where
 instance Foldable (Trie k) where
   foldr visit seed = foldr visit seed . run
 
+instance Ord k => Traversable (Trie k) where
+  traverse f = foldrPathsAndValues visit (pure empty) where
+    visit (p, v) t = union . (<$> p) . const <$> f v <*> t
+
 instance TL.TrieLike Trie where
   value = TL.value . run
   member path = TL.member path . run
@@ -52,7 +57,7 @@ instance TL.TrieLike Trie where
     TL.foldrPairs (\(k, a) -> visit (k, Trie a)) seed . run
   foldrPaths visit seed = TL.foldrPaths visit seed . run
 
-noRevision = -1
+noVersion = -1
 
 trie = Trie
 
@@ -62,7 +67,7 @@ empty = Trie $ V.empty
 
 isLeaf = V.isLeaf . run
 
-leaf = Trie . V.leaf noRevision
+leaf = Trie . V.leaf noVersion
 
 value = V.value . run
 
@@ -103,22 +108,25 @@ triples = V.triples . run
 fromTrieLike :: (TL.TrieLike t, Ord k) =>
                 t k v ->
                 Trie k v
-fromTrieLike = Trie . V.fromTrieLike noRevision
+fromTrieLike = Trie . V.fromTrieLike noVersion
 
 sub k = Trie . V.sub k . run
 
-superValue k v = Trie . V.superValue noRevision k v . run
+superValue k v = Trie . V.superValue noVersion k v . run
 
-super k = Trie . V.super noRevision k . run
+super k = Trie . V.super noVersion k . run
 
-singleton k = Trie . V.singleton noRevision k
+singleton k = Trie . V.singleton noVersion k
 
-index f = Trie . V.index noRevision f
+index f = Trie . V.index noVersion f
 
-union a = Trie . V.union noRevision a . run
+union a = Trie . V.union noVersion a . run
 
-intersectL a = Trie . V.intersectL noRevision a . run
+intersectL a = Trie . V.intersectL noVersion a . run
 
-intersectR a = Trie . V.intersectR noRevision a . run
+intersectR a = Trie . V.intersectR noVersion a . run
 
-subtract a = Trie . V.subtract noRevision a . run
+subtract a = Trie . V.subtract noVersion a . run
+
+diff a b = (Trie obsolete, Trie new) where
+  (obsolete, new) = V.diff noVersion a b

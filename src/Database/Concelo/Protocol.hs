@@ -70,6 +70,7 @@ module Database.Concelo.Protocol
   , value
   , serializeValue
   , serializeTrie
+  , serializeNames
   , parseValue
   , parseTrie
   , leaf
@@ -196,17 +197,17 @@ dummySigned = Signed undefined undefined undefined
 
 dummyName = P.leaf ()
 
-digest message (public, private) = do
+digest message private = do
   text <- toText message
 
   signature <- Cr.sign private text
 
-  return (text, Signed public signature text)
+  return (text, Signed (Cr.derivePublic private) signature text)
 
-leaf keyPair level treeStream forestStream body = do
+leaf private level treeStream forestStream body = do
   let leaf = Leaf dummyName dummySigned treeStream forestStream body
 
-  (_, signed) <- digest leaf keyPair
+  (_, signed) <- digest leaf private
 
   return leaf { getLeafName = P.super level
                               $ P.super "1"
@@ -215,52 +216,50 @@ leaf keyPair level treeStream forestStream body = do
               , getLeafSigned = signed }
 
 group :: Foldable t =>
-         (Cr.PublicKey, Cr.PrivateKey) ->
-         Int ->
+         Cr.PrivateKey ->
+         BS.ByteString ->
          Int ->
          BS.ByteString ->
          BS.ByteString ->
          t BS.ByteString ->
          Co.Action Cr.PRNG Message
-group keyPair level height treeStream forestStream members = do
+group private level height treeStream forestStream members = do
   let group = Group dummyName dummySigned treeStream forestStream
               $ foldr (\member ->
                         T.union
-                        $ P.super (bsShow level)
+                        $ P.super level
                         $ P.super (bsShow $ height - 1)
                         $ P.singleton member ()) T.empty members
 
-  (_, signed) <- digest group keyPair
+  (_, signed) <- digest group private
 
-  return group { getGroupName = P.super (bsShow level)
+  return group { getGroupName = P.super level
                               $ P.super (bsShow height)
                               $ P.singleton (Cr.hash members) ()
 
                , getGroupSigned = signed }
 
-tree keyPair stream forestStream optional revision acl
-  leaves = do
-    let tree = Tree dummyName stream forestStream optional revision
-               dummySigned acl leaves
+tree private stream forestStream optional revision acl leaves = do
+  let tree = Tree dummyName stream forestStream optional revision
+             dummySigned acl leaves
 
-    (text, signed) <- digest tree keyPair
+  (text, signed) <- digest tree private
 
-    return tree { getTreeName = P.super treeLevel
-                                $ P.singleton (Cr.hash [text]) ()
+  return tree { getTreeName = P.super treeLevel
+                              $ P.singleton (Cr.hash [text]) ()
 
-                , getTreeSigned = signed }
+              , getTreeSigned = signed }
 
-forest keyPair stream revision adminRevision adminSigned acl trees =
-  do
-    let forest = Forest dummyName stream revision dummySigned adminRevision
-                 adminSigned acl trees
+forest private stream revision adminRevision adminSigned acl trees = do
+  let forest = Forest dummyName stream revision dummySigned adminRevision
+               adminSigned acl trees
 
-    (text, signed) <- digest forest keyPair
+  (text, signed) <- digest forest private
 
-    return forest { getForestName = P.super forestLevel
-                                    $ P.singleton (Cr.hash [text]) ()
+  return forest { getForestName = P.super forestLevel
+                                  $ P.singleton (Cr.hash [text]) ()
 
-                  , getForestSigned = signed }
+                , getForestSigned = signed }
 
 writeString :: BS.ByteString -> [BS.ByteString] -> [BS.ByteString]
 writeString s = (B.fromInteger (BS.length s) :) . (s :)

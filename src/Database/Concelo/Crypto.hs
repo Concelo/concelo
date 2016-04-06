@@ -10,17 +10,18 @@ module Database.Concelo.Crypto
   , toPrivate
   , fromSymmetric
   , toSymmetric
+  , newSymmetric
   , decryptPrivate
   , decryptAsymmetric
   , encryptAsymmetric
   , decryptSymmetric
   , encryptSymmetric
-  , randomBytes
   , PublicKey()
   , PrivateKey()
   , SymmetricKey()
   , PRNG()
   , makePRNG
+  , randomBytes
   , sign
   , verify
   , hash ) where
@@ -79,6 +80,8 @@ defaultExponent = 65537
 makePRNG = PRNG . R.drgNewTest
 
 toSymmetric = SymmetricKey
+
+newSymmetric = toSymmetric <$> randomBytes symmetricKeySize
 
 decryptPrivate password privateKey =
   decryptSymmetric

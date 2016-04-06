@@ -14,7 +14,8 @@ module Database.Concelo.Map
   , delete
   , index
   , union
-  , Database.Concelo.Map.subtract) where
+  , Database.Concelo.Map.subtract
+  , diff ) where
 
 import qualified Database.Concelo.VMap as V
 
@@ -54,3 +55,6 @@ index f = Map . V.index noVersion f
 union small large = foldrPairs (\(k, v) -> insert k v) large small
 
 subtract small large = foldrKeys delete large small
+
+diff a b = (Map obsolete, Map new) where
+  (obsolete, new) = V.diff noVersion a b

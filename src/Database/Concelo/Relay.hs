@@ -1,25 +1,33 @@
+{-# LANGUAGE LambdaCase #-}
 module Database.Concelo.Relay
   ( empty
   , receive
   , nextMessages
   , setSubscriber ) where
 
-import qualified Database.Concelo.Protocol as P
+import Database.Concelo.Control (set, get, getThenSet, updateThenGet, update,
+                                 exception, with, try, exec)
+
+import Control.Monad (when)
+import Data.Maybe (isJust)
+
+import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Map as M
-import qualified Database.Concelo.Set as S
-import qualified Database.Concelo.Path as Path
-import qualified Database.Concelo.Publisher as Pub
-import qualified Database.Concelo.Subscriber as Sub
-import qualified Database.Concelo.Pipe as Pipe
+import qualified Database.Concelo.Set as Se
+import qualified Database.Concelo.Path as Pa
+import qualified Database.Concelo.Publisher as Pu
+import qualified Database.Concelo.Subscriber as Su
+import qualified Database.Concelo.Pipe as Pi
+import qualified Database.Concelo.Crypto as C
 import qualified Control.Lens as L
-import qualified Control.Monad.State.Class as State
+import qualified Control.Monad.State as St
 import qualified Data.ByteString as BS
 
 data Relay =
-  Relay { getRelayPipe :: Pipe.Pipe
-        , getRelayPendingSubscriber :: Maybe Sub.Subscriber
-        , getRelayStreams :: S.Set BS.ByteString
+  Relay { getRelayPipe :: Pi.Pipe
+        , getRelayPendingSubscriber :: Maybe Su.Subscriber
+        , getRelayStreams :: Se.Set BS.ByteString
         , getRelayPublicKey :: Maybe BS.ByteString
         , getRelayChallenge :: BS.ByteString }
 
@@ -30,6 +38,7 @@ relayPendingSubscriber =
   L.lens getRelayPendingSubscriber
   (\x v -> x { getRelayPendingSubscriber = v })
 
+relayStreams :: L.Lens' Relay (Se.Set BS.ByteString)
 relayStreams =
   L.lens getRelayStreams (\x v -> x { getRelayStreams = v })
 
@@ -39,12 +48,12 @@ relayPublicKey =
 relayChallenge =
   L.lens getRelayChallenge (\x v -> x { getRelayChallenge = v })
 
-empty = relay Pipe.empty Nothing
+relay adminACL stream = make (Pi.pipe adminACL Nothing stream) Nothing
 
-relay pipe publicKey =
-  Relay pipe Nothing S.empty publicKey
+make pipe publicKey =
+  Relay pipe Nothing Se.empty publicKey
 
-chunks = L.get (Sub.subscriberReceived . Sub.subscriberClean)
+chunks = Su.getSubscriberReceived . Su.getSubscriberClean
 
 setSubscriber new = do
   set relayPendingSubscriber $ Just new
@@ -53,27 +62,25 @@ setSubscriber new = do
     Nothing -> return ()
 
     Just publicKey -> do
-      previous <- get relaySubscriber
-
-      set relaySubscriber new
+      previous <- getThenSet (relayPipe . Pi.pipeSubscriber) new
 
       streams <-
-        updateAndGet relayStreams
+        updateThenGet relayStreams
         $ updateStreams publicKey previous new
 
-      update (Pipe.pipePublisher . relayPipe)
-        $ Pub.update
+      update (Pi.pipePublisher . relayPipe)
+        $ Pu.update
         $ filterDiff streams
-        $ M.diff (chunks previous) (chunks new)
+        $ T.diff (chunks previous) (chunks new)
 
 updateStreams publicKey oldSubscriber newSubscriber streams =
   let allChunks = chunks newSubscriber in
   updateStreams' allChunks publicKey
-  (L.get (forestTreeTrie . subscriberPublished) oldSubscriber)
-  (L.get (forestTreeTrie . subscriberPublished) newSubscriber)
+  (Su.getForestTreeMap $ Su.getSubscriberPublished oldSubscriber)
+  (Su.getForestTreeMap $ Su.getSubscriberPublished newSubscriber)
   $ updateStreams' allChunks publicKey
-  (L.get (forestTreeTrie . subscriberPersisted) oldSubscriber)
-  (L.get (forestTreeTrie . subscriberPersisted) newSubscriber)
+  (Su.getForestTreeMap $ Su.getSubscriberPersisted oldSubscriber)
+  (Su.getForestTreeMap $ Su.getSubscriberPersisted newSubscriber)
   streams
 
 updateStreams' allChunks publicKey oldTrees newTrees streams =
@@ -82,11 +89,11 @@ updateStreams' allChunks publicKey oldTrees newTrees streams =
 
     maybeAdd new streams =
       if T.member
-         (Path.super P.aclReaderKey $ P.singleton publicKey ())
-         (Sub.getTreeACL new)
-         && (not $ Sub.getTreeOptional new)
+         (Pa.super Pr.aclReaderKey $ Pa.singleton publicKey ())
+         (Su.getTreeACLTrie new)
+         && (not $ Su.getTreeOptional new)
       then
-        S.insert (Sub.getTreeStream new) streams
+        Se.insert (Su.getTreeStream new) streams
       else
         streams
 
@@ -97,35 +104,37 @@ filterDiff streams (obsoleteChunks, newChunks) =
       case chunkTreeStream chunk of
         Nothing -> chunks
         Just stream ->
-          if S.member stream streams then
+          if Se.member stream streams then
             chunks
           else
             T.subtract path chunks
 
 chunkTreeStream = \case
-  P.Leaf { P.getLeafTreeStream = treeStream } -> Just treeStream
-  P.Group { P.getGroupTreeStream = treeStream } -> Just treeStream
+  Pr.Leaf { Pr.getLeafTreeStream = treeStream } -> Just treeStream
+  Pr.Group { Pr.getGroupTreeStream = treeStream } -> Just treeStream
   _ -> Nothing
 
 receive = \case
-  P.Cred version request publicKey signature ->
-    if version != P.version then
+  Pr.Cred version request publicKey signature ->
+    if version /= Pr.version then
       exception "unexpected protocol version: " ++ show version
     else do
-      get relayChallenge >>= verify signature publicKey
+      challenge <- get relayChallenge
+
+      when (not $ C.verify publicKey signature challenge)
+        $ exception "received improperly signed challenge"
 
       subscriber <- get relayPendingSubscriber
 
-      State.set $ relay (L.set Pipe.pipeSubscriber subscriber Pipe.empty)
-        (Just publicKey)
+      St.put $ make (Pi.fromSubscriber subscriber) (Just publicKey)
 
-  nack@(P.Nack {}) -> do
+  nack@(Pr.Nack {}) -> do
     publicKey <- get relayPublicKey
     when (isJust publicKey)
-      $ with (Pipe.pipePublisher . relayPipe)
-      $ Pub.receive nack
+      $ with (Pi.pipePublisher . relayPipe)
+      $ Pu.receive nack
 
-  P.Persisted {} -> return ()
+  Pr.Persisted {} -> return ()
 
   -- todo: stream (authenticated) chunks to subscribers as they are
   -- received rather than wait until we have a complete tree
@@ -139,37 +148,39 @@ receive = \case
   message -> do
     publicKey <- get relayPublicKey
     when (isJust publicKey)
-      $ get (Pipe.pipeSubscriber . relayPipe) >>= \subscriber -> do
+      $ get (Pi.pipeSubscriber . relayPipe) >>= \subscriber -> do
 
-      subscriber' <- try $ exec (Sub.receive message) subscriber
+      subscriber' <- try $ exec (Su.receive message) subscriber
 
-      let revision = L.get (Sub.forestRevision . Sub.subscriberPublished)
+      let revision = Su.getForestRevision . Su.getSubscriberPublished
 
       if revision subscriber' > revision subscriber then do
         return $ Just subscriber'
         else do
-        set (Pipe.pipeSubscriber . relayPipe) subscriber'
+        set (Pi.pipeSubscriber . relayPipe) subscriber'
 
         return Nothing
 
 nextMessages now = do
   publicKey <- get relayPublicKey
-  with relayPipe $ Pipe.nextMessages now case publicKey of
+  with relayPipe $ Pi.nextMessages now $ case publicKey of
     Nothing ->
-      ((:[]) . P.Challenge) <$> get relayChallenge
+      ((:[]) . Pr.Challenge) <$> get relayChallenge
 
     Just _ -> do
       published <-
-        P.Published <$> get
-        (Sub.forestName . Sub.subscriberPublished . Pipe.pipeSubscriber
+        Pr.Published <$> get
+        (Su.forestName . Su.subscriberPublished . Pi.pipeSubscriber
          . relayPipe)
 
       persisted <-
         -- todo: actually persist incoming revisions to durable
-        -- storage and send P.Persisted messages only once they are
+        -- storage and send Pr.Persisted messages only once they are
         -- safely stored
-        P.Persisted <$> get
-        (Sub.forestName . Sub.subscriberPublished . Pipe.pipeSubscriber
+        Pr.Persisted <$> get
+        -- yes, this should be Su.subscriberPublished, not
+        -- Su.subscriberPersisted:
+        (Su.forestName . Su.subscriberPublished . Pi.pipeSubscriber
          . relayPipe)
 
       return [published, persisted]

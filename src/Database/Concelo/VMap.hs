@@ -19,7 +19,8 @@ module Database.Concelo.VMap
   , index
   , union
   , Database.Concelo.VMap.subtract
-  , foldrDiff ) where
+  , foldrDiff
+  , diff ) where
 
 import qualified Data.Tree.RBTree as T
 import qualified Control.Lens as L
@@ -105,3 +106,8 @@ visitor visit a b =
 foldrDiff visit seed a b =
   T.foldrDiffVersioned cellVersionsEqual compare (visitor visit) seed
   (run a) (run b)
+
+diff version a b = foldrDiff visit (empty, empty) a b where
+  visit k a b (obsolete, new) =
+    (maybe obsolete (flip (insert version k) obsolete) a,
+     maybe new (flip (insert version k) new) b)

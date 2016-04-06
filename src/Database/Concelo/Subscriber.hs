@@ -10,12 +10,18 @@ module Database.Concelo.Subscriber
   , getTreeLeaves
   , getTreeACLTrie
   , getTreeACLFromTries
+  , getTreeOptional
   , Forest()
   , getForestChunks
   , getForestTreeMap
   , getForestTrees
   , getForestACL
   , getForestACLTrie
+  , forestName
+  , getSubscriberReceived
+  , getSubscriberPublished
+  , getSubscriberPersisted
+  , getSubscriberClean
   , subscriberPublished
   , getForestRevision
   , nextMessage ) where
@@ -236,7 +242,8 @@ data Tree = Tree { getTreeRevision :: Integer
                  , getTreeACL :: Pr.Name
                  , getTreeACLTrie :: T.Trie BS.ByteString BS.ByteString
                  , getTreeACLFromTries :: ACL.ACL
-                 , getTreeLeaves :: Pr.Name }
+                 , getTreeLeaves :: Pr.Name
+                 , getTreeOptional :: Bool }
 
 -- treeRevision :: L.Lens' Tree Integer
 -- treeRevision =
@@ -258,7 +265,8 @@ data Tree = Tree { getTreeRevision :: Integer
 -- treeLeaves =
 --   L.lens getTreeLeaves (\x v -> x { getTreeLeaves = v })
 
-emptyTree stream = Tree (-1) stream (Pa.leaf ()) T.empty ACL.empty (Pa.leaf ())
+emptyTree stream =
+  Tree (-1) stream (Pa.leaf ()) T.empty ACL.empty (Pa.leaf ()) False
 
 updateTrees :: T.Trie BS.ByteString BS.ByteString ->
                Forest ->
@@ -342,7 +350,8 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
           return $ M.insert stream
             (Tree revision stream acl aclTrie
              (ACL.fromTries aclTrie forestACLTrie)
-             $ if descend then leaves else (Pa.leaf ())) trees
+             (if descend then leaves else (Pa.leaf ()))
+             optional) trees
 
         _ -> patternFailure
 
@@ -354,7 +363,8 @@ data Forest =
          , getForestACL :: Pr.Name
          , getForestACLTrie :: T.Trie BS.ByteString BS.ByteString
          , getForestTrees :: Pr.Name
-         , getForestTreeMap :: M.Map BS.ByteString Tree }
+         , getForestTreeMap :: M.Map BS.ByteString Tree
+         , getForestName :: Pr.Name }
 
 -- forestRevision :: L.Lens' Forest Integer
 -- forestRevision =
@@ -383,8 +393,13 @@ forestChunks =
 -- forestTreeMap =
 --   L.lens getForestTreeMap (\x v -> x { getForestTreeMap = v })
 
+forestName :: L.Lens' Forest Pr.Name
+forestName =
+  L.lens getForestName (\x v -> x { getForestName = v })
+
 forest stream =
   Forest (-1) stream (-1) T.empty (Pa.leaf ()) T.empty (Pa.leaf ()) M.empty
+  (Pa.leaf ())
 
 updateForest name current = do
   received <- get subscriberReceived
@@ -442,7 +457,7 @@ updateForest name current = do
       chunks <- updateChunks (getForestChunks current) <$> get subscriberDiff
 
       return $ Forest revision subscribed adminRevision chunks acl aclTrie
-        trees treeMap
+        trees treeMap name
 
     _ -> patternFailure
 

@@ -2,6 +2,7 @@
 module Database.Concelo.Pipe
   ( Pipe
   , pipe
+  , fromSubscriber
   , pipePublisher
   , pipeSubscriber
   , nextMessages ) where
@@ -18,7 +19,9 @@ data Pipe = Pipe { getPipePublisher :: P.Publisher
                  , getPipePublisherSent :: Bool }
 
 pipe adminACL publicKey stream =
-  Pipe P.publisher (S.subscriber adminACL publicKey stream) 0 False
+  fromSubscriber $ S.subscriber adminACL publicKey stream
+
+fromSubscriber subscriber = Pipe P.publisher subscriber 0 False
 
 pipePublisher :: L.Lens' Pipe P.Publisher
 pipePublisher = L.lens getPipePublisher (\x v -> x { getPipePublisher = v })

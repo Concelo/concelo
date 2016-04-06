@@ -1,5 +1,6 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Database.Concelo.ACL
   ( ACL()
   , empty
@@ -16,11 +17,16 @@ module Database.Concelo.ACL
   , whiteListAll
   , permitNone
   , fromTries
+  , toTrie
   , isWriter
   , hash ) where
 
+import Database.Concelo.Control (eitherToAction)
+import Control.Monad (foldM)
+
 import qualified Database.Concelo.Set as S
 import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.Path as P
 import qualified Database.Concelo.Crypto as C
 import qualified Data.ByteString as BS
 import qualified Control.Lens as L
@@ -81,6 +87,28 @@ fromTries localTrie globalTrie =
 
     writeBlack = S.subtract writeWhite
                  $ T.foldrKeys S.insert S.empty $ T.sub writerKey globalTrie
+
+toTrie key acl = do
+  r <- readers
+  w <- writers
+
+  return $ T.union (T.super readerKey r) (T.super writerKey w)
+
+  where
+    visitReader readers reader = do
+      public <- eitherToAction $ C.toPublic reader
+      encrypted <- C.encryptAsymmetric public (C.fromSymmetric key)
+
+      return $ T.union (P.singleton reader encrypted) readers
+
+    readers =
+      foldM visitReader T.empty $ getListsWhiteList $ getACLReadLists acl
+
+    writers =
+      return
+      $ foldr (\w -> T.union (P.singleton w BS.empty)) T.empty
+      $ getListsWhiteList
+      $ getACLWriteLists acl
 
 empty =
   setHash $ ACL (Lists S.empty S.empty) (Lists S.empty S.empty) undefined

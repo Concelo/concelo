@@ -3,10 +3,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module Database.Concelo.SyncTree
   ( Serializer(serialize, encrypt)
+  , SyncTree()
   , empty
-  , update ) where
+  , chunkHeight
+  , chunkBody
+  , chunkName
+  , chunkMembers
+  , update
+  , root ) where
 
 import Database.Concelo.Control (get, patternFailure, with, updateM,
                                  set, bsShow, bsRead, maybeToAction,
@@ -19,55 +26,54 @@ import qualified Control.Monad.State as S
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Foldable as F
 import qualified Database.Concelo.Trie as T
-import qualified Database.Concelo.TrieLike as TL
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Path as Pa
 import qualified Database.Concelo.Crypto as Cr
 import qualified Database.Concelo.Control as Co
 
-class Serializer s where
-  serialize :: TL.TrieLike t =>
-               t BS.ByteString Pr.Value ->
-               Co.Action s [BS.ByteString]
+class Serializer a s where
+  serialize :: T.Trie BS.ByteString a ->
+               Co.Action (s a) [BS.ByteString]
 
   encrypt :: BS.ByteString ->
-             Co.Action s BS.ByteString
+             Co.Action (s a) BS.ByteString
 
 type Key = BS.ByteString
 
-data State s =
-  State { getStateTree :: SyncTree
+data State a s =
+  State { getStateTree :: SyncTree a
         , getStateSerializer :: s
-        , getStateObsolete :: T.Trie Key Chunk
-        , getStateNew :: T.Trie Key Chunk }
+        , getStateObsolete :: T.Trie Key (Chunk a)
+        , getStateNew :: T.Trie Key (Chunk a) }
 
 stateTree =
   L.lens getStateTree (\e v -> e { getStateTree = v })
 
-stateSerializer :: L.Lens' (State s) s
+stateSerializer :: L.Lens' (State a s) s
 stateSerializer =
   L.lens getStateSerializer (\e v -> e { getStateSerializer = v })
 
-stateObsolete :: L.Lens' (State s) (T.Trie Key Chunk)
+stateObsolete :: L.Lens' (State a s) (T.Trie Key (Chunk a))
 stateObsolete =
   L.lens getStateObsolete (\e v -> e { getStateObsolete = v })
 
-stateNew :: L.Lens' (State s) (T.Trie Key Chunk)
+stateNew :: L.Lens' (State a s) (T.Trie Key (Chunk a))
 stateNew =
   L.lens getStateNew (\e v -> e { getStateNew = v })
 
-data Chunk = Group { getGroupName :: Key
-                   , getGroupHeight :: Int
-                   , getGroupMembers :: T.Trie Key Chunk
-                   , getGroupBody :: BS.ByteString }
+data Chunk a = Group { getGroupName :: Key
+                     , getGroupHeight :: Int
+                     , getGroupMembers :: T.Trie Key (Chunk a)
+                     , getGroupBody :: BS.ByteString }
 
-             | Leaf { _getLeafSerialized :: BS.ByteString
-                    , getLeafPath :: Pa.Path Key Pr.Value }
+             | Leaf { getLeafSerialized :: BS.ByteString
+                    , getLeafPath :: Pa.Path Key a }
 
-data SyncTree = SyncTree { getTreeByReverseKeyMember :: T.Trie Key Chunk
-                         , getTreeByHeightVacancy :: T.Trie Key Chunk }
+data SyncTree a = SyncTree { getTreeByReverseKeyMember :: T.Trie Key (Chunk a)
+                           , getTreeByHeightVacancy :: T.Trie Key (Chunk a)
+                           , getTreeRoot :: Chunk a }
 
-treeByReverseKeyMember :: L.Lens' SyncTree (T.Trie Key Chunk)
+treeByReverseKeyMember :: L.Lens' (SyncTree a) (T.Trie Key (Chunk a))
 treeByReverseKeyMember =
   L.lens getTreeByReverseKeyMember
   (\t v -> t { getTreeByReverseKeyMember = v })
@@ -75,11 +81,27 @@ treeByReverseKeyMember =
 treeByHeightVacancy =
   L.lens getTreeByHeightVacancy (\t v -> t { getTreeByHeightVacancy = v })
 
+treeRoot = L.lens getTreeRoot (\t v -> t { getTreeRoot = v })
+
 leafKey = "l"
 
 groupKey = "g"
 
-empty = SyncTree T.empty T.empty
+empty = SyncTree T.empty T.empty undefined
+
+root = (const () <$>) . byHeightVacancy . getTreeRoot
+
+chunkHeight = \case
+  Leaf {} -> 1
+  Group { getGroupHeight = h } -> h
+
+chunkBody = \case
+  Leaf { getLeafSerialized = s } -> s
+  Group { getGroupBody = b } -> b
+
+chunkName = getGroupName
+
+chunkMembers = getGroupMembers
 
 findObsolete chunk =
   let path = byKey chunk in
@@ -103,30 +125,24 @@ findObsoleteGroups = do
   obsolete <- get stateObsolete
   Co.update stateNew (T.subtract obsolete)
 
-groupTrie (Leaf _ _) _ = T.empty
-groupTrie _ trie = trie
-
 getGroupVacancy group = Pr.leafSize - BS.length (getGroupBody group)
 
 byKey chunk@(Leaf _ path) = Pa.super leafKey $ fmap (const chunk) path
 byKey chunk@(Group name _ _ _) = Pa.super groupKey $ Pa.singleton name chunk
 
 byReverseKeyMember chunk =
-  groupTrie chunk $ T.index byKey $ getGroupMembers chunk
+  T.index byKey $ getGroupMembers chunk
 
 byHeightVacancy chunk =
-  groupTrie chunk
-  $ T.super (bsShow (getGroupHeight chunk))
+  Pa.super (bsShow (getGroupHeight chunk))
   $ byVacancy chunk
 
 byVacancy chunk =
-  groupTrie chunk
-  $ T.super (bsShow $ getGroupVacancy chunk)
-  $ T.singleton (getGroupName chunk) chunk
+  Pa.super (bsShow $ getGroupVacancy chunk)
+  $ Pa.singleton (getGroupName chunk) chunk
 
 byName chunk =
-  groupTrie chunk
-  $ T.singleton (getGroupName chunk) chunk
+  Pa.singleton (getGroupName chunk) chunk
 
 byLeafPath chunk = const chunk <$> getLeafPath chunk
 
@@ -142,7 +158,7 @@ combineVacant new old =
         Just combination ->
           return (T.union (byVacancy combination)
                   $ T.subtract (byVacancy newFirst) new,
-                  byVacancy oldFirst)
+                  toTrie $ byVacancy oldFirst)
 
         Nothing -> return (new, T.empty)
 
@@ -231,7 +247,9 @@ addNewGroupsForHeight height =
       Co.update stateObsolete (T.union $ T.super above obsoleteGroups')
       Co.update stateNew (T.union $ T.super above newGroups')
       else
-      return ()
+      maybeToAction (Co.Exception "no root group found") (T.firstValue new)
+      >>= set (stateTree . treeRoot)
+
   where
 
     above = bsShow ((bsRead height :: Int) + 1)
@@ -243,7 +261,7 @@ addNewGroupsForHeight height =
 
       case T.firstValue groups of
         Nothing ->
-          return $ byHeightVacancy orphanGroup
+          return $ toTrie $ byHeightVacancy orphanGroup
 
         Just group ->
           (makeGroup $ T.union orphan $ getGroupMembers group) >>= \case
@@ -268,8 +286,10 @@ updateTree = do
   updateM (stateTree . treeByReverseKeyMember) (updateIndex byReverseKeyMember)
   updateM (stateTree . treeByHeightVacancy) (updateIndex byHeightVacancy)
 
+toTrie = flip T.union T.empty
+
 split path =
-  snd . foldr visit (0 :: Int, T.empty) <$> serialize' path where
+  snd . foldr visit (0 :: Int, T.empty) <$> serialize' (toTrie path) where
     visit string (count, trie) =
       (count + 1, T.union (const (Leaf string path') <$> path') trie) where
         path' = Pa.super (bsShow count) path
