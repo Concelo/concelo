@@ -1,7 +1,13 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 module Database.Concelo.Deserializer
-  ( deserialize ) where
+  ( Deserializer()
+  , desSanitized
+  , getDesSanitized
+  , getDesPermitNone
+  , getDesRules
+  , deserializer
+  , deserialize ) where
 
 import Database.Concelo.Control (get, patternFailure, with)
 import Data.Maybe (fromMaybe)
@@ -13,10 +19,12 @@ import qualified Data.ByteString as BS
 import qualified Control.Lens as L
 import qualified Control.Monad.State as St
 import qualified Database.Concelo.Map as M
+import qualified Database.Concelo.VMap as VM
 import qualified Database.Concelo.Path as Pa
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Rules as R
 import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.VTrie as VT
 import qualified Database.Concelo.BiTrie as BT
 import qualified Database.Concelo.Subscriber as Su
 import qualified Database.Concelo.Chunks as Ch
@@ -30,7 +38,7 @@ data Deserializer =
                , getDesUnsanitized :: T.Trie BS.ByteString UnsanitizedElement
                , getDesRules :: R.Rules
                , getDesDependencies :: BT.BiTrie BS.ByteString
-               , getDesSanitized :: T.Trie BS.ByteString Pr.Value
+               , getDesSanitized :: VT.VTrie BS.ByteString Pr.Value
                , getDesPRNG :: Cr.PRNG }
 
 desPrivateKey =
@@ -57,6 +65,10 @@ desSanitized =
 desPRNG :: L.Lens' Deserializer Cr.PRNG
 desPRNG =
   L.lens getDesPRNG (\x v -> x { getDesPRNG = v })
+
+deserializer private permitAdmins =
+  Deserializer private permitAdmins (ACL.fromBlackTrie T.empty) T.empty R.empty
+  BT.empty VT.empty undefined
 
 maybeHead = \case
   x:_ -> Just x
@@ -93,7 +105,7 @@ visitDirty revision acl rules result =
           firstValid values =
           let value = maybeHead values
 
-              root = R.rootVisitor $ updateTrie path' value sanitized
+              root = R.rootVisitor $ updateTrie path' value $ T.trie sanitized
 
               visitor = foldr R.visitorChild root $ Pa.keys path'
 
@@ -126,8 +138,8 @@ visitDirty revision acl rules result =
                   T.foldrKeys visit'
                   (remainingDirty',
                    case firstValid of
-                     Nothing -> T.subtract path sanitized
-                     Just v -> T.union (const v <$> path) sanitized,
+                     Nothing -> VT.subtract revision path sanitized
+                     Just v -> VT.union revision (const v <$> path) sanitized,
                    dependencies')
                   dirty' in
 
@@ -245,7 +257,7 @@ updateUnsanitizedDiff oldForest newForest result (stream, newTree) = do
 
   let oldTree =
         fromMaybe (Su.emptyTree stream)
-        $ M.lookup stream
+        $ VM.lookup stream
         $ Su.getForestTreeMap oldForest
 
       maybeKey =
@@ -282,7 +294,7 @@ deserialize old new = do
 
   unsanitizedDiff@(obsoleteUnsanitized, newUnsanitized) <-
     foldM (updateUnsanitizedDiff old new) (T.empty, T.empty)
-    (M.pairs $ Su.getForestTreeMap new)
+    (VM.pairs $ Su.getForestTreeMap new)
 
   unsanitized <- updateUnsanitized unsanitizedDiff <$> get desUnsanitized
 
@@ -290,7 +302,7 @@ deserialize old new = do
     if Su.getForestACL old == Su.getForestACL new then
       get desPermitNone
     else
-      return $ ACL.permitNone $ Su.getForestACLTrie new
+      return $ ACL.fromBlackTrie $ Su.getForestACLTrie new
 
   let des = Deserializer privateKey permitAdmins permitNone unsanitized
 
@@ -312,20 +324,21 @@ deserialize old new = do
           updateSanitized
           0
           permitAdmins
-          (T.sub Pr.rulesKey oldSanitized)
+          (VT.sub Pr.rulesKey oldSanitized)
           (T.sub Pr.rulesKey unsanitized)
-          R.emptyRules
+          R.empty
           BT.empty
           ((T.sub Pr.rulesKey obsoleteUnsanitized),
            (T.sub Pr.rulesKey newUnsanitized))
 
-    rules <- R.parse (fromMaybe BS.empty . Pr.valueString <$> sanitizedRules)
+    rules <- R.parse (fromMaybe BS.empty . Pr.valueString
+                      <$> T.trie sanitizedRules)
 
     let (sanitized, dependencies) =
           updateSanitized
           (Su.getForestRevision new)
           permitNone
-          T.empty
+          VT.empty
           unsanitized
           rules
           BT.empty

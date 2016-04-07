@@ -24,17 +24,20 @@ module Database.Concelo.Subscriber
   , getSubscriberClean
   , subscriberPublished
   , getForestRevision
+  , forestRevision
   , nextMessage ) where
 
 import Database.Concelo.Control (patternFailure, badForest, missingChunks,
-                                 set, get, update, updateM)
+                                 set, get, update, updateM, getThenUpdate)
 import Control.Monad (foldM, when)
 import Data.Maybe (fromMaybe)
 
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.VTrie as VT
 import qualified Database.Concelo.TrieLike as TL
 import qualified Database.Concelo.Map as M
+import qualified Database.Concelo.VMap as VM
 import qualified Database.Concelo.Set as Se
 import qualified Database.Concelo.BiTrie as BT
 import qualified Database.Concelo.Path as Pa
@@ -61,9 +64,9 @@ incompletePublished =
 
 data Subscriber =
   Subscriber { getSubscriberIncomplete :: Incomplete
-             , getSubscriberReceived :: T.Trie BS.ByteString Pr.Message
+             , getSubscriberReceived :: VT.VTrie BS.ByteString Pr.Message
              , getSubscriberMissing :: BT.BiTrie BS.ByteString
-             , getSubscriberAdminACL :: Pr.Names
+             , getSubscriberAdminTrie :: Pr.Names
              , getSubscriberPublicKey :: Maybe Cr.PublicKey
              , getSubscriberStream :: BS.ByteString
              , getSubscriberPersisted :: Forest
@@ -71,13 +74,14 @@ data Subscriber =
              , getSubscriberClean :: Subscriber
              , getSubscriberRequestedTrees :: Se.Set BS.ByteString
              , getSubscriberDiff :: (T.Trie BS.ByteString Pr.Message,
-                                     T.Trie BS.ByteString Pr.Message) }
+                                     T.Trie BS.ByteString Pr.Message)
+             , getSubscriberVersion :: Integer }
 
 subscriberIncomplete :: L.Lens' Subscriber Incomplete
 subscriberIncomplete =
   L.lens getSubscriberIncomplete (\x v -> x { getSubscriberIncomplete = v })
 
-subscriberReceived :: L.Lens' Subscriber (T.Trie BS.ByteString Pr.Message)
+subscriberReceived :: L.Lens' Subscriber (VT.VTrie BS.ByteString Pr.Message)
 subscriberReceived =
   L.lens getSubscriberReceived (\x v -> x { getSubscriberReceived = v })
 
@@ -85,8 +89,8 @@ subscriberMissing :: L.Lens' Subscriber (BT.BiTrie BS.ByteString)
 subscriberMissing =
   L.lens getSubscriberMissing (\x v -> x { getSubscriberMissing = v })
 
-subscriberAdminACL =
-  L.lens getSubscriberAdminACL (\x v -> x { getSubscriberAdminACL = v })
+subscriberAdminTrie =
+  L.lens getSubscriberAdminTrie (\x v -> x { getSubscriberAdminTrie = v })
 
 subscriberPublicKey =
   L.lens getSubscriberPublicKey (\x v -> x { getSubscriberPublicKey = v })
@@ -114,11 +118,15 @@ subscriberDiff :: L.Lens' Subscriber (T.Trie BS.ByteString Pr.Message,
 subscriberDiff =
   L.lens getSubscriberDiff (\x v -> x { getSubscriberDiff = v })
 
-subscriber adminACL publicKey stream = s
+subscriberVersion :: L.Lens' Subscriber Integer
+subscriberVersion =
+  L.lens getSubscriberVersion (\x v -> x { getSubscriberVersion = v })
+
+subscriber adminTrie publicKey stream = s
   where
     f = forest stream
-    s = Subscriber (Incomplete T.empty T.empty) T.empty BT.empty adminACL
-        publicKey stream f f s Se.empty (T.empty, T.empty)
+    s = Subscriber (Incomplete T.empty T.empty) VT.empty BT.empty adminTrie
+        publicKey stream f f s Se.empty (T.empty, T.empty) 0
 
 receive = \case
   leaf@(Pr.Leaf { Pr.getLeafName = name }) ->
@@ -161,7 +169,7 @@ addMissing :: TL.TrieLike t =>
 addMissing group members = do
   received <- get subscriberReceived
 
-  let visit member missing = case T.findValue member received of
+  let visit member missing = case VT.findValue member received of
         Nothing -> addMissingToGroups member group missing
 
         Just (Pr.Group { Pr.getGroupMembers = members }) ->
@@ -219,7 +227,7 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
         Pr.Leaf { Pr.getLeafSigned = signed
                , Pr.getLeafBody = body } -> do
 
-          get subscriberAdminACL >>= verify signed
+          get subscriberAdminTrie >>= verify signed
 
           case Pr.parseTrie body of
             -- todo: handle defragmentation (or assert that no valid forest will contain a fragmented ACL)
@@ -272,7 +280,7 @@ updateTrees :: T.Trie BS.ByteString BS.ByteString ->
                Forest ->
                (T.Trie BS.ByteString Pr.Message,
                 T.Trie BS.ByteString Pr.Message) ->
-               Co.Action Subscriber (M.Map BS.ByteString Tree)
+               Co.Action Subscriber (VM.VMap BS.ByteString Tree)
 updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
   do
     subset <- foldM remove currentTrees obsoleteTrees
@@ -282,14 +290,17 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
 
     newByStream = M.index Pr.getTreeStream newTrees
 
-    remove :: M.Map BS.ByteString Tree ->
+    remove :: VM.VMap BS.ByteString Tree ->
               Pr.Message ->
-              Co.Action Subscriber (M.Map BS.ByteString Tree)
+              Co.Action Subscriber (VM.VMap BS.ByteString Tree)
     remove trees tree =
       case tree of
         Pr.Tree { Pr.getTreeStream = stream } -> do
           when (not $ M.member stream newByStream) badForest
-          return $ M.delete stream trees
+
+          version <- get subscriberVersion
+
+          return $ VM.delete version stream trees
 
         _ -> patternFailure
 
@@ -304,17 +315,17 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
                 , Pr.getTreeOptional = optional
                 , Pr.getTreeLeaves = leaves } -> do
 
-          let old = M.lookup stream currentTrees
+          let old = VM.lookup stream currentTrees
               oldACL = maybe acl getTreeACL old
               currentTree = fromMaybe (emptyTree stream) old
 
           when (revision < getTreeRevision currentTree
-                || M.member stream trees
+                || VM.member stream trees
                 || acl /= oldACL
                 || forestStream /= getForestStream currentForest)
             badForest
 
-          received <- get subscriberReceived
+          received <- T.trie <$> get subscriberReceived
 
           -- kind of silly to do a diff, since the current trie will
           -- only either be empty or unchanged, but it does the job:
@@ -347,7 +358,9 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
               (getTreeLeaves currentTree) received leaves
               >>= verifyLeafDiff aclTrie
 
-          return $ M.insert stream
+          version <- get subscriberVersion
+
+          return $ VM.insert version stream
             (Tree revision stream acl aclTrie
              (ACL.fromTries aclTrie forestACLTrie)
              (if descend then leaves else (Pa.leaf ()))
@@ -363,12 +376,12 @@ data Forest =
          , getForestACL :: Pr.Name
          , getForestACLTrie :: T.Trie BS.ByteString BS.ByteString
          , getForestTrees :: Pr.Name
-         , getForestTreeMap :: M.Map BS.ByteString Tree
+         , getForestTreeMap :: VM.VMap BS.ByteString Tree
          , getForestName :: Pr.Name }
 
--- forestRevision :: L.Lens' Forest Integer
--- forestRevision =
---   L.lens getForestRevision (\x v -> x { getForestRevision = v })
+forestRevision :: L.Lens' Forest Integer
+forestRevision =
+  L.lens getForestRevision (\x v -> x { getForestRevision = v })
 
 -- forestAdminRevision :: L.Lens' Forest Integer
 -- forestAdminRevision =
@@ -398,11 +411,11 @@ forestName =
   L.lens getForestName (\x v -> x { getForestName = v })
 
 forest stream =
-  Forest (-1) stream (-1) T.empty (Pa.leaf ()) T.empty (Pa.leaf ()) M.empty
+  Forest (-1) stream (-1) T.empty (Pa.leaf ()) T.empty (Pa.leaf ()) VM.empty
   (Pa.leaf ())
 
 updateForest name current = do
-  received <- get subscriberReceived
+  received <- T.trie <$> get subscriberReceived
   published <- get subscriberPublished
   persisted <- get subscriberPersisted
 
@@ -415,9 +428,7 @@ updateForest name current = do
                     , Pr.getForestACL = acl
                     , Pr.getForestTrees = trees }) -> do
 
-      adminACL <- get subscriberAdminACL
-
-      verify adminSigned adminACL
+      get subscriberAdminTrie >>= verify adminSigned
 
       subscribed <- get subscriberStream
 
@@ -464,8 +475,11 @@ updateForest name current = do
 updateChunks chunks (obsoleteChunks, newChunks) =
   T.union newChunks $ T.subtract obsoleteChunks chunks
 
-updateSubscriber diff subscriber =
-  L.over subscriberReceived (flip updateChunks diff) subscriber
+updateChunksV version (obsoleteChunks, newChunks) =
+  VT.union version newChunks . VT.subtract version obsoleteChunks
+
+updateSubscriber version diff subscriber =
+  L.over subscriberReceived (updateChunksV version diff) subscriber
 
 filterDiff :: (T.Trie BS.ByteString Pr.Message, a) ->
               Co.Action Subscriber (T.Trie BS.ByteString Pr.Message, a)
@@ -494,7 +508,9 @@ checkForest lens name =
 
      diff <- get subscriberDiff >>= filterDiff
 
-     update subscriberClean $ updateSubscriber diff
+     version <- getThenUpdate subscriberVersion (+ 1)
+
+     update subscriberClean $ updateSubscriber version diff
 
      resetSubscriber
 
@@ -522,7 +538,8 @@ receiveChunk :: TL.TrieLike t =>
                 t BS.ByteString () ->
                 Co.Action Subscriber ()
 receiveChunk chunk name members = do
-  update subscriberReceived $ T.union (const chunk <$> name)
+  version <- get subscriberVersion
+  update subscriberReceived $ VT.union version (const chunk <$> name)
   addMissing name members
   updateMissing name
   checkIncomplete

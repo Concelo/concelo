@@ -83,12 +83,12 @@ toSymmetric = SymmetricKey
 
 newSymmetric = toSymmetric <$> randomBytes symmetricKeySize
 
+-- todo: use standard serialization formats for public and private keys
+
 decryptPrivate password privateKey =
   decryptSymmetric
   (SymmetricKey $ deriveKey symmetricKeySize password privateKey) privateKey
   >>= C.eitherToAction . toPrivate
-
--- todo: use standard serialization formats for public and private keys
 
 fromPrivate (PrivateKey key) =
   BS.concat [fromPublic $ PublicKey $ RSAT.private_pub key,

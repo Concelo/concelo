@@ -15,7 +15,8 @@ module Database.Concelo.ACL
   , Lists()
   , whiteList
   , whiteListAll
-  , permitNone
+  , fromBlackTrie
+  , fromWhiteTrie
   , fromTries
   , toTrie
   , isWriter
@@ -68,25 +69,23 @@ readerKey = "r"
 
 writerKey = "w"
 
-permitNone trie =
-  setHash $ ACL
-  (Lists (T.foldrKeys S.insert S.empty $ T.sub readerKey trie) S.empty)
-  (Lists (T.foldrKeys S.insert S.empty $ T.sub writerKey trie) S.empty)
-  undefined
+fromBlackTrie blackTrie = fromTries T.empty blackTrie
 
-fromTries localTrie globalTrie =
+fromWhiteTrie whiteTrie = fromTries whiteTrie T.empty
+
+fromTries whiteTrie allTrie =
   setHash
   $ ACL (Lists readBlack readWhite) (Lists writeBlack writeWhite) undefined
   where
-    readWhite = T.foldrKeys S.insert S.empty $ T.sub readerKey localTrie
+    readWhite = T.foldrKeys S.insert S.empty $ T.sub readerKey whiteTrie
 
     readBlack = S.subtract readWhite
-                $ T.foldrKeys S.insert S.empty $ T.sub readerKey globalTrie
+                $ T.foldrKeys S.insert S.empty $ T.sub readerKey allTrie
 
-    writeWhite = T.foldrKeys S.insert S.empty $ T.sub writerKey localTrie
+    writeWhite = T.foldrKeys S.insert S.empty $ T.sub writerKey whiteTrie
 
     writeBlack = S.subtract writeWhite
-                 $ T.foldrKeys S.insert S.empty $ T.sub writerKey globalTrie
+                 $ T.foldrKeys S.insert S.empty $ T.sub writerKey allTrie
 
 toTrie key acl = do
   r <- readers

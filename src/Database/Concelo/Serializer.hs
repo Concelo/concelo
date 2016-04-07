@@ -3,7 +3,8 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 module Database.Concelo.Serializer
-  ( serializer
+  ( Serializer()
+  , serializer
   , serialize ) where
 
 import Database.Concelo.Control (exception, get, set, with, patternFailure,
@@ -85,8 +86,8 @@ syncStatePRNG :: L.Lens' (SyncState a) Cr.PRNG
 syncStatePRNG =
   L.lens getSyncStatePRNG (\x v -> x { getSyncStatePRNG = v })
 
-serializer private prng stream =
-  Serializer private prng M.empty (Forest stream ST.empty undefined)
+serializer private stream =
+  Serializer private undefined M.empty (Forest stream ST.empty undefined)
   (T.empty, T.empty)
 
 split maxSize s =

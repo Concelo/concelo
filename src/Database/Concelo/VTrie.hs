@@ -2,7 +2,6 @@
 {-# LANGUAGE LambdaCase #-}
 module Database.Concelo.VTrie
   ( VTrie()
-  , vtrie
   , isEmpty
   , empty
   , isLeaf
@@ -73,8 +72,6 @@ instance TL.TrieLike VTrie where
   member = member'
   foldrPairs = foldrPairs'
   foldrPaths = foldrPaths'
-
-vtrie = VTrie
 
 isEmpty (VTrie v m) = isNothing v && null m
 
@@ -160,8 +157,8 @@ single version key trie
   | isEmpty trie = V.empty
   | otherwise = V.singleton version key trie
 
-superValue version value key =
-  VTrie (Just (Versioned version value)) . single version key
+superValue version maybeValue key =
+  VTrie (Versioned version <$> maybeValue) . single version key
 
 super version key = VTrie Nothing . single version key
 
@@ -246,6 +243,12 @@ diff version (VTrie aV aM) (VTrie bV bM) =
 
 data MergePref = LeftPref | RightPref deriving (Eq)
 
+mergeL :: Ord k =>
+          Integer ->
+          VTrie k v ->
+          VTrie k v ->
+          VTrie k v ->
+          VTrie k v
 mergeL = merge LeftPref
 
 mergeR = merge RightPref

@@ -3,6 +3,7 @@ module Database.Concelo.Pipe
   ( Pipe
   , pipe
   , fromSubscriber
+  , getPipeSubscriber
   , pipePublisher
   , pipeSubscriber
   , nextMessages ) where
@@ -18,8 +19,8 @@ data Pipe = Pipe { getPipePublisher :: P.Publisher
                  , getPipeLastPing :: Integer
                  , getPipePublisherSent :: Bool }
 
-pipe adminACL publicKey stream =
-  fromSubscriber $ S.subscriber adminACL publicKey stream
+pipe adminTrie publicKey stream =
+  fromSubscriber $ S.subscriber adminTrie publicKey stream
 
 fromSubscriber subscriber = Pipe P.publisher subscriber 0 False
 
@@ -46,12 +47,12 @@ nextMessages now ping = do
     Nothing -> do
       pubSent <- getThenSet pipePublisherSent False
       if pubSent then
-        ping
+        return ping
         else do
         last <- get pipeLastPing
         if now - last > pingInterval then do
           set pipeLastPing now
-          ping
+          return ping
           else
           return []
 

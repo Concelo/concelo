@@ -1,161 +1,183 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Database.Concelo.Ignis
-  ( ignis ) where
+  ( ignis
+  , update
+  , receive
+  , nextMessages ) where
 
 import qualified Control.Lens as L
 import qualified Data.ByteString as BS
 import qualified Database.Concelo.Crypto as C
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Pipe as Pi
-import qualified Database.Concelo.Serializer as S
+import qualified Database.Concelo.Serializer as Se
 import qualified Database.Concelo.Deserializer as D
+import qualified Database.Concelo.Subscriber as Su
+import qualified Database.Concelo.Publisher as Pu
 import qualified Database.Concelo.Path as Pa
 import qualified Database.Concelo.VTrie as VT
 import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.Map as M
+import qualified Database.Concelo.ACL as ACL
+import qualified Database.Concelo.Rules as R
+import qualified Database.Concelo.Control as Co
 
-import Database.Concelo.Control (get, set, getThenUpdate, with, bindMaybe,
-                                 bindMaybe2, exception)
+import Database.Concelo.Control (get, set, with, exception, run)
 
--- todo: use opaque data structures to represent keys and keypairs, so
--- the crypto library doesn't have to convert between ByteStrings and
--- its preferred model for every operation
-data Cred = Cred { getCredPrivate :: BS.ByteString
-                 , getCredPublic :: BS.ByteString
-                 , getCredRequest :: Int
-                 , getCredSent :: Bool }
+import Data.Maybe (fromMaybe)
+import Control.Monad (foldM)
 
-data Ignis = Ignis { getIgnisCred :: Maybe Cred
+data Ignis = Ignis { getIgnisPrivate :: C.PrivateKey
+                   , getIgnisSentChallengeResponse :: Bool
                    , getIgnisChallenge :: Maybe BS.ByteString
-                   , getIgnisNextRequest :: Int
                    , getIgnisHead :: VT.VTrie BS.ByteString Pr.Value
-                   , getIgnisDiff :: (T.Trie, T.Trie)
+                   , getIgnisDiff :: (T.Trie BS.ByteString Pr.Value,
+                                      T.Trie BS.ByteString Pr.Value)
                    , getIgnisPipe :: Pi.Pipe
-                   , getIgnisSerializer :: S.Serializer
+                   , getIgnisSerializer :: Se.Serializer
                    , getIgnisDeserializer :: D.Deserializer
                    , getIgnisPRNG :: C.PRNG }
 
-ignisCred =
-  L.lens getIgnisCred (\x v -> x { getIgnisCred = v })
+ignisPrivate =
+  L.lens getIgnisPrivate (\x v -> x { getIgnisPrivate = v })
 
+ignisSentChallengeResponse :: L.Lens' Ignis Bool
+ignisSentChallengeResponse =
+  L.lens getIgnisSentChallengeResponse
+  (\x v -> x { getIgnisSentChallengeResponse = v })
+
+ignisChallenge :: L.Lens' Ignis (Maybe BS.ByteString)
 ignisChallenge =
   L.lens getIgnisChallenge (\x v -> x { getIgnisChallenge = v })
 
-ignisNextRequest =
-  L.lens getIgnisNextRequest (\x v -> x { getIgnisNextRequest = v })
-
+ignisHead :: L.Lens' Ignis (VT.VTrie BS.ByteString Pr.Value)
 ignisHead =
   L.lens getIgnisHead (\x v -> x { getIgnisHead = v })
 
+ignisDiff :: L.Lens' Ignis (T.Trie BS.ByteString Pr.Value,
+                            T.Trie BS.ByteString Pr.Value)
 ignisDiff =
   L.lens getIgnisDiff (\x v -> x { getIgnisDiff = v })
 
+ignisPipe :: L.Lens' Ignis Pi.Pipe
 ignisPipe =
   L.lens getIgnisPipe (\x v -> x { getIgnisPipe = v })
 
+ignisSerializer :: L.Lens' Ignis Se.Serializer
 ignisSerializer =
   L.lens getIgnisSerializer (\x v -> x { getIgnisSerializer = v })
 
+ignisDeserializer :: L.Lens' Ignis D.Deserializer
 ignisDeserializer =
   L.lens getIgnisDeserializer (\x v -> x { getIgnisDeserializer = v })
 
+ignisPRNG :: L.Lens' Ignis C.PRNG
 ignisPRNG =
   L.lens getIgnisPRNG (\x v -> x { getIgnisPRNG = v })
 
-data Credentials = PrivateKey { getPKPrivateKey :: BS.ByteString
-                              , getPKPassword :: BS.ByteString }
+data Credentials = PrivateKey { _getPKPrivateKey :: BS.ByteString
+                              , _getPKPassword :: BS.ByteString }
 
-                 | EmailPassword { getEPEmail :: BS.ByteString
-                                 , getEPPassword :: BS.ByteString }
+                 | EmailPassword { _getEPEmail :: BS.ByteString
+                                 , _getEPPassword :: BS.ByteString }
 
-ignis seed = Ignis Nothing 1 (C.makePRNG seed)
+ignis admins credentials stream seed =
+  do
+    (private, prng') <- run (authenticate credentials) prng
+
+    return $ Ignis
+      private
+      False
+      Nothing
+      VT.empty
+      (T.empty, T.empty)
+      (Pi.pipe adminTrie (Just $ C.derivePublic private) stream)
+      (Se.serializer private stream)
+      (D.deserializer private permitAdmins)
+      prng'
+
+  where
+    prng = C.makePRNG seed
+
+    adminSubTrie = foldr (\a -> T.union (Pa.singleton a ())) T.empty admins
+
+    adminTrie = T.union (T.super ACL.readerKey adminSubTrie)
+                (T.super ACL.writerKey adminSubTrie)
+
+    permitAdmins = ACL.fromWhiteTrie adminTrie
 
 authenticate = \case
-  PrivateKey key password ->
-    authenticateWithPrivateKey $ C.decryptPrivate password key
+  PrivateKey key password -> C.decryptPrivate password key
 
-  EmailPassword email password ->
-    authenticateWithPrivateKey $ C.deriveKey password email
+  EmailPassword email password -> return $ C.derivePrivate password email
 
-authenticateWithPrivateKey private = do
-  request <- get ignisNextRequest
-
-  set ignisCred $ Just
-    $ Cred private (C.derivePublic private) Nothing request False
-
-  nextRequest
-
-nextRequest = getThenUpdate ignisNextRequest (+1)
-
-sign private challenge = with ignisPRNG $ C.sign private challenge
+sign private = with ignisPRNG . C.sign private
 
 maybeAuthenticate =
-  bindMaybe2 (get ignisCred) (get ignisChallenge) where
-    try cred challenge =
-      if getCredSent cred then
-        return $ Just []
-      else do
-        set ignisCred $ Just $ L.set credSent True cred
+  get ignisSentChallengeResponse >>= \case
+    False -> return $ Just []
+    True -> get ignisChallenge >>= \case
+      Nothing -> return Nothing
+      Just challenge -> do
+        private <- get ignisPrivate
 
-        sign (getCredPrivate cred) challenge
-          >>= Just
-          [P.Cred P.version (getCredRequest cred) (getCredPublic cred)]
+        set ignisSentChallengeResponse True
 
-getPublishedRevision =
-  Sub.getForestRevision
-  . Sub.getSubscriberPublished
-  . Pipe.getPipeSubscriber
-  . getIgnisPipe
+        Just
+          . (:[])
+          . (Pr.Cred Pr.version $ C.fromPublic $ C.derivePublic private)
+          <$> sign private challenge
 
-head = getIgnisHead
+getPublic = C.derivePublic <$> get ignisPrivate
 
-getPublic = bindMaybe getCredPublic $ get ignisCred
-
-unAuth = set ignisCred Nothing
-
-update now update atomicUpdate = do
-  head <- update <$> L.set revisionUpdateTime now <$> get ignisHead
+update update atomicUpdate = do
+  head <- update <$> get ignisHead
 
   makeDiff (atomicUpdate head) >>= set ignisDiff
 
   set ignisHead head
 
 receive = \case
-  P.Challenge { P.getChallengeProtocolVersion = v
-              , P.getChallengeBody = body } -> do
-    if v /= P.version then
-      exception "unexpected protocol version: " ++ show v
+  Pr.Challenge { Pr.getChallengeProtocolVersion = v
+               , Pr.getChallengeBody = body } -> do
+    if v /= Pr.version then
+      exception ("unexpected protocol version: " ++ show v)
       else do
       set ignisChallenge $ Just body
 
-      bindMaybe (set ignisCred . Just . L.set credSent False) (get ignisCred)
+      set ignisSentChallengeResponse False
 
       maybeAuthenticate
 
     return False
 
-  nack@(P.Nack {}) -> do
+  nack@(Pr.Nack {}) -> do
     updatePublisher
 
-    with (Pipe.pipePublisher . ignisPipe) $ Pub.receive (const True) nack
+    with (ignisPipe . Pi.pipePublisher) $ Pu.receive (const True) nack
 
     return False
 
   message -> do
-    let published = Sub.subscriberPublished . Pipe.pipeSubscriber . ignisPipe
+    let published = ignisPipe . Pi.pipeSubscriber . Su.subscriberPublished
 
     old <- get published
 
-    with (Pipe.pipeSubscriber . ignisPipe) $ Sub.receive message
+    with (ignisPipe . Pi.pipeSubscriber) $ Su.receive message
 
     new <- get published
 
-    if Sub.getForestRevision new /= Sub.getForestRevision old then do
-      oldTrie <- get (Des.deserializerTrie . ignisDeserializer)
+    if Su.getForestRevision new /= Su.getForestRevision old then do
+      oldTrie <- get (ignisDeserializer . D.desSanitized)
 
-      with ignisDeserializer $ Des.deserialize old new
+      with ignisDeserializer $ D.deserialize old new
 
-      newTrie <- get (Des.deserializerTrie . ignisDeserializer)
+      newTrie <- get (ignisDeserializer . D.desSanitized)
 
-      update ignisHead $ VT.mergeL P.localVersion oldTrie newTrie
+      head <- get ignisHead
+
+      set ignisHead $ VT.mergeL Pr.localVersion oldTrie newTrie head
 
       -- The following tells the caller that it should call "update"
       -- again (with the latest atomic updates, if any), which will
@@ -174,50 +196,63 @@ nextMessages now =
     Just [] -> do
       updatePublisher
 
-      with ignisPipe
-      $ Pipe.nextMessages now
-      ((:[]) . P.Published
-       <$> get (Pub.publisherPublished . Pipe.pipePublisher . ignisPipe))
+      ping <- (:[]) . Pr.Published
+       <$> get (ignisPipe . Pi.pipePublisher . Pu.publisherPublished)
+
+      with ignisPipe $ Pi.nextMessages now ping
 
     Just messages -> return messages
 
 updatePublisher = do
   diff <- get ignisDiff
 
-  serialized <- with ignisSerializer $ Ser.serialize diff
+  revision <- (+ 1) <$> get (ignisPipe . Pi.pipeSubscriber
+                             . Su.subscriberPublished . Su.forestRevision)
 
-  with (Pipe.pipePublisher . ignisPipe) $ Pub.update serialized
+  serialized <- with ignisSerializer $ Se.serialize revision diff
 
-whoAmI = fromMaybe $ error "I don't know who I am!"
+  with (ignisPipe . Pi.pipePublisher) $ Pu.update serialized
 
+makeDiff :: VT.VTrie BS.ByteString Pr.Value ->
+            Co.Action Ignis (T.Trie BS.ByteString Pr.Value,
+                             T.Trie BS.ByteString Pr.Value)
 makeDiff head = do
-  me <- (fmap credPublic <$> get ignisCred) >>= whoAmI
+  me <- getPublic
 
-  base <- get (Des.deserializerTrie . ignisDeserializer)
+  deserializer <- get ignisDeserializer
 
-  published <- get (Sub.subscriberPublished . Pipe.pipeSubscriber . ignisPipe)
+  published <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberPublished)
 
   validateDiff
     me
-    (Sub.getForestRevision published)
-    (Sub.getForestRules published)
-    (Sub.getForestPermitNone published)
+    (Su.getForestRevision published)
+    (D.getDesRules deserializer)
+    (D.getDesPermitNone deserializer)
     head
-    (VT.diff base head)
+    (T.diff (D.getDesSanitized deserializer) head)
 
+validateDiff :: C.PublicKey ->
+                Integer ->
+                R.Rules ->
+                ACL.ACL ->
+                VT.VTrie BS.ByteString Pr.Value ->
+                (T.Trie BS.ByteString Pr.Value,
+                 T.Trie BS.ByteString Pr.Value) ->
+                Co.Action Ignis (T.Trie BS.ByteString Pr.Value,
+                                 T.Trie BS.ByteString Pr.Value)
 validateDiff me revision rules acl head (obsolete, new) =
   foldM (validate rules acl env union obsolete new root) (T.empty, T.empty)
   $ T.triples union where
 
     union = T.union obsolete new
-    root = R.rootVisitor head
+    root = R.rootVisitor $ T.trie head
     env = M.empty
 
-    validate rules acl env union obsolete new visitor (k, v, sub)
-      (obsoleteResult, newResult) =
+    validate rules acl env union obsolete new visitor
+      (obsoleteResult, newResult) (k, v, _) =
       (case v of
           Nothing -> descend
-          Just value ->
+          Just _ ->
             if valid then
               if ACL.isWriter me acl' then
                 descend
@@ -228,7 +263,7 @@ validateDiff me revision rules acl head (obsolete, new) =
 
         (rules', wildcard) = R.subRules k rules
 
-        env' = if null wildcard then env else M.insert wildcard k env
+        env' = if BS.null wildcard then env else M.insert wildcard k env
 
         union' = T.sub k union
 
@@ -238,7 +273,7 @@ validateDiff me revision rules acl head (obsolete, new) =
 
         visitor' = R.visitorChild k visitor
 
-        context = R.Context T.empty revision env' root visitor' T.empty
+        context = R.context revision env' root visitor'
 
         (readACL, _) = R.getRulesRead rules' context acl
 
@@ -247,14 +282,18 @@ validateDiff me revision rules acl head (obsolete, new) =
         (valid, _) = fromMaybe (True, T.empty)
                      (const (R.getRulesValidate rules' context) <$> v)
 
-        (obsoleteSubs, newSubs)
-          = foldM (validate rules' acl' env' union' obsolete' new' visitor')
-            (T.empty, T.empty) $ T.triples union'
-
         obsoleteValue = T.value obsolete'
 
-        newValue = (L.set P.valueACL acl') <$> T.value new'
+        newValue = (L.set Pr.valueACL acl') <$> T.value new'
 
-        descend =
-          (T.union (T.superValue obsoleteValue k obsoleteSubs) obsoleteResult
-           T.union (T.superValue newValue k newSubs) newResult)
+        descend = do
+          (obsoleteSubs, newSubs) <-
+            foldM (validate rules' acl' env' union' obsolete' new' visitor')
+            (T.empty, T.empty) $ T.triples union'
+
+          return
+            (T.union (T.superValue obsoleteValue k obsoleteSubs)
+             obsoleteResult,
+
+             T.union (T.superValue newValue k newSubs)
+             newResult)

@@ -50,8 +50,6 @@ module Database.Concelo.Control
   , eitherToMaybe
   , maybeToAction
   , eitherToAction
-  , bindMaybe
-  , bindMaybe2
   , bsShow
   , bsRead ) where
 
@@ -126,18 +124,6 @@ with lens action =
     return result
 
 mapPair f (x, y) = (f x, f y)
-
-bindMaybe f x =
-  x >>= \case
-    Nothing -> return Nothing
-    Just x' -> f x'
-
-bindMaybe2 f x y =
-  x >>= \case
-    Nothing -> return Nothing
-    Just x' -> y >>= \case
-      Nothing -> return Nothing
-      Just y' -> f x' y'
 
 maybeM f x = case f x of
   Nothing -> patternFailure

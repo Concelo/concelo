@@ -11,7 +11,6 @@ module Database.Concelo.Protocol
   , getSignedSignature
   , getSignedText
   , getCredProtocolVersion
-  , getCredRequest
   , getCredPublic
   , getCredSignedChallenge
   , getChallengeProtocolVersion
@@ -103,7 +102,6 @@ data Signed = Signed { getSignedSigner :: Cr.PublicKey
                      , getSignedText :: BS.ByteString }
 
 data Message = Cred { getCredProtocolVersion :: Int
-                    , getCredRequest :: Integer
                     , getCredPublic :: BS.ByteString
                     , getCredSignedChallenge :: BS.ByteString }
 
@@ -453,4 +451,4 @@ parseValue' = do
   nullBody >>| numberBody >>| stringBody >>| booleanBody
   endOfStream ()
 
-version = 0 :: Integer
+version = 0 :: Int
