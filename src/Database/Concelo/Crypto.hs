@@ -22,6 +22,7 @@ module Database.Concelo.Crypto
   , PRNG()
   , makePRNG
   , randomBytes
+  , seedSize
   , sign
   , verify
   , hash ) where
@@ -45,7 +46,7 @@ import qualified Database.Concelo.Control as C
 
 newtype PRNG = PRNG R.ChaChaDRG
 
-newtype PrivateKey = PrivateKey { getPrivateKey :: RSAT.PrivateKey }
+newtype PrivateKey = PrivateKey { getPrivateKey :: RSAT.PrivateKey } deriving Show
 
 newtype PublicKey = PublicKey { _getPublicKey :: RSAT.PublicKey }
 
@@ -69,7 +70,7 @@ prf = PBKDF2.prfHMAC hashAlgorithm
 
 iterations = 4096
 
-asymmetricKeySize = 1920
+asymmetricKeySize = 512
 
 symmetricKeySize = 32
 
@@ -77,7 +78,7 @@ seedSize = 40
 
 defaultExponent = 65537
 
-makePRNG = PRNG . R.drgNewTest
+makePRNG = PRNG . R.drgNewTest . toSeed
 
 toSymmetric = SymmetricKey
 

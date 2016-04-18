@@ -38,7 +38,7 @@ module Database.Concelo.Trie
 import qualified Database.Concelo.VTrie as V
 import qualified Database.Concelo.TrieLike as TL
 
-newtype Trie k v = Trie { run :: V.VTrie k v }
+newtype Trie k v = Trie { run :: V.VTrie k v } deriving (Eq, Show)
 
 instance Ord k => Functor (Trie k) where
   fmap f = Trie . fmap f . run

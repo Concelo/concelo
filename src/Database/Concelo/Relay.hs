@@ -1,7 +1,9 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Database.Concelo.Relay
-  ( relay
+  ( Relay()
+  , relay
+  , getRelayChallenge
   , receive
   , nextMessages
   , setSubscriber ) where
@@ -21,9 +23,10 @@ import qualified Database.Concelo.Publisher as Pu
 import qualified Database.Concelo.Subscriber as Su
 import qualified Database.Concelo.Pipe as Pi
 import qualified Database.Concelo.Crypto as C
+import qualified Database.Concelo.ACL as ACL
 import qualified Control.Lens as L
 import qualified Control.Monad.State as St
-import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS
 
 data Relay =
   Relay { getRelayPipe :: Pi.Pipe
@@ -31,6 +34,9 @@ data Relay =
         , getRelayStreams :: Se.Set BS.ByteString
         , getRelayPublicKey :: Maybe C.PublicKey
         , getRelayChallenge :: BS.ByteString }
+
+instance Show Relay where
+  show relay = concat ["relay(", show $ getRelayChallenge relay, ")"]
 
 relayPipe :: L.Lens' Relay Pi.Pipe
 relayPipe =
@@ -51,8 +57,8 @@ relayPublicKey =
 relayChallenge =
   L.lens getRelayChallenge (\x v -> x { getRelayChallenge = v })
 
-relay adminACL stream challenge =
-  make (Pi.pipe adminACL Nothing stream) Nothing challenge
+relay admins stream challenge =
+  make (Pi.pipe (ACL.writerTrie admins) Nothing stream) Nothing challenge
 
 make pipe publicKey challenge =
   Relay pipe (Pi.getPipeSubscriber pipe) Se.empty publicKey challenge
@@ -176,7 +182,7 @@ receive = \case
 nextMessages now = do
   ping <- get relayPublicKey >>= \case
     Nothing ->
-      ((:[]) . Pr.Challenge Pr.version) <$> get relayChallenge
+      (:[]) . Pr.Challenge Pr.version <$> get relayChallenge
 
     Just _ -> do
       let lens = relayPipe . Pi.pipeSubscriber . Su.subscriberPublished
@@ -186,7 +192,8 @@ nextMessages now = do
 
       -- todo: actually persist incoming revisions to durable storage
       -- and send Pr.Persisted messages only once they are safely
-      -- stored
+      -- stored; until then, we just pretend the currently published
+      -- revision has been persisted
       persisted <- Pr.Persisted <$> get lens
 
       return [published, persisted]

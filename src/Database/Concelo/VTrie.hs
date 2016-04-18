@@ -55,6 +55,12 @@ versionedValue = L.lens getVersionedValue (\x v -> x { getVersionedValue = v })
 data VTrie k v = VTrie { getVTrieVersioned :: Maybe (Versioned v)
                        , getVTrieMap :: V.VMap k (VTrie k v) }
 
+instance (Show k, Show v) => Show (VTrie k v) where
+  show = show . paths
+
+instance (Eq k, Eq v) => Eq (VTrie k v) where
+  a == b = paths a == paths b
+
 instance Functor Versioned where
   fmap = L.over versionedValue
 

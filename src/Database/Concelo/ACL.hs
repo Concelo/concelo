@@ -19,6 +19,7 @@ module Database.Concelo.ACL
   , fromWhiteTrie
   , fromTries
   , toTrie
+  , writerTrie
   , isWriter
   , hash ) where
 
@@ -118,3 +119,7 @@ setHash acl = L.set aclHash (C.hash [readHash, writeHash]) acl where
   writeHash = hashWhite $ getACLWriteLists acl
 
 hash = getACLHash
+
+writerTrie writers =
+  T.union (T.super readerKey sub) (T.super writerKey sub) where
+    sub = foldr (\a -> T.union (P.singleton a ())) T.empty writers

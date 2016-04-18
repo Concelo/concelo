@@ -1,13 +1,10 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE RankNTypes #-}
+module Data.Tree.RBTests
+  ( runTests ) where
+
 import Data.Tree.RBTree
 import Test.QuickCheck
-import Test.QuickCheck.Test
-import Test.QuickCheck.Random
-import System.Exit
-import System.Random.TF
-import Control.Monad
-import Text.Printf
-import Debug.Trace
 
 type Version = Int
 type Value = Int
@@ -38,6 +35,7 @@ diffV = diffVersioned cellVersionsEqual compareCells
 
 diffN = diff compareCells
 
+runTests :: (forall t. Testable t => String -> t -> IO ()) -> IO ()
 runTests check = do
   check "black depth" $ \tree ->
     let _ = tree :: RBTree Cell in case vD tree of

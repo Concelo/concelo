@@ -12,7 +12,7 @@ module Database.Concelo.Path
   , append ) where
 
 data Path k v = Path { getPathKeys :: [k]
-                     , getPathValue :: v } deriving Eq
+                     , getPathValue :: v } deriving (Eq, Show)
 
 instance Functor (Path k) where
   fmap f (Path ks v) = Path ks (f v)

@@ -1,10 +1,14 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 module Database.Concelo.Ignis
-  ( ignis
+  ( Ignis()
+  , ignis
+  , Credentials(PrivateKey, EmailPassword)
   , update
   , receive
-  , nextMessages ) where
+  , nextMessages
+  , getHead
+  , getPublishedTrie ) where
 
 import qualified Control.Lens as L
 import qualified Data.ByteString as BS
@@ -15,7 +19,6 @@ import qualified Database.Concelo.Serializer as Se
 import qualified Database.Concelo.Deserializer as D
 import qualified Database.Concelo.Subscriber as Su
 import qualified Database.Concelo.Publisher as Pu
-import qualified Database.Concelo.Path as Pa
 import qualified Database.Concelo.VTrie as VT
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Map as M
@@ -38,6 +41,9 @@ data Ignis = Ignis { getIgnisPrivate :: C.PrivateKey
                    , getIgnisSerializer :: Se.Serializer
                    , getIgnisDeserializer :: D.Deserializer
                    , getIgnisPRNG :: C.PRNG }
+
+instance Show Ignis where
+  show relay = concat ["ignis(", show $ getIgnisChallenge relay, ")"]
 
 ignisPrivate =
   L.lens getIgnisPrivate (\x v -> x { getIgnisPrivate = v })
@@ -100,12 +106,11 @@ ignis admins credentials stream seed =
   where
     prng = C.makePRNG seed
 
-    adminSubTrie = foldr (\a -> T.union (Pa.singleton a ())) T.empty admins
-
-    adminTrie = T.union (T.super ACL.readerKey adminSubTrie)
-                (T.super ACL.writerKey adminSubTrie)
+    adminTrie = ACL.writerTrie admins
 
     permitAdmins = ACL.fromWhiteTrie adminTrie
+
+getHead = getIgnisHead
 
 authenticate = \case
   PrivateKey key password -> C.decryptPrivate password key
@@ -116,8 +121,8 @@ sign private = with ignisPRNG . C.sign private
 
 maybeAuthenticate =
   get ignisSentChallengeResponse >>= \case
-    False -> return $ Just []
-    True -> get ignisChallenge >>= \case
+    True -> return $ Just []
+    False -> get ignisChallenge >>= \case
       Nothing -> return Nothing
       Just challenge -> do
         private <- get ignisPrivate
@@ -128,6 +133,8 @@ maybeAuthenticate =
           . (:[])
           . (Pr.Cred Pr.version $ C.fromPublic $ C.derivePublic private)
           <$> sign private challenge
+
+getPublishedTrie = D.getDesSanitized . getIgnisDeserializer
 
 getPublic = C.derivePublic <$> get ignisPrivate
 
@@ -160,13 +167,11 @@ receive = \case
     return False
 
   message -> do
-    let published = ignisPipe . Pi.pipeSubscriber . Su.subscriberPublished
-
-    old <- get published
+    old <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberPublished)
 
     with (ignisPipe . Pi.pipeSubscriber) $ Su.receive message
 
-    new <- get published
+    new <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberPublished)
 
     if Su.getForestRevision new /= Su.getForestRevision old then do
       oldTrie <- get (ignisDeserializer . D.desSanitized)

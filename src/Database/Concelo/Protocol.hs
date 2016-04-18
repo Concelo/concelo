@@ -55,6 +55,8 @@ module Database.Concelo.Protocol
   , forestTreeLevel
   , forestACLLevel
   , forestLevel
+  , defaultPriority
+  , ValueBody(NullBody, NumberBody, StringBody, BooleanBody)
   , Value()
   , getValueSigner
   , getValuePriority
@@ -145,6 +147,19 @@ data Message = Cred { getCredProtocolVersion :: Int
                       , getForestTrees :: Name }
 
              | NoMessage
+
+instance Show Message where
+  show = \case
+    Cred {} -> "Cred"
+    Challenge {} -> "Challenge"
+    Published {} -> "Published"
+    Persisted {} -> "Persisted"
+    Nack {} -> "Nack"
+    Leaf {} -> "Leaf"
+    Group {} -> "Group"
+    Tree {} -> "Tree"
+    Forest {} -> "Forest"
+    NoMessage {} -> "NoMessage"
 
 aclWriterKey = ACL.writerKey
 
@@ -362,11 +377,18 @@ data ValueBody = NullBody
                | NumberBody Double
                | StringBody BS.ByteString
                | BooleanBody Bool
+               deriving (Eq, Show)
 
 data Value = Value { getValueSigner :: Cr.PublicKey
                    , getValuePriority :: Int
                    , getValueACL :: ACL.ACL
                    , getValueBody :: ValueBody }
+
+instance Show Value where
+  show value = concat ["value(", show $ getValueBody value, ")"]
+
+instance Eq Value where
+  a == b = getValueBody a == getValueBody b
 
 valueSigner :: L.Lens' Value Cr.PublicKey
 valueSigner =

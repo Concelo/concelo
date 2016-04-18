@@ -97,7 +97,7 @@ update lens update = S.state $ \s -> ((), L.over lens update s)
 updateM :: S.MonadState s m => L.Lens' s a -> (a -> m a) -> m ()
 updateM lens action = get lens >>= action >>= set lens
 
-overM :: S.MonadState s m => L.Lens' s a -> (a -> m a) -> s -> m s
+overM :: Monad m => L.Lens' s a -> (a -> m a) -> s -> m s
 overM lens action object =
   flip (L.set lens) object <$> action (L.view lens object)
 
