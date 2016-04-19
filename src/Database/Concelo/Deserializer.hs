@@ -4,7 +4,7 @@ module Database.Concelo.Deserializer
   ( Deserializer()
   , desSanitized
   , getDesSanitized
-  , getDesPermitNone
+  , getDesDefaultACL
   , getDesRules
   , deserializer
   , deserialize ) where
@@ -34,7 +34,7 @@ import qualified Database.Concelo.ACL as ACL
 data Deserializer =
   Deserializer { getDesPrivateKey :: Cr.PrivateKey
                , getDesPermitAdmins :: ACL.ACL
-               , getDesPermitNone :: ACL.ACL
+               , getDesDefaultACL :: ACL.ACL
                , getDesUnsanitized :: T.Trie BS.ByteString UnsanitizedElement
                , getDesRules :: R.Rules
                , getDesDependencies :: BT.BiTrie BS.ByteString
@@ -47,8 +47,8 @@ desPrivateKey =
 desPermitAdmins =
   L.lens getDesPermitAdmins (\x v -> x { getDesPermitAdmins = v })
 
-desPermitNone =
-  L.lens getDesPermitNone (\x v -> x { getDesPermitNone = v })
+desDefaultACL =
+  L.lens getDesDefaultACL (\x v -> x { getDesDefaultACL = v })
 
 desUnsanitized =
   L.lens getDesUnsanitized (\x v -> x { getDesUnsanitized = v })
@@ -66,9 +66,9 @@ desPRNG :: L.Lens' Deserializer Cr.PRNG
 desPRNG =
   L.lens getDesPRNG (\x v -> x { getDesPRNG = v })
 
-deserializer private permitAdmins =
-  Deserializer private permitAdmins (ACL.fromBlackTrie T.empty) T.empty R.empty
-  BT.empty VT.empty undefined
+deserializer private permitAdmins defaultACL =
+  Deserializer private permitAdmins defaultACL T.empty
+  R.identity BT.empty VT.empty undefined
 
 maybeHead = \case
   x:_ -> Just x
@@ -298,20 +298,21 @@ deserialize old new = do
 
   unsanitized <- updateUnsanitized unsanitizedDiff <$> get desUnsanitized
 
-  permitNone <-
+  defaultACL <-
     if Su.getForestACL old == Su.getForestACL new then
-      get desPermitNone
+      get desDefaultACL
     else
+      -- todo: "union" this ACL with permitAdmins
       return $ ACL.fromBlackTrie $ Su.getForestACLTrie new
 
-  let des = Deserializer privateKey permitAdmins permitNone unsanitized
+  let des = Deserializer privateKey permitAdmins defaultACL unsanitized
 
   if null (T.sub Pr.rulesKey obsoleteUnsanitized)
      && null (T.sub Pr.rulesKey newUnsanitized) then
     let (sanitized, dependencies) =
           updateSanitized
           (Su.getForestRevision new)
-          permitNone
+          defaultACL
           oldSanitized
           unsanitized
           oldRules
@@ -326,7 +327,7 @@ deserialize old new = do
           permitAdmins
           (VT.sub Pr.rulesKey oldSanitized)
           (T.sub Pr.rulesKey unsanitized)
-          R.empty
+          R.identity
           BT.empty
           ((T.sub Pr.rulesKey obsoleteUnsanitized),
            (T.sub Pr.rulesKey newUnsanitized))
@@ -337,7 +338,7 @@ deserialize old new = do
     let (sanitized, dependencies) =
           updateSanitized
           (Su.getForestRevision new)
-          permitNone
+          defaultACL
           VT.empty
           unsanitized
           rules

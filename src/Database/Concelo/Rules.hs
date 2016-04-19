@@ -5,7 +5,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 module Database.Concelo.Rules
-  ( empty
+  ( identity
   , parse
   , Context()
   , contextNow
@@ -469,18 +469,18 @@ rulesMap =
 
 idACLRule = const $ \a -> (a, T.empty)
 
-idBoolRule = const (True, T.empty)
+trueRule = const (True, T.empty)
 
-empty = Rules idACLRule idACLRule idBoolRule [] Nothing M.empty
+identity = Rules idACLRule idACLRule trueRule [] Nothing M.empty
 
 subRules key rules = case M.lookup key $ getRulesMap rules of
   Nothing -> case getRulesWildCard rules of
-    Nothing -> (empty, BS.empty)
+    Nothing -> (identity, BS.empty)
     Just r -> r
   Just r -> (r, BS.empty)
 
 parseTrie env =
-  foldM visit empty . T.pairs where
+  foldM visit identity . T.pairs where
     visit rules (k, sub) =
       let maybeParseRule = flip (maybe $ Right rules) (T.value sub) in
       case k of

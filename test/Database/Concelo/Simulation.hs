@@ -94,6 +94,7 @@ instance Show State where
   show s = concat ["state(",
                    show $ getStateMessages s, " ",
                    show $ getStateClients s, " ",
+                   show $ getStateTries s, " ",
                    show $ getStateNow s, ")"]
 
 stateMessages :: L.Lens' State (Q.Seq Message)
@@ -146,7 +147,7 @@ deliver (Message clientId type_ value) =
 getClient which predicate =
   choose which . filter predicate <$> get stateClients
 
-choose which xs = pick index xs where
+choose which xs = trace ("pick " ++ show index ++ " from " ++ show (length xs)) $ pick index xs where
   count = length xs
   index = clamp (count - 1) (floor ((fromIntegral count) * which))
 
@@ -154,7 +155,7 @@ choose which xs = pick index xs where
 
   pick index = \case
     [] -> Nothing
-    (x:xs) -> if index > 0 then Just x else pick (index - 1) xs
+    (x:xs) -> if index <= 0 then Just x else pick (index - 1) xs
 
 removeClient client = filter ((getClientId client /=) . getClientId)
 
@@ -249,8 +250,8 @@ arbitraryState' readerCount writerCount trieCount = do
 
   return $ state (readers ++ writers) tasks tries
 
-arbitraryState readerCount writerCount =
-  QC.choose (10, 1000) >>= arbitraryState' readerCount writerCount
+-- arbitraryState readerCount writerCount =
+--   QC.choose (10, 1000) >>= arbitraryState' readerCount writerCount
 
 shrinkNonEmpty = \case
   [] -> []
@@ -291,19 +292,19 @@ clientHasMessages now client = case messages of
       <*> eval (I.nextMessages now) (getClientIgnis client)
 
 apply task =
-  trace ("apply " ++ show task) $ (update stateNow (+100) >>) $ apply' task
+  traceM ("apply " ++ show task) >> update stateNow (+100) >> apply' task
 
 apply' = \case
   SendFirst -> Q.viewl <$> get stateMessages >>= \case
-    message Q.:< messages -> deliver message >> set stateMessages messages
+    message Q.:< messages -> traceM ("deliver first " ++ show message) >> deliver message >> set stateMessages messages
     _ -> return ()
 
   SendLast -> Q.viewr <$> get stateMessages >>= \case
-    messages Q.:> message -> deliver message >> set stateMessages messages
+    messages Q.:> message -> traceM ("deliver last " ++ show message) >> deliver message >> set stateMessages messages
     _ -> return ()
 
   DropFirst -> Q.viewl <$> get stateMessages >>= \case
-    _ Q.:< messages -> set stateMessages messages
+    _ Q.:< messages -> traceM "deliver first" >> set stateMessages messages
     _ -> return ()
 
   Flush tasks ->
@@ -313,8 +314,8 @@ apply' = \case
 
           task:tasks -> do
             (consistent <$> St.get) >>= \case
-              True -> return ()
-              False -> apply task >> flush tasks
+              True -> trace "flush success" $ return ()
+              False -> traceM "flush more" >> apply task >> flush tasks
 
         flushable = \case
           Publish {} -> False
@@ -327,13 +328,18 @@ apply' = \case
 
       flush $ take (1000 * clientCount) $ filter flushable tasks
 
-  Reconnect tasks whichClient ->
+  Reconnect tasks whichClient -> do
+    traceM "foo"
     getClient whichClient (const True) >>= \case
-      Nothing -> return ()
+      Nothing -> traceM "no client!?" >> return ()
       Just client -> do
+        traceM ("reconnect " ++ show (length tasks))
+
         update stateClients $ removeClient client
 
         mapM_ apply tasks
+
+        traceM "reconnect complete"
 
         update stateClients
           (L.set clientRelay
@@ -343,12 +349,13 @@ apply' = \case
 
   Publish tasks whichClient ->
     getClient whichClient getClientIsWriter >>= \case
-      Nothing -> return ()
+      Nothing -> traceM "no writer!?" >> return ()
       Just writer ->
         get stateTries >>= \case
           [] -> apply (Flush tasks) >> E.throwError Co.Success
 
           trie:tries -> do
+            traceM ("tries remaining: " ++ show (length tries))
             set stateTries tries
             set statePublished trie
 
@@ -372,6 +379,8 @@ apply' = \case
         (ignisMessages, ignis') <-
           eitherToAction $ run (I.nextMessages now) $ getClientIgnis client
 
+        traceM ("queue " ++ show (relayMessages ++ ignisMessages))
+
         let append messageType list sequence =
               foldr (flip (Q.|>)) sequence
               (Message (getClientId client) messageType <$> list)
@@ -388,15 +397,15 @@ applyNext = get stateTasks >>= \case
   task:tasks -> set stateTasks tasks >> apply task
   _ -> patternFailure
 
-simulate state =
+simulate state = trace (" *** start simulation: " ++ show state) $
   let limit = 1000 * length (getStateTries state) in
   case exec (M.replicateM_ limit applyNext) state of
     Left result -> case result of
       Success -> QC.property True
       error -> QC.counterexample (show error) False
-    Right _ -> undefined
+    Right _ -> error ("failed to complete after " ++ show limit ++ " steps")
 
 runTests :: (forall t. QC.Testable t => String -> t -> IO ()) -> IO ()
 runTests check = do
   check "one reader, one writer"
-    $ QC.forAllShrink (arbitraryState 1 1) shrinkState simulate
+    $ QC.forAllShrink (arbitraryState' 0 1 1) shrinkState simulate

@@ -18,6 +18,7 @@ module Database.Concelo.Control
   , getThenUpdate
   , getThenSet
   , with
+  , lend
   , run
   , exec
   , eval
@@ -122,6 +123,13 @@ with lens action =
   try (run action <$> get lens) >>= \(result, state) -> do
     set lens state
     return result
+
+lend :: L.Lens' s c -> L.Lens' a c -> L.Lens' s a -> Action a b -> Action s b
+lend src dst lens action = do
+  get src >>= set (lens . dst)
+  result <- with lens action
+  get (lens . dst) >>= set src
+  return result
 
 mapPair f (x, y) = (f x, f y)
 

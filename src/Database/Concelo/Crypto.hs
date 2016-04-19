@@ -70,6 +70,10 @@ prf = PBKDF2.prfHMAC hashAlgorithm
 
 iterations = 4096
 
+-- This only determines the size of email/password derived keys; keys
+-- generated from different sources may be of any size.  Ideally, we'd
+-- use e.g. 1920 byte (15360 bit) keys here so as to achieve a 256-bit
+-- equivalent strength, but those are prohibitively slow to generate.
 asymmetricKeySize = 512
 
 symmetricKeySize = 32

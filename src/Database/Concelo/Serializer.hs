@@ -1,9 +1,11 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 module Database.Concelo.Serializer
   ( Serializer()
+  , serializerPRNG
   , serializer
   , serialize ) where
 
@@ -123,10 +125,8 @@ newTree = do
   key <- with serializerPRNG Cr.newSymmetric
   return $ Tree key ST.empty ST.empty Pr.NoMessage
 
-chunkToMessage level treeStream forestStream chunk = do
-  private <- get serializerPrivate
-
-  with serializerPRNG $ case ST.chunkHeight chunk of
+chunkToMessage private level treeStream forestStream chunk =
+  case ST.chunkHeight chunk of
     1 -> Pr.leaf private level treeStream forestStream $ ST.chunkBody chunk
 
     _ -> Pr.group private level (ST.chunkHeight chunk) treeStream forestStream
@@ -142,7 +142,10 @@ sync serialize level syncTree key treeStream forestStream obsolete new = do
 
   set serializerPRNG prng'
 
-  let c2m = chunkToMessage level treeStream forestStream
+  private <- get serializerPrivate
+
+  let c2m = with serializerPRNG
+            . Pr.chunkToMessage private level treeStream forestStream
 
   obsoleteMessages <- mapM c2m obsolete
 
@@ -233,8 +236,7 @@ updateForest revision (obsoleteTrees, newTrees) = do
   set serializerForest $ Forest (getForestStream forest) treeSync message
 
   update serializerDiff $ \(obsolete, new) ->
-    (let oldMessage = getForestMessage forest in
-      T.union (const oldMessage <$> Pr.getForestName oldMessage) obsolete,
+    (T.union (const old <$> Pr.getForestName old) obsolete,
      T.union (const message <$> Pr.getForestName message) new)
 
 byACL path value = Pa.super (ACL.hash $ L.view Pr.valueACL value) path

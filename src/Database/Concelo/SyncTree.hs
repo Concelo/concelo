@@ -16,8 +16,8 @@ module Database.Concelo.SyncTree
   , root ) where
 
 import Database.Concelo.Control (get, patternFailure, with, updateM,
-                                 set, bsShow, bsRead, maybeToAction,
-                                 eitherToAction, run)
+                                 set, bsShow, maybeToAction, eitherToAction,
+                                 run)
 import Control.Applicative ((<|>))
 import Control.Monad (foldM)
 
@@ -68,6 +68,7 @@ data Chunk a = Group { getGroupName :: Key
 
              | Leaf { getLeafSerialized :: BS.ByteString
                     , getLeafPath :: Pa.Path Key a }
+             deriving Show
 
 data SyncTree a = SyncTree { getTreeByReverseKeyMember :: T.Trie Key (Chunk a)
                            , getTreeByHeightVacancy :: T.Trie Key (Chunk a)
@@ -87,7 +88,9 @@ leafKey = "l"
 
 groupKey = "g"
 
-empty = SyncTree T.empty T.empty undefined
+emptyGroup = Group (Cr.hash []) 1 T.empty BS.empty
+
+empty = SyncTree T.empty (T.index byHeightVacancy [emptyGroup]) emptyGroup
 
 root = (const () <$>) . byHeightVacancy . getTreeRoot
 
@@ -226,33 +229,37 @@ makeGroup members = (case firstValue members of
 
 isolate key = T.super key . T.sub key
 
-addNewGroupsForHeight height =
+addNewGroups height =
   do
-    new <- isolate height <$> get stateNew
+    let heightKey = bsShow height
 
-    if height == "0" || twoOrMore new then do
+    new <- isolate heightKey <$> get stateNew
+
+    if height == 0 || twoOrMore new then do
       -- todo: consider (psuedo)randomly inserting new leaves among
       -- existing and new groups.  Is there a way to do this that
       -- doesn't result in disproportionate network traffic?
 
       newGroups <- foldM group T.empty $ T.paths new
 
-      obsolete <- T.sub above <$> get stateObsolete
+      obsolete <- T.sub aboveKey <$> get stateObsolete
 
-      oldGroups <- T.subtract obsolete . T.sub above
+      oldGroups <- T.subtract obsolete . T.sub aboveKey
                    <$> get (stateTree . treeByHeightVacancy)
 
       (newGroups', obsoleteGroups') <- combineVacant newGroups oldGroups
 
-      Co.update stateObsolete (T.union $ T.super above obsoleteGroups')
-      Co.update stateNew (T.union $ T.super above newGroups')
+      Co.update stateObsolete (T.union $ T.super aboveKey obsoleteGroups')
+      Co.update stateNew (T.union $ T.super aboveKey newGroups')
+
+      addNewGroups above
       else
       maybeToAction (Co.Exception "no root group found") (T.firstValue new)
       >>= set (stateTree . treeRoot)
 
   where
-
-    above = bsShow ((bsRead height :: Int) + 1)
+    above = height + 1
+    aboveKey = bsShow above
 
     group groups orphan = do
       orphanGroup <-
@@ -271,9 +278,6 @@ addNewGroupsForHeight height =
               return
               $ T.union (byHeightVacancy combined)
               $ T.subtract (byHeightVacancy group) groups
-
-addNewGroups =
-  get stateNew >>= mapM_ addNewGroupsForHeight . T.keys
 
 updateIndex index trie = do
   new <- get stateNew
@@ -305,7 +309,7 @@ update tree obsolete new = do
         foldM toLeaves T.empty (T.paths new) >>= set stateNew
 
         findObsoleteGroups
-        addNewGroups
+        addNewGroups (0 :: Int)
         updateTree)
     $ State tree serializer T.empty T.empty
 

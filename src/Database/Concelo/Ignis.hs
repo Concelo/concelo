@@ -26,7 +26,7 @@ import qualified Database.Concelo.ACL as ACL
 import qualified Database.Concelo.Rules as R
 import qualified Database.Concelo.Control as Co
 
-import Database.Concelo.Control (get, set, with, exception, run)
+import Database.Concelo.Control (get, set, with, lend, exception, run)
 
 import Data.Maybe (fromMaybe)
 import Control.Monad (foldM)
@@ -90,25 +90,57 @@ data Credentials = PrivateKey { _getPKPrivateKey :: BS.ByteString
 
 ignis admins credentials stream seed =
   do
+    let prng = C.makePRNG seed
+
     (private, prng') <- run (authenticate credentials) prng
 
-    return $ Ignis
-      private
-      False
-      Nothing
-      VT.empty
-      (T.empty, T.empty)
-      (Pi.pipe adminTrie (Just $ C.derivePublic private) stream)
-      (Se.serializer private stream)
-      (D.deserializer private permitAdmins)
-      prng'
+    let adminTrie = ACL.writerTrie admins
+        permitAdmins = ACL.fromWhiteTrie adminTrie
+        public = C.derivePublic private
+        me = C.fromPublic public
+        permitAdminsAndMe = ACL.whiteList ACL.aclWriteLists me
+                            $ ACL.whiteList ACL.aclReadLists me permitAdmins
+        ignis = Ignis
+                private
+                False
+                Nothing
+                VT.empty
+                (T.empty, T.empty)
+                (Pi.pipe adminTrie (Just public) stream)
+                (Se.serializer private stream)
+                (D.deserializer private permitAdmins permitAdminsAndMe)
+                prng'
 
-  where
-    prng = C.makePRNG seed
+    return ignis
 
-    adminTrie = ACL.writerTrie admins
+initAdmin readers writers = do
+  private <- get ignisPrivate
+  stream <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberStream)
 
-    permitAdmins = ACL.fromWhiteTrie adminTrie
+  let toPath public = Pa.singleton (Cr.fromPublic public) ()
+      writerTrie = T.index toPath writers
+      readerTrie = foldr (T.union . toPath) writerTrie readers
+      aclTrie = T.union (T.super Pr.writeKey writerTrie)
+                (T.super Pr.readKey readerTrie)
+
+  prng <- get ignisPRNG
+
+  ((aclSync, _, aclBody), SyncState _ _ prng') <-
+    eitherToAction $ run (ST.update ST.empty T.empty aclTrie)
+    (SyncState serializeNull BS.empty prng)
+
+  set ignisPRNG prng'
+
+  mapM_ ((receive =<<)
+         . with ignisPRNG
+         . Se.chunkToMessage private Pr.forestACLLevel BS.empty stream) aclBody
+
+  let forest =
+        Pr.forest private stream 0 0 signed (ST.root aclSync) (Pa.leaf ())
+
+  receive forest
+
+  receive Pr.Published (Pr.getForestName forest)
 
 getHead = getIgnisHead
 
@@ -198,25 +230,40 @@ nextMessages now =
   maybeAuthenticate >>= \case
     Nothing -> return []
 
-    Just [] -> do
-      updatePublisher
+    Just [] -> updatePublisher >>= \case
+      True -> do
+        ping <- (:[]) . Pr.Published
+          <$> get (ignisPipe . Pi.pipePublisher . Pu.publisherPublished)
 
-      ping <- (:[]) . Pr.Published
-       <$> get (ignisPipe . Pi.pipePublisher . Pu.publisherPublished)
+        with ignisPipe $ Pi.nextMessages now ping
 
-      with ignisPipe $ Pi.nextMessages now ping
+      False -> return []
 
     Just messages -> return messages
 
+XXX
+-- todo: we need to serialize updates based on the last revision we
+-- received from the server, not (necessarily) the last one we sent
+
 updatePublisher = do
-  diff <- get ignisDiff
+  published <- get (ignisDeserializer . D.desSanitized)
 
-  revision <- (+ 1) <$> get (ignisPipe . Pi.pipeSubscriber
-                             . Su.subscriberPublished . Su.forestRevision)
+  if T.isEmpty published then
+    return False
+    else do
+    diff <- get ignisDiff
 
-  serialized <- with ignisSerializer $ Se.serialize revision diff
+    revision <- (+ 1) <$> get (ignisPipe
+                               . Pi.pipeSubscriber
+                               . Su.subscriberPublished
+                               . Su.forestRevision)
 
-  with (ignisPipe . Pi.pipePublisher) $ Pu.update serialized
+    serialized <- lend ignisPRNG Se.serializerPRNG ignisSerializer
+                  $ Se.serialize revision diff
+
+    with (ignisPipe . Pi.pipePublisher) $ Pu.update serialized
+
+    return True
 
 makeDiff :: VT.VTrie BS.ByteString Pr.Value ->
             Co.Action Ignis (T.Trie BS.ByteString Pr.Value,
@@ -232,7 +279,7 @@ makeDiff head = do
     me
     (Su.getForestRevision published)
     (D.getDesRules deserializer)
-    (D.getDesPermitNone deserializer)
+    (D.getDesDefaultACL deserializer)
     head
     (T.diff (D.getDesSanitized deserializer) head)
 

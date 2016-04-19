@@ -47,6 +47,8 @@ library
                        -fno-warn-orphans
                        -Werror
 
+  ghc-prof-options:    -fprof-auto
+
   hs-source-dirs:      src
   build-depends:       base,
                        cryptonite >=0.13,
@@ -69,6 +71,9 @@ test-suite tests
                        -fno-warn-unused-do-bind
                        -fno-warn-orphans
                        -Werror
+
+  ghc-prof-options:    -fprof-auto
+                       -with-rtsopts=-xc
 
   hs-source-dirs:      test
 
