@@ -212,9 +212,8 @@ receive = \case
 
       newTrie <- get (ignisDeserializer . D.desSanitized)
 
-      head <- get ignisHead
-
-      set ignisHead $ VT.mergeL Pr.localVersion oldTrie newTrie head
+      (VT.mergeL Pr.localVersion oldTrie newTrie <$> get ignisHead)
+      >>= set ignisHead
 
       -- The following tells the caller that it should call "update"
       -- again (with the latest atomic updates, if any), which will
