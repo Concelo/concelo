@@ -90,7 +90,7 @@ visitDirty revision acl rules result =
       Just (_, v) -> T.union (const v <$> path)
 
     visit env path rules acl dirty key result =
-      visitValues result Nothing possibleValues where
+      visitValues result Nothing $ M.pairs possibleValues where
         (rules', wildcard) = R.subRules key rules
 
         dirty' = T.sub key $ dirty
@@ -99,8 +99,7 @@ visitDirty revision acl rules result =
 
         env' = if BS.null wildcard then env else M.insert wildcard key env
 
-        possibleValues =
-          M.pairs $ fromMaybe M.empty
+        possibleValues = fromMaybe M.empty
           (getUnsanitizedElementMap <$> T.value dirty')
 
         visitValues result@(remainingDirty, sanitized, rejected, dependencies)
@@ -140,17 +139,22 @@ visitDirty revision acl rules result =
                 Nothing ->
                   T.foldrKeys visit'
                   (remainingDirty',
+
                    case firstValid of
                      Nothing ->
                        VT.subtract revision path sanitized
                      Just (_, v) ->
                        VT.union revision (const v <$> path) sanitized,
-                   unionUnsanitized
-                   (const
-                    (UnsanitizedElement $ case firstValid of
-                        Nothing -> possibleValues
-                        Just (k, _) -> M.delete k possibleValues)
-                    <$> path) rejected,
+
+                   let map = case firstValid of
+                         Nothing -> possibleValues
+                         Just (k, _) -> M.delete k possibleValues in
+
+                   if null map then
+                     T.subtract path rejected
+                   else
+                     T.union (const (UnsantizedElement map) <$> path rejected,
+
                    dependencies')
                   dirty' in
 
