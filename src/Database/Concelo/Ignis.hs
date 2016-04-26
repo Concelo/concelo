@@ -245,17 +245,19 @@ XXX
 -- received from the server, not (necessarily) the last one we sent
 
 updatePublisher = do
-  published <- get (ignisDeserializer . D.desSanitized)
+  revision <- (+ 1) <$> get (ignisPipe
+                             . Pi.pipeSubscriber
+                             . Su.subscriberPublished
+                             . Su.forestRevision)
 
-  if T.isEmpty published then
+  if revision == 0 then
+    -- we haven't received a complete, valid revision from the server
+    -- yet, nor have we initialized the stream as an admin, but we
+    -- need an admin-signed ACL to publish with, so we must wait until
+    -- we receive one
     return False
     else do
     diff <- get ignisDiff
-
-    revision <- (+ 1) <$> get (ignisPipe
-                               . Pi.pipeSubscriber
-                               . Su.subscriberPublished
-                               . Su.forestRevision)
 
     serialized <- lend ignisPRNG Se.serializerPRNG ignisSerializer
                   $ Se.serialize revision diff

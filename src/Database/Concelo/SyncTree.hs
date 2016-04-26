@@ -106,26 +106,50 @@ chunkName = getGroupName
 
 chunkMembers = getGroupMembers
 
+visitRejects rejects = mapM_ visit $ M.pairs $ invert rejects where
+
+  invert = T.foldrPathsAndValues visitList M.empty where
+    visitList (path, list) result = foldr visitName result list where
+      visitName name = M.modify name (T.union path . fromMaybe T.empty)
+
+  visit (name, trie) =
+    (M.lookup name <$> get (stateTree . treeByName)) >>= \case
+      Nothing -> return ()
+      Just group -> do
+        Co.update stateObsolete $ T.union $ byHeightVacancy group
+
+        Co.update stateNew
+          $ T.union $ T.index byHeightVacancy
+          $ T.subtract trie $ getGroupMembers group
+
+        findObsolete group
+
 findObsolete chunk =
   let path = byKey chunk in
-  (T.findValue path <$> get (stateTree . treeByReverseKeyMember))
-    >>= \case
+  (T.findValue path <$> get (stateTree . treeByReverseKeyMember)) >>= \case
     Nothing -> patternFailure
     Just group -> do
+      let groupPath = byHeightVacancy group
+
       obsolete <- get stateObsolete
-      if T.member path obsolete then
+
+      if T.member groupPath obsolete then
         return ()
         else do
-        Co.update stateObsolete $ T.union (byHeightVacancy group)
+        Co.update stateObsolete $ T.union groupPath
 
         Co.update stateNew
           $ T.union $ T.index byHeightVacancy $ getGroupMembers group
 
         findObsolete group
 
-findObsoleteGroups = do
+findObsoleteGroups rejects = do
   get stateObsolete >>= mapM_ findObsolete
+
+  visitRejects rejects
+
   obsolete <- get stateObsolete
+
   Co.update stateNew (T.subtract obsolete)
 
 getGroupVacancy group = Pr.leafSize - BS.length (getGroupBody group)
@@ -286,7 +310,10 @@ updateIndex index trie = do
   return $ T.union (T.index index new)
     $ T.subtract (T.index index obsolete) trie
 
-updateTree = do
+update (obsolete, new) tree =
+  tbc
+  do
+
   updateM (stateTree . treeByReverseKeyMember) (updateIndex byReverseKeyMember)
   updateM (stateTree . treeByHeightVacancy) (updateIndex byHeightVacancy)
 
@@ -300,7 +327,7 @@ split path =
 
 toLeaves leaves path = flip T.union leaves . T.super "0" <$> split path
 
-update tree obsolete new = do
+visit tree rejects obsolete new = do
   serializer <- S.get
 
   (_, state) <-
@@ -308,13 +335,11 @@ update tree obsolete new = do
     (do foldM toLeaves T.empty (T.paths obsolete) >>= set stateObsolete
         foldM toLeaves T.empty (T.paths new) >>= set stateNew
 
-        findObsoleteGroups
-        addNewGroups (0 :: Int)
-        updateTree)
+        findObsoleteGroups rejects
+        addNewGroups (0 :: Int))
     $ State tree serializer T.empty T.empty
 
   S.put (getStateSerializer state)
 
-  return (getStateTree state,
-          getStateObsolete state,
+  return (getStateObsolete state,
           getStateNew state)

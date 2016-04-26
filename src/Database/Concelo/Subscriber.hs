@@ -184,13 +184,16 @@ updateMissing :: Pr.Name ->
 updateMissing member =
   update subscriberMissing $ BT.reverseDelete member
 
-diffChunks oldChunks oldRoot newChunks newRoot = do
+diffChunksAll oldChunks oldRoot newChunks newRoot = do
   (obsolete, obsoleteLeaves, new, newLeaves) <-
     Ch.diffChunks oldChunks oldRoot newChunks newRoot
 
   update subscriberDiff $ \(o, n) -> (T.union obsolete o, T.union new n)
 
-  return (obsoleteLeaves, newLeaves)
+  return ((obsolete, new), (obsoleteLeaves, newLeaves))
+
+diffChunks oldChunks oldRoot newChunks newRoot =
+  snd <$> diffChunksAll oldChunks oldRoot newChunks newRoot
 
 verify :: Pr.Signed ->
           T.Trie BS.ByteString a ->
@@ -245,12 +248,15 @@ verifyLeafDiff acl (_, newLeaves) =
       Pr.Leaf { Pr.getLeafSigned = signed } -> verify signed acl
       _ -> patternFailure
 
+updateSync old () =
+
 data Tree = Tree { getTreeRevision :: Integer
                  , getTreeStream :: BS.ByteString
                  , getTreeACL :: Pr.Name
                  , getTreeACLTrie :: T.Trie BS.ByteString BS.ByteString
                  , getTreeACLFromTries :: ACL.ACL
                  , getTreeLeaves :: Pr.Name
+                 , getTreeSync :: ST.SyncTree
                  , getTreeOptional :: Bool }
 
 -- treeRevision :: L.Lens' Tree Integer
@@ -350,13 +356,19 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
                                 $ Pa.singleton (Cr.fromPublic k) ())
                    aclTrie)
 
-          when descend $ do
-            addMissing name leaves
-            assertComplete name
+          sync <-
+            if descend then do
+              addMissing name leaves
+              assertComplete name
 
-            diffChunks (getForestChunks currentForest)
-              (getTreeLeaves currentTree) received leaves
-              >>= verifyLeafDiff aclTrie
+              diff <- diffChunksAll (getForestChunks currentForest)
+                      (getTreeLeaves currentTree) received leaves
+
+              verifyLeafDiff aclTrie (snd diff)
+
+              return $ ST.update (fst diff) (getTreeSync currentTree)
+            else
+              return ST.empty
 
           version <- get subscriberVersion
 
@@ -364,7 +376,7 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
             (Tree revision stream acl aclTrie
              (ACL.fromTries aclTrie forestACLTrie)
              (if descend then leaves else (Pa.leaf ()))
-             optional) trees
+             sync optional) trees
 
         _ -> patternFailure
 

@@ -36,7 +36,6 @@ data Deserializer =
                , getDesPermitAdmins :: ACL.ACL
                , getDesDefaultACL :: ACL.ACL
                , getDesUnsanitized :: T.Trie BS.ByteString UnsanitizedElement
-               , getDesSyncs :: M.Map BS.ByteString ST.SyncTree
                , getDesRules :: R.Rules
                , getDesDependencies :: BT.BiTrie BS.ByteString
                , getDesSanitized :: VT.VTrie BS.ByteString Pr.Value
@@ -153,7 +152,7 @@ visitDirty revision acl rules result =
                    if null map then
                      T.subtract path rejected
                    else
-                     T.union (const (UnsantizedElement map) <$> path rejected,
+                     T.union (const (M.keys map) <$> path) rejected,
 
                    dependencies')
                   dirty' in
@@ -171,9 +170,6 @@ visitDirty revision acl rules result =
                 next $ if validateResult then value else Nothing
             else
               next Nothing
-
--- todo: track "unsanitary" elements so they can be added to the set
--- of obsolete values when the sync trees are updated
 
 updateSanitized revision acl currentSanitized currentRejected
   updatedUnsanitized updatedRules currentDependencies
@@ -283,12 +279,9 @@ updateUnsanitizedDiff' key acl (obsoleteUnsanitized, newUnsanitized)
 
         _ -> patternFailure
 
-diffChunks stream oldChunks oldRoot newChunks newRoot = do
-  (obsolete, obsoleteLeaves, new, newLeaves) <-
+diffChunks oldChunks oldRoot newChunks newRoot = do
+  (_, obsoleteLeaves, _, newLeaves) <-
     Ch.diffChunks oldChunks oldRoot newChunks newRoot
-
-  update desTreeSyncs $ M.modify stream
-    (Just . ST.update obsolete new . fromMaybe ST.empty)
 
   return (obsoleteLeaves, newLeaves)
 
@@ -313,7 +306,6 @@ updateUnsanitizedDiff oldForest newForest result (stream, newTree) = do
       key <- with desPRNG $ Cr.decryptAsymmetric privateKey encryptedKey
 
       diffChunks
-        stream
         (Su.getForestChunks oldForest)
         (Su.getTreeLeaves oldTree)
         (Su.getForestChunks newForest)
@@ -344,12 +336,10 @@ deserialize old new = do
     if Su.getForestACL old == Su.getForestACL new then
       get desDefaultACL
     else
-      -- todo: "union" this ACL with permitAdmins
+      -- todo: union this ACL with permitAdmins
       return $ ACL.fromBlackTrie $ Su.getForestACLTrie new
 
-  syncs <- get desSyncs
-
-  let des = Deserializer privateKey permitAdmins defaultACL unsanitized syncs
+  let des = Deserializer privateKey permitAdmins defaultACL unsanitized
 
   if null (T.sub Pr.rulesKey obsoleteUnsanitized)
      && null (T.sub Pr.rulesKey newUnsanitized) then
