@@ -70,9 +70,9 @@ data Chunk a = Group { getGroupName :: Key
                     , getLeafPath :: Pa.Path Key a }
              deriving Show
 
-data SyncTree a = SyncTree { getTreeByReverseKeyMember :: T.Trie Key (Chunk a)
-                           , getTreeByHeightVacancy :: T.Trie Key (Chunk a)
-                           , getTreeRoot :: Chunk a }
+data SyncTree a = SyncTree { getTreeByName :: T.Trie Key (Chunk a)
+                           , getTreeByReverseKeyMember :: T.Trie Key (Chunk a)
+                           , getTreeByHeightVacancy :: T.Trie Key (Chunk a) }
 
 treeByReverseKeyMember :: L.Lens' (SyncTree a) (T.Trie Key (Chunk a))
 treeByReverseKeyMember =
@@ -82,8 +82,6 @@ treeByReverseKeyMember =
 treeByHeightVacancy =
   L.lens getTreeByHeightVacancy (\t v -> t { getTreeByHeightVacancy = v })
 
-treeRoot = L.lens getTreeRoot (\t v -> t { getTreeRoot = v })
-
 leafKey = "l"
 
 groupKey = "g"
@@ -92,7 +90,10 @@ emptyGroup = Group (Cr.hash []) 1 T.empty BS.empty
 
 empty = SyncTree T.empty (T.index byHeightVacancy [emptyGroup]) emptyGroup
 
-root = (const () <$>) . byHeightVacancy . getTreeRoot
+root = fromMaybe (Pa.leaf ())
+       . (fmap (const ()) <$>)
+       . T.lastPath
+       . getTreeByHeightVacancy
 
 chunkHeight = \case
   Leaf {} -> 1
@@ -161,7 +162,7 @@ byReverseKeyMember chunk =
   T.index byKey $ getGroupMembers chunk
 
 byHeightVacancy chunk =
-  Pa.super (bsShow (getGroupHeight chunk))
+  Pa.super (bsShow $ getGroupHeight chunk)
   $ byVacancy chunk
 
 byVacancy chunk =
@@ -259,7 +260,7 @@ addNewGroups height =
 
     new <- isolate heightKey <$> get stateNew
 
-    if height == 0 || twoOrMore new then do
+    when (height == 0 || twoOrMore new) $ do
       -- todo: consider (psuedo)randomly inserting new leaves among
       -- existing and new groups.  Is there a way to do this that
       -- doesn't result in disproportionate network traffic?
@@ -277,9 +278,6 @@ addNewGroups height =
       Co.update stateNew (T.union $ T.super aboveKey newGroups')
 
       addNewGroups above
-      else
-      maybeToAction (Co.Exception "no root group found") (T.firstValue new)
-      >>= set (stateTree . treeRoot)
 
   where
     above = height + 1
@@ -303,19 +301,55 @@ addNewGroups height =
               $ T.union (byHeightVacancy combined)
               $ T.subtract (byHeightVacancy group) groups
 
-updateIndex index trie = do
-  new <- get stateNew
-  obsolete <- get stateObsolete
-
-  return $ T.union (T.index index new)
-    $ T.subtract (T.index index obsolete) trie
-
-update (obsolete, new) tree =
-  tbc
+update deserialize (obsolete, new) tree =
   do
+    rec obsoleteChunks <- foldM (convert $ getTreeByName tree) [] obsolete
 
-  updateM (stateTree . treeByReverseKeyMember) (updateIndex byReverseKeyMember)
-  updateM (stateTree . treeByHeightVacancy) (updateIndex byHeightVacancy)
+        newChunks <- foldM (convert name) [] obsolete
+
+        name <-
+          return $ updateIndex byName getTreeByName obsoleteChunks newChunks
+
+    let reverseKeyMember =
+          updateIndex byReverseKeyMember getTreeByReverseKeyMember
+          obsoleteChunks newChunks
+
+        heightVacancy =
+          updateIndex byHeightVacancy getTreeByHeightVacancy
+          obsoleteChunks newChunks
+
+    SyncTree name reverseKeyMember heightVacancy
+  where
+    convert nameTrie result message =
+      (: result) <$> messageToChunk nameTrie message
+
+    messageToChunk nameTrie = \case
+      Pr.Group { Pr.getGroupName = name
+               , Pr.getGroupMembers = members } -> do
+
+        let visit result path =
+              case T.findValue (Pa.keys path !! 2) nameTrie of
+                Nothing -> patternFailure
+                Just chunk -> return $ T.union (T.index byName chunk) result
+
+        memberChunks <- foldM visit T.empty $ T.paths members
+
+        return $ Group (Pa.keys name !! 2) (bsRead (Pa.keys name !! 1))
+          memberChunks undefined
+
+      Pr.Leaf { Pr.getLeafName = name
+              , Pr.getLeafBody = body } -> do
+        trie <- deserialize body
+
+        return $ Group (Pa.keys name !! 2) (bsRead (Pa.keys name !! 1))
+          (Leaf undefined <$> trie) undefined
+
+    updateIndex index accessor obsoleteChunks newChunks =
+      (foldr (T.union . T.index index)
+       (foldr (T.subtract . T.index index)
+        (accessor tree)
+        obsoleteChunks)
+       newChunks)
 
 toTrie = flip T.union T.empty
 

@@ -275,6 +275,10 @@ updateUnsanitizedDiff' key acl (obsoleteUnsanitized, newUnsanitized)
               return $ unionUnsanitizedWithRaw
               hash (Pr.getSignedSigner signed) acl trie result
 
+            -- todo: include this leaf in the set of rejects somehow.
+            -- Currently, the code only knows how to reject individual
+            -- tree elements, but we should also reject an entire leaf
+            -- if it doesn't parse or if it contains an empty trie.
             Nothing -> return result
 
         _ -> patternFailure
