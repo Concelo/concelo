@@ -9,6 +9,8 @@ module Database.Concelo.VTrie
   , value
   , firstPath
   , firstValue
+  , lastPath
+  , lastValue
   , findTrie
   , findValue
   , member
@@ -98,6 +100,14 @@ firstPath (VTrie v m)
 firstValue (VTrie v m)
   | null m = getVersionedValue <$> v
   | otherwise = V.first m >>= firstValue . snd
+
+lastPath (VTrie v m)
+  | null m = P.leaf . getVersionedValue <$> v
+  | otherwise = V.last m >>= (\(k, t) -> P.super k <$> lastPath t)
+
+lastValue (VTrie v m)
+  | null m = getVersionedValue <$> v
+  | otherwise = V.last m >>= lastValue . snd
 
 findTrie path trie = case P.sub path of
   Nothing -> trie

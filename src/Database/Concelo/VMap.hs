@@ -7,6 +7,8 @@ module Database.Concelo.VMap
   , Database.Concelo.VMap.lookup
   , first
   , firstValue
+  , Database.Concelo.VMap.last
+  , lastValue
   , insert
   , modify
   , delete
@@ -65,6 +67,12 @@ find key (VMap tree) = T.searchFast (\k c -> compare k $ getCellKey c) tree key
 first (VMap tree) = pairKV <$> T.first tree
 
 firstValue map = snd <$> first map
+
+last' (VMap tree) = pairKV <$> T.last tree
+
+last = last'
+
+lastValue map = snd <$> last' map
 
 insert version key value = modify version key (const $ Just value)
 

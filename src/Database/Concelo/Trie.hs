@@ -8,6 +8,8 @@ module Database.Concelo.Trie
   , value
   , firstPath
   , firstValue
+  , lastPath
+  , lastValue
   , findTrie
   , findValue
   , member
@@ -74,6 +76,10 @@ value = V.value . run
 firstPath = V.firstPath . run
 
 firstValue = V.firstValue . run
+
+lastPath = V.lastPath . run
+
+lastValue = V.lastValue . run
 
 findTrie path = Trie . V.findTrie path . run
 

@@ -1,8 +1,11 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module Database.Concelo.Ignis
   ( Ignis()
   , ignis
+  , initAdmin
   , Credentials(PrivateKey, EmailPassword)
   , update
   , receive
@@ -12,9 +15,10 @@ module Database.Concelo.Ignis
 
 import qualified Control.Lens as L
 import qualified Data.ByteString as BS
-import qualified Database.Concelo.Crypto as C
+import qualified Database.Concelo.Crypto as Cr
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Pipe as Pi
+import qualified Database.Concelo.Path as Pa
 import qualified Database.Concelo.Serializer as Se
 import qualified Database.Concelo.Deserializer as D
 import qualified Database.Concelo.Subscriber as Su
@@ -23,15 +27,18 @@ import qualified Database.Concelo.VTrie as VT
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Map as M
 import qualified Database.Concelo.ACL as ACL
+import qualified Database.Concelo.Bytes as B
 import qualified Database.Concelo.Rules as R
+import qualified Database.Concelo.SyncTree as ST
 import qualified Database.Concelo.Control as Co
 
-import Database.Concelo.Control (get, set, with, lend, exception, run)
+import Database.Concelo.Control (get, set, with, lend, exception, run,
+                                 eitherToAction)
 
 import Data.Maybe (fromMaybe)
 import Control.Monad (foldM)
 
-data Ignis = Ignis { getIgnisPrivate :: C.PrivateKey
+data Ignis = Ignis { getIgnisPrivate :: Cr.PrivateKey
                    , getIgnisSentChallengeResponse :: Bool
                    , getIgnisChallenge :: Maybe BS.ByteString
                    , getIgnisHead :: VT.VTrie BS.ByteString Pr.Value
@@ -40,7 +47,7 @@ data Ignis = Ignis { getIgnisPrivate :: C.PrivateKey
                    , getIgnisPipe :: Pi.Pipe
                    , getIgnisSerializer :: Se.Serializer
                    , getIgnisDeserializer :: D.Deserializer
-                   , getIgnisPRNG :: C.PRNG }
+                   , getIgnisPRNG :: Cr.PRNG }
 
 instance Show Ignis where
   show relay = concat ["ignis(", show $ getIgnisChallenge relay, ")"]
@@ -78,7 +85,7 @@ ignisDeserializer :: L.Lens' Ignis D.Deserializer
 ignisDeserializer =
   L.lens getIgnisDeserializer (\x v -> x { getIgnisDeserializer = v })
 
-ignisPRNG :: L.Lens' Ignis C.PRNG
+ignisPRNG :: L.Lens' Ignis Cr.PRNG
 ignisPRNG =
   L.lens getIgnisPRNG (\x v -> x { getIgnisPRNG = v })
 
@@ -90,14 +97,15 @@ data Credentials = PrivateKey { _getPKPrivateKey :: BS.ByteString
 
 ignis admins credentials stream seed =
   do
-    let prng = C.makePRNG seed
+    let prng = Cr.makePRNG seed
 
     (private, prng') <- run (authenticate credentials) prng
 
-    let adminTrie = ACL.writerTrie admins
+    let adminTrie :: T.Trie BS.ByteString ()
+        adminTrie = ACL.writerTrie admins
         permitAdmins = ACL.fromWhiteTrie adminTrie
-        public = C.derivePublic private
-        me = C.fromPublic public
+        public = Cr.derivePublic private
+        me = Cr.fromPublic public
         permitAdminsAndMe = ACL.whiteList ACL.aclWriteLists me
                             $ ACL.whiteList ACL.aclReadLists me permitAdmins
         ignis = Ignis
@@ -107,49 +115,62 @@ ignis admins credentials stream seed =
                 VT.empty
                 (T.empty, T.empty)
                 (Pi.pipe adminTrie (Just public) stream)
-                (Se.serializer private stream)
+                (Se.serializer private)
                 (D.deserializer private permitAdmins permitAdminsAndMe)
                 prng'
 
     return ignis
+
+data SyncState a = SyncState
+
+instance ST.Serializer a SyncState where
+  serialize _ = return [BS.empty]
+  encrypt = return . id
 
 initAdmin readers writers = do
   private <- get ignisPrivate
   stream <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberStream)
 
   let toPath public = Pa.singleton (Cr.fromPublic public) ()
+      writerTrie :: T.Trie BS.ByteString ()
       writerTrie = T.index toPath writers
+      readerTrie :: T.Trie BS.ByteString ()
       readerTrie = foldr (T.union . toPath) writerTrie readers
-      aclTrie = T.union (T.super Pr.writeKey writerTrie)
-                (T.super Pr.readKey readerTrie)
+      aclTrie = T.union (T.super ACL.writerKey writerTrie)
+                (T.super ACL.readerKey readerTrie)
 
-  prng <- get ignisPRNG
-
-  ((aclSync, _, aclBody), SyncState _ _ prng') <-
-    eitherToAction $ run (ST.update ST.empty T.empty aclTrie)
-    (SyncState serializeNull BS.empty prng)
-
-  set ignisPRNG prng'
+  ((_, aclBody, aclRoot), _) <-
+    eitherToAction $ run (ST.visit ST.empty T.empty T.empty aclTrie) SyncState
 
   mapM_ ((receive =<<)
          . with ignisPRNG
-         . Se.chunkToMessage private Pr.forestACLLevel BS.empty stream) aclBody
+         . ST.chunkToMessage private Pr.forestACLLevel BS.empty stream) aclBody
 
-  let forest =
-        Pr.forest private stream 0 0 signed (ST.root aclSync) (Pa.leaf ())
+  let text = BS.concat [B.fromInteger (0 :: Int), Pr.serializeName aclRoot]
+
+  signature <- with ignisPRNG $ Cr.sign private text
+
+  forest <- with ignisPRNG $ Pr.forest
+            private
+            stream
+            0
+            0
+            (Pr.Signed (Cr.derivePublic private) signature text)
+            aclRoot
+            (Pa.leaf ())
 
   receive forest
 
-  receive Pr.Published (Pr.getForestName forest)
+  receive $ Pr.Published (Pr.getForestName forest)
 
 getHead = getIgnisHead
 
 authenticate = \case
-  PrivateKey key password -> C.decryptPrivate password key
+  PrivateKey key password -> Cr.decryptPrivate password key
 
-  EmailPassword email password -> return $ C.derivePrivate password email
+  EmailPassword email password -> return $ Cr.derivePrivate password email
 
-sign private = with ignisPRNG . C.sign private
+sign private = with ignisPRNG . Cr.sign private
 
 maybeAuthenticate =
   get ignisSentChallengeResponse >>= \case
@@ -163,12 +184,12 @@ maybeAuthenticate =
 
         Just
           . (:[])
-          . (Pr.Cred Pr.version $ C.fromPublic $ C.derivePublic private)
+          . (Pr.Cred Pr.version $ Cr.fromPublic $ Cr.derivePublic private)
           <$> sign private challenge
 
 getPublishedTrie = D.getDesSanitized . getIgnisDeserializer
 
-getPublic = C.derivePublic <$> get ignisPrivate
+getPublic = Cr.derivePublic <$> get ignisPrivate
 
 update update atomicUpdate = do
   head <- update <$> get ignisHead
@@ -205,15 +226,18 @@ receive = \case
 
     new <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberPublished)
 
-    if Su.getForestRevision new /= Su.getForestRevision old then do
+    let rev = Pr.getForestRevision . Su.getForestMessage
+
+    if rev new /= rev old then do
       oldTrie <- get (ignisDeserializer . D.desSanitized)
 
       with ignisDeserializer $ D.deserialize old new
 
       newTrie <- get (ignisDeserializer . D.desSanitized)
 
-      (VT.mergeL Pr.localVersion oldTrie newTrie <$> get ignisHead)
-      >>= set ignisHead
+      head <- get ignisHead
+
+      set ignisHead $ VT.mergeL Pr.localVersion oldTrie newTrie head
 
       -- The following tells the caller that it should call "update"
       -- again (with the latest atomic updates, if any), which will
@@ -240,15 +264,12 @@ nextMessages now =
 
     Just messages -> return messages
 
-XXX
--- todo: we need to serialize updates based on the last revision we
--- received from the server, not (necessarily) the last one we sent
-
 updatePublisher = do
-  revision <- (+ 1) <$> get (ignisPipe
-                             . Pi.pipeSubscriber
-                             . Su.subscriberPublished
-                             . Su.forestRevision)
+  published <- get (ignisPipe
+                    . Pi.pipeSubscriber
+                    . Su.subscriberPublished)
+
+  let revision = 1 + (Pr.getForestRevision $ Su.getForestMessage published)
 
   if revision == 0 then
     -- we haven't received a complete, valid revision from the server
@@ -259,8 +280,10 @@ updatePublisher = do
     else do
     diff <- get ignisDiff
 
+    rejected <- D.getDesRejected <$> get ignisDeserializer
+
     serialized <- lend ignisPRNG Se.serializerPRNG ignisSerializer
-                  $ Se.serialize revision diff
+                  $ Se.serialize published rejected revision diff
 
     with (ignisPipe . Pi.pipePublisher) $ Pu.update serialized
 
@@ -278,13 +301,13 @@ makeDiff head = do
 
   validateDiff
     me
-    (Su.getForestRevision published)
+    (Pr.getForestRevision $ Su.getForestMessage published)
     (D.getDesRules deserializer)
     (D.getDesDefaultACL deserializer)
     head
     (T.diff (D.getDesSanitized deserializer) head)
 
-validateDiff :: C.PublicKey ->
+validateDiff :: Cr.PublicKey ->
                 Integer ->
                 R.Rules ->
                 ACL.ACL ->

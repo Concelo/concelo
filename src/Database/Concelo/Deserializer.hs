@@ -4,6 +4,7 @@ module Database.Concelo.Deserializer
   ( Deserializer()
   , desSanitized
   , getDesSanitized
+  , getDesRejected
   , getDesDefaultACL
   , getDesRules
   , deserializer
@@ -11,7 +12,6 @@ module Database.Concelo.Deserializer
 
 import Database.Concelo.Control (get, patternFailure, with)
 import Data.Maybe (fromMaybe)
-import Data.Foldable (toList)
 import Control.Applicative ((<|>))
 import Control.Monad (foldM)
 
@@ -39,7 +39,7 @@ data Deserializer =
                , getDesRules :: R.Rules
                , getDesDependencies :: BT.BiTrie BS.ByteString
                , getDesSanitized :: VT.VTrie BS.ByteString Pr.Value
-               , getDesRejected :: T.Trie BS.ByteString UnsanitizedElement
+               , getDesRejected :: T.Trie BS.ByteString [BS.ByteString]
                , getDesPRNG :: Cr.PRNG }
 
 desPrivateKey =
@@ -63,13 +63,16 @@ desDependencies =
 desSanitized =
   L.lens getDesSanitized (\x v -> x { getDesSanitized = v })
 
+desRejected =
+  L.lens getDesRejected (\x v -> x { getDesRejected = v })
+
 desPRNG :: L.Lens' Deserializer Cr.PRNG
 desPRNG =
   L.lens getDesPRNG (\x v -> x { getDesPRNG = v })
 
 deserializer private permitAdmins defaultACL =
   Deserializer private permitAdmins defaultACL T.empty
-  R.identity BT.empty VT.empty undefined
+  R.identity BT.empty VT.empty T.empty undefined
 
 maybeHead = \case
   x:_ -> Just x
@@ -82,7 +85,7 @@ maybeTail = \case
 visitDirty revision acl rules result =
   T.foldrKeys (visit M.empty (Pa.leaf ()) rules acl dirty) result dirty
   where
-    (dirty, _, _) = result
+    (dirty, _, _, _) = result
 
     updateTrie path = \case
       Nothing -> T.subtract path
@@ -133,7 +136,8 @@ visitDirty revision acl rules result =
                 Just tail ->
                   visitValues
                   (remainingDirty, sanitized, rejected, dependencies')
-                  (firstValid <|> (L.set Pr.valueACL acl' <$> value)) tail
+                  (firstValid <|> (fmap (L.set Pr.valueACL acl') <$> value))
+                  tail
 
                 Nothing ->
                   T.foldrKeys visit'
@@ -152,7 +156,8 @@ visitDirty revision acl rules result =
                    if null map then
                      T.subtract path rejected
                    else
-                     T.union (const (M.keys map) <$> path) rejected,
+                     T.union (const (M.keys map) <$> path)
+                     rejected,
 
                    dependencies')
                   dirty' in
@@ -211,6 +216,9 @@ emptyUnsanitizedElement = UnsanitizedElement M.empty
 unionUnsanitizedWithRaw hash signer acl small large =
   T.foldrPathsAndValues visit large small where
 
+    visit :: (Pa.Path BS.ByteString BS.ByteString, BS.ByteString) ->
+             T.Trie BS.ByteString UnsanitizedElement ->
+             T.Trie BS.ByteString UnsanitizedElement
     visit (path, value) =
       let e@(UnsanitizedElement map) =
             update (fromMaybe emptyUnsanitizedElement (T.findValue path large))
@@ -218,7 +226,7 @@ unionUnsanitizedWithRaw hash signer acl small large =
       if null map then
         id
       else
-        T.union (e <$> path)
+        T.union (const e <$> path)
 
     update element@(UnsanitizedElement map) new =
       case Pr.parseValue signer acl new of
@@ -228,6 +236,9 @@ unionUnsanitizedWithRaw hash signer acl small large =
 unionUnsanitized small large =
   T.foldrPathsAndValues visit large small where
 
+    visit :: (Pa.Path BS.ByteString UnsanitizedElement, UnsanitizedElement) ->
+             T.Trie BS.ByteString UnsanitizedElement ->
+             T.Trie BS.ByteString UnsanitizedElement
     visit (path, value) =
       let e@(UnsanitizedElement map) =
             update (fromMaybe emptyUnsanitizedElement (T.findValue path large))
@@ -235,7 +246,7 @@ unionUnsanitized small large =
       if null map then
         id
       else
-        T.union (e <$> path)
+        T.union (const e <$> path)
 
     update (UnsanitizedElement old) (UnsanitizedElement new) =
       UnsanitizedElement $ M.union new old
@@ -267,13 +278,13 @@ updateUnsanitizedDiff' key acl (obsoleteUnsanitized, newUnsanitized)
         Pr.Leaf { Pr.getLeafSigned = signed
                 , Pr.getLeafName = name
                 , Pr.getLeafBody = body } ->
+          -- todo: we should just grab this from the SyncTree rather
+          -- than decrypt and parse it all over again
           (Pr.parseTrie <$> Cr.decryptSymmetric key body) >>= \case
             -- todo: handle defragmentation
-            Just trie -> do
-              hash <- chunkHash leaf
-
+            Just trie ->
               return $ unionUnsanitizedWithRaw
-              hash (Pr.getSignedSigner signed) acl trie result
+                (Pa.keys name !! 2) (Pr.getSignedSigner signed) acl trie result
 
             -- todo: include this leaf in the set of rejects somehow.
             -- Currently, the code only knows how to reject individual
@@ -293,7 +304,7 @@ updateUnsanitizedDiff oldForest newForest result (stream, newTree) = do
   privateKey <- get desPrivateKey
 
   let oldTree =
-        fromMaybe (Su.emptyTree stream)
+        fromMaybe (Su.emptyTree stream Nothing)
         $ VM.lookup stream
         $ Su.getForestTreeMap oldForest
 
@@ -311,9 +322,9 @@ updateUnsanitizedDiff oldForest newForest result (stream, newTree) = do
 
       diffChunks
         (Su.getForestChunks oldForest)
-        (Su.getTreeLeaves oldTree)
+        (Pr.getTreeLeaves $ Su.getTreeMessage oldTree)
         (Su.getForestChunks newForest)
-        (Su.getTreeLeaves newTree)
+        (Pr.getTreeLeaves $ Su.getTreeMessage newTree)
 
         >>= updateUnsanitizedDiff'
         (Cr.toSymmetric key)
@@ -328,6 +339,7 @@ deserialize old new = do
   permitAdmins <- get desPermitAdmins
   oldRules <- get desRules
   oldSanitized <- get desSanitized
+  oldRejected <- get desRejected
   oldDependencies <- get desDependencies
 
   unsanitizedDiff@(obsoleteUnsanitized, newUnsanitized) <-
@@ -337,7 +349,8 @@ deserialize old new = do
   unsanitized <- updateUnsanitized unsanitizedDiff <$> get desUnsanitized
 
   defaultACL <-
-    if Su.getForestACL old == Su.getForestACL new then
+    let acl = Pr.getForestACL . Su.getForestMessage in
+    if acl old == acl new then
       get desDefaultACL
     else
       -- todo: union this ACL with permitAdmins
@@ -349,7 +362,7 @@ deserialize old new = do
      && null (T.sub Pr.rulesKey newUnsanitized) then
     let (sanitized, rejected, dependencies) =
           updateSanitized
-          (Su.getForestRevision new)
+          (Pr.getForestRevision $ Su.getForestMessage new)
           defaultACL
           oldSanitized
           oldRejected
@@ -365,6 +378,7 @@ deserialize old new = do
           0
           permitAdmins
           (VT.sub Pr.rulesKey oldSanitized)
+          T.empty
           (T.sub Pr.rulesKey unsanitized)
           R.identity
           BT.empty
@@ -376,7 +390,7 @@ deserialize old new = do
 
     let (sanitized, rejected, dependencies) =
           updateSanitized
-          (Su.getForestRevision new)
+          (Pr.getForestRevision $ Su.getForestMessage new)
           defaultACL
           VT.empty
           T.empty

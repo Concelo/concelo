@@ -4,28 +4,29 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RecursiveDo #-}
 module Database.Concelo.SyncTree
   ( Serializer(serialize, encrypt)
   , SyncTree()
+  , Chunk()
   , empty
-  , chunkHeight
-  , chunkBody
-  , chunkName
-  , chunkMembers
+  , chunkToMessage
   , update
+  , visit
   , root ) where
 
-import Database.Concelo.Control (get, patternFailure, with, updateM,
-                                 set, bsShow, maybeToAction, eitherToAction,
-                                 run)
+import Database.Concelo.Control (get, patternFailure, with, set, bsShow,
+                                 maybeToAction, eitherToAction, run, bsRead)
 import Control.Applicative ((<|>))
-import Control.Monad (foldM)
+import Control.Monad (foldM, when)
+import Data.Maybe (fromMaybe)
 
 import qualified Control.Lens as L
 import qualified Control.Monad.State as S
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Foldable as F
 import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.Map as M
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Path as Pa
 import qualified Database.Concelo.Crypto as Cr
@@ -68,11 +69,14 @@ data Chunk a = Group { getGroupName :: Key
 
              | Leaf { getLeafSerialized :: BS.ByteString
                     , getLeafPath :: Pa.Path Key a }
+
              deriving Show
 
 data SyncTree a = SyncTree { getTreeByName :: T.Trie Key (Chunk a)
                            , getTreeByReverseKeyMember :: T.Trie Key (Chunk a)
                            , getTreeByHeightVacancy :: T.Trie Key (Chunk a) }
+
+treeByName = L.lens getTreeByName (\t v -> t { getTreeByName = v })
 
 treeByReverseKeyMember :: L.Lens' (SyncTree a) (T.Trie Key (Chunk a))
 treeByReverseKeyMember =
@@ -88,7 +92,7 @@ groupKey = "g"
 
 emptyGroup = Group (Cr.hash []) 1 T.empty BS.empty
 
-empty = SyncTree T.empty (T.index byHeightVacancy [emptyGroup]) emptyGroup
+empty = SyncTree T.empty T.empty T.empty
 
 root = fromMaybe (Pa.leaf ())
        . (fmap (const ()) <$>)
@@ -111,10 +115,11 @@ visitRejects rejects = mapM_ visit $ M.pairs $ invert rejects where
 
   invert = T.foldrPathsAndValues visitList M.empty where
     visitList (path, list) result = foldr visitName result list where
-      visitName name = M.modify name (T.union path . fromMaybe T.empty)
+      visitName name = M.modify name (Just . T.union path . fromMaybe T.empty)
 
   visit (name, trie) =
-    (M.lookup name <$> get (stateTree . treeByName)) >>= \case
+    (T.findValue (Pa.singleton name ())
+     <$> get (stateTree . treeByName)) >>= \case
       Nothing -> return ()
       Just group -> do
         Co.update stateObsolete $ T.union $ byHeightVacancy group
@@ -301,11 +306,19 @@ addNewGroups height =
               $ T.union (byHeightVacancy combined)
               $ T.subtract (byHeightVacancy group) groups
 
+chunkToMessage private level treeStream forestStream chunk =
+  case chunkHeight chunk of
+    1 -> Pr.leaf private level treeStream forestStream $ chunkBody chunk
+
+    _ -> Pr.group private level (chunkHeight chunk) treeStream forestStream
+         $ foldr (\member -> (chunkName member :)) []
+         $ chunkMembers chunk
+
 update deserialize (obsolete, new) tree =
   do
     rec obsoleteChunks <- foldM (convert $ getTreeByName tree) [] obsolete
 
-        newChunks <- foldM (convert name) [] obsolete
+        newChunks <- foldM (convert name) [] new
 
         name <-
           return $ updateIndex byName getTreeByName obsoleteChunks newChunks
@@ -318,7 +331,7 @@ update deserialize (obsolete, new) tree =
           updateIndex byHeightVacancy getTreeByHeightVacancy
           obsoleteChunks newChunks
 
-    SyncTree name reverseKeyMember heightVacancy
+    return $ SyncTree name reverseKeyMember heightVacancy
   where
     convert nameTrie result message =
       (: result) <$> messageToChunk nameTrie message
@@ -328,9 +341,10 @@ update deserialize (obsolete, new) tree =
                , Pr.getGroupMembers = members } -> do
 
         let visit result path =
-              case T.findValue (Pa.keys path !! 2) nameTrie of
+              case T.findValue (Pa.singleton (Pa.keys path !! 2) ()) nameTrie
+              of
                 Nothing -> patternFailure
-                Just chunk -> return $ T.union (T.index byName chunk) result
+                Just chunk -> return $ T.union (byName chunk) result
 
         memberChunks <- foldM visit T.empty $ T.paths members
 
@@ -339,14 +353,19 @@ update deserialize (obsolete, new) tree =
 
       Pr.Leaf { Pr.getLeafName = name
               , Pr.getLeafBody = body } -> do
-        trie <- deserialize body
+        -- todo: handle fragmentation
+        trie <- fromMaybe T.empty <$> deserialize body
 
         return $ Group (Pa.keys name !! 2) (bsRead (Pa.keys name !! 1))
-          (Leaf undefined <$> trie) undefined
+          (T.foldrPaths (\p -> T.union (const (Leaf undefined p) <$> p))
+           T.empty trie)
+          undefined
+
+      _ -> return emptyGroup
 
     updateIndex index accessor obsoleteChunks newChunks =
-      (foldr (T.union . T.index index)
-       (foldr (T.subtract . T.index index)
+      (foldr (T.union . index)
+       (foldr (T.subtract . index)
         (accessor tree)
         obsoleteChunks)
        newChunks)
@@ -361,6 +380,14 @@ split path =
 
 toLeaves leaves path = flip T.union leaves . T.super "0" <$> split path
 
+visit :: Serializer a s =>
+         SyncTree a ->
+         T.Trie BS.ByteString [BS.ByteString] ->
+         T.Trie BS.ByteString a ->
+         T.Trie BS.ByteString a ->
+         Co.Action (s a) (T.Trie BS.ByteString (Chunk a),
+                          T.Trie BS.ByteString (Chunk a),
+                          Pr.Name)
 visit tree rejects obsolete new = do
   serializer <- S.get
 
@@ -376,4 +403,5 @@ visit tree rejects obsolete new = do
   S.put (getStateSerializer state)
 
   return (getStateObsolete state,
-          getStateNew state)
+          getStateNew state,
+          root $ getStateTree state)

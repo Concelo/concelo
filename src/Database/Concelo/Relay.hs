@@ -100,9 +100,9 @@ updateStreams' publicKey oldTrees newTrees streams =
       if T.member
          (Pa.super Pr.aclReaderKey $ Pa.singleton (C.fromPublic publicKey) ())
          (Su.getTreeACLTrie new)
-         && (not $ Su.getTreeOptional new)
+         && (not $ Pr.getTreeOptional $ Su.getTreeMessage new)
       then
-        Se.insert (Su.getTreeStream new) streams
+        Se.insert (Pr.getTreeStream $ Su.getTreeMessage new) streams
       else
         streams
 
@@ -167,7 +167,9 @@ receive = \case
 
         subscriber' <- eitherToAction $ exec (Su.receive message) subscriber
 
-        let revision = Su.getForestRevision . Su.getSubscriberPublished
+        let revision = Pr.getForestRevision
+                       . Su.getForestMessage
+                       . Su.getSubscriberPublished
 
         if revision subscriber' > revision subscriber then do
           return $ Just subscriber'
@@ -186,15 +188,16 @@ nextMessages now = do
 
     Just _ -> do
       let lens = relayPipe . Pi.pipeSubscriber . Su.subscriberPublished
-                 . Su.forestName
 
-      published <- Pr.Published <$> get lens
+      published <-
+        Pr.Published . Pr.getForestName . Su.getForestMessage <$> get lens
 
       -- todo: actually persist incoming revisions to durable storage
       -- and send Pr.Persisted messages only once they are safely
       -- stored; until then, we just pretend the currently published
       -- revision has been persisted
-      persisted <- Pr.Persisted <$> get lens
+      persisted <-
+        Pr.Persisted . Pr.getForestName . Su.getForestMessage <$> get lens
 
       return [published, persisted]
 

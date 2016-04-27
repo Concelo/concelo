@@ -1,6 +1,7 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Database.Concelo.Crypto
   ( derivePrivate
   , derivePublic
@@ -8,6 +9,7 @@ module Database.Concelo.Crypto
   , toPublic
   , fromPrivate
   , toPrivate
+  , dummyKey
   , fromSymmetric
   , toSymmetric
   , newSymmetric
@@ -196,6 +198,10 @@ deriveKey size = PBKDF2.generate prf $ PBKDF2.Parameters iterations size
 derivePrivate password salt =
   PrivateKey $ snd $ fst $ R.withDRG (R.drgNewTest $ deriveSeed password salt)
   $ RSA.generate asymmetricKeySize defaultExponent
+
+dummyKey = derivePrivate
+           ("secret" :: BS.ByteString)
+           ("trust@every.one" :: BS.ByteString)
 
 derivePublic = PublicKey . RSAT.private_pub . getPrivateKey
 

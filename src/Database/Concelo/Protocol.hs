@@ -71,6 +71,7 @@ module Database.Concelo.Protocol
   , value
   , serializeValue
   , serializeTrie
+  , serializeName
   , serializeNames
   , parseValue
   , parseTrie

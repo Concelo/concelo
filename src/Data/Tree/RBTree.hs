@@ -23,7 +23,7 @@ module Data.Tree.RBTree (
   modify, modifyVersioned,
   -- * Search
   (<<?), search, searchOrd, searchFast, searchMax, searchMin,
-  searchInterval, searchIntervalOrd, first,
+  searchInterval, searchIntervalOrd, first, Data.Tree.RBTree.last,
   -- * Conversion
   toList, fromList,
   -- * Difference
@@ -569,3 +569,6 @@ value t = case t of
 
 first :: RBTree a -> Maybe a
 first = value . toTree id . leftMostZip . toZip
+
+last :: RBTree a -> Maybe a
+last = value . toTree id . rightMostZip . toZip

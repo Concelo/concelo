@@ -13,7 +13,7 @@ import Database.Concelo.Control (exception, get, set, with, patternFailure,
                                  update, getThenSet, eitherToAction, run)
 
 import Control.Monad (when, foldM)
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, isNothing, fromJust)
 
 import qualified Control.Lens as L
 import qualified Data.ByteString as BS
@@ -22,7 +22,7 @@ import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.ACL as ACL
 import qualified Database.Concelo.Control as Co
 import qualified Database.Concelo.Crypto as Cr
-import qualified Database.Concelo.Map as M
+import qualified Database.Concelo.VMap as VM
 import qualified Database.Concelo.SyncTree as ST
 import qualified Database.Concelo.Subscriber as Su
 import qualified Database.Concelo.Trie as T
@@ -39,14 +39,6 @@ serializerPrivate =
 serializerPRNG :: L.Lens' Serializer Cr.PRNG
 serializerPRNG =
   L.lens getSerializerPRNG (\x v -> x { getSerializerPRNG = v })
-
-serializerTrees :: L.Lens' Serializer (M.Map BS.ByteString Tree)
-serializerTrees =
-  L.lens getSerializerTrees (\x v -> x { getSerializerTrees = v })
-
-serializerForest :: L.Lens' Serializer Forest
-serializerForest =
-  L.lens getSerializerForest (\x v -> x { getSerializerForest = v })
 
 serializerDiff :: L.Lens' Serializer (T.Trie BS.ByteString Pr.Message,
                                       T.Trie BS.ByteString Pr.Message)
@@ -72,9 +64,7 @@ syncStatePRNG :: L.Lens' (SyncState a) Cr.PRNG
 syncStatePRNG =
   L.lens getSyncStatePRNG (\x v -> x { getSyncStatePRNG = v })
 
-serializer private stream =
-  Serializer private undefined M.empty (Forest stream ST.empty undefined)
-  (T.empty, T.empty)
+serializer private = Serializer private undefined (T.empty, T.empty)
 
 split maxSize s =
   let (a, b) = BS.splitAt maxSize s in
@@ -105,23 +95,26 @@ instance ST.Serializer a SyncState where
         with syncStatePRNG
           $ Cr.encryptSymmetric key (plaintext `BS.append` padding)
 
-newTree stream = do
-  key <- with serializerPRNG Cr.newSymmetric
-  return $ L.set Su.treeKey key $ Su.emptyTree stream
+newTree stream =
+  Su.emptyTree stream . Just <$> with serializerPRNG Cr.newSymmetric
 
-chunkToMessage private level treeStream forestStream chunk =
-  case ST.chunkHeight chunk of
-    1 -> Pr.leaf private level treeStream forestStream $ ST.chunkBody chunk
-
-    _ -> Pr.group private level (ST.chunkHeight chunk) treeStream forestStream
-         $ foldr (\member -> (ST.chunkName member :)) []
-         $ ST.chunkMembers chunk
-
-visitSync serialize level syncTree key treeStream forestStream rejects obsolete new = do
+visitSync :: (T.Trie BS.ByteString a ->
+              BS.ByteString) ->
+             BS.ByteString ->
+             ST.SyncTree a ->
+             Maybe Cr.SymmetricKey ->
+             BS.ByteString ->
+             BS.ByteString ->
+             T.Trie BS.ByteString [BS.ByteString] ->
+             T.Trie BS.ByteString a ->
+             T.Trie BS.ByteString a ->
+             Co.Action Serializer Pr.Name
+visitSync serialize level syncTree key treeStream forestStream rejected
+  obsolete new = do
   prng <- get serializerPRNG
 
-  ((obsolete, new), SyncState _ _ prng') <-
-    eitherToAction $ run (ST.visit syncTree rejects obsolete new)
+  ((obsolete, new, root), SyncState _ _ prng') <-
+    eitherToAction $ run (ST.visit syncTree rejected obsolete new)
     (SyncState serialize key prng)
 
   set serializerPRNG prng'
@@ -129,7 +122,7 @@ visitSync serialize level syncTree key treeStream forestStream rejects obsolete 
   private <- get serializerPrivate
 
   let c2m = with serializerPRNG
-            . Pr.chunkToMessage private level treeStream forestStream
+            . ST.chunkToMessage private level treeStream forestStream
 
   obsoleteMessages <- mapM c2m obsolete
 
@@ -139,7 +132,9 @@ visitSync serialize level syncTree key treeStream forestStream rejects obsolete 
     (T.union obsoleteMessages allObsolete,
      T.union newMessages allNew)
 
-visitTrees forest rejects revision obsoleteByACL newByACL =
+  return root
+
+visitTrees forest rejected revision obsoleteByACL newByACL =
   foldM visit (T.empty, T.empty) $ T.keys unionByACL where
     unionByACL = T.union obsoleteByACL newByACL
 
@@ -151,23 +146,48 @@ visitTrees forest rejects revision obsoleteByACL newByACL =
                                  $ T.sub stream unionByACL)
 
       if (ACL.isWriter (Cr.derivePublic private) acl) then do
-        let currentTree = M.lookup stream $ Su.getForestTreeMap forest
+        let currentTree = VM.lookup stream $ Su.getForestTreeMap forest
 
         tree <- maybe (newTree stream) return currentTree
 
-        visitSync serializeValues Pr.treeLeafLevel sync
-          (Just $ Su.getTreeKey tree) stream forestStream
-          rejects (T.sub stream obsoleteByACL) (T.sub stream newByACL)
+        leafRoot <- visitSync
+                    serializeValues
+                    Pr.treeLeafLevel
+                    (Su.getTreeSync tree)
+                    (Su.getTreeKey tree)
+                    stream
+                    (Pr.getForestStream $ Su.getForestMessage forest)
+                    rejected
+                    (T.sub stream obsoleteByACL)
+                    (T.sub stream newByACL)
 
-        when (isNothing currentTree) $ do
-          aclTrie <- with serializerPRNG $ ACL.toTrie (Su.getTreeKey tree) acl
+        aclRoot <-
+          if isNothing currentTree then do
+            aclTrie <- with serializerPRNG
+                       $ ACL.toTrie (fromJust $ Su.getTreeKey tree) acl
 
-          visitSync serializeStrings Pr.treeACLLevel ST.empty Nothing stream
-            forestStream T.empty T.empty aclTrie
+            visitSync
+              serializeStrings
+              Pr.treeACLLevel
+              ST.empty
+              Nothing
+              stream
+              (Pr.getForestStream $ Su.getForestMessage forest)
+              T.empty
+              T.empty
+              aclTrie
+          else
+            return $ Pr.getTreeACL $ Su.getTreeMessage tree
 
         message <-
-          with serializerPRNG $ Pr.tree private stream forestStream False
-          revision (ST.root aclSync) (ST.root leafSync)
+          with serializerPRNG $ Pr.tree
+          private
+          stream
+          (Pr.getForestStream $ Su.getForestMessage forest)
+          False
+          revision
+          aclRoot
+          leafRoot
 
         update serializerDiff $ \(obsolete, new) ->
           (if isJust currentTree then
@@ -178,7 +198,7 @@ visitTrees forest rejects revision obsoleteByACL newByACL =
            T.union (const message <$> Pr.getTreeName message) new)
 
         return (if isJust currentTree then
-                  T.union (Pr.getTreeName $ getTreeMessage tree) obsolete
+                  T.union (Pr.getTreeName $ Su.getTreeMessage tree) obsolete
                 else
                   obsolete,
                 T.union (Pr.getTreeName message) new)
@@ -189,15 +209,28 @@ visitTrees forest rejects revision obsoleteByACL newByACL =
 visitForest forest revision (obsoleteTrees, newTrees) = do
   private <- get serializerPrivate
 
-  visitSync serializeNames Pr.forestTreeLevel (getForestTreeSync forest)
-    Nothing BS.empty (getForestStream forest) T.empty obsoleteTrees newTrees
+  treeRoot <- visitSync
+              serializeNames
+              Pr.forestTreeLevel
+              (Su.getForestTreeSync forest)
+              Nothing
+              BS.empty
+              (Pr.getForestStream $ Su.getForestMessage forest)
+              T.empty
+              obsoleteTrees
+              newTrees
 
-  let old = getForestMessage forest
+  let old = Su.getForestMessage forest
 
   message <-
-    with serializerPRNG $ Pr.forest private (getForestStream forest) revision
-    (Pr.getForestAdminRevision old) (Pr.getForestAdminSigned old)
-    (Pr.getForestACL old) (ST.root treeSync)
+    with serializerPRNG $ Pr.forest
+    private
+    (Pr.getForestStream $ Su.getForestMessage forest)
+    revision
+    (Pr.getForestAdminRevision old)
+    (Pr.getForestAdminSigned old)
+    (Pr.getForestACL old)
+    treeRoot
 
   update serializerDiff $ \(obsolete, new) ->
     (T.union (const old <$> Pr.getForestName old) obsolete,
@@ -208,11 +241,11 @@ byACL path value = Pa.super (ACL.hash $ L.view Pr.valueACL value) path
 group f = T.foldrPathsAndValues visit T.empty where
   visit (path, value) = T.union (f path value)
 
-serialize forest rejects revision (obsolete, new) = do
+serialize forest rejected revision (obsolete, new) = do
   let obsoleteByACL = group byACL obsolete
       newByACL = group byACL new
 
-  visitTrees forest rejects revision obsoleteByACL newByACL
+  visitTrees forest rejected revision obsoleteByACL newByACL
     >>= visitForest forest revision
 
   getThenSet serializerDiff (T.empty, T.empty)

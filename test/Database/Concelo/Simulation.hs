@@ -224,9 +224,7 @@ arbitraryTasks =
 
 stream = "my stream"
 
-admin = Cr.derivePrivate
-        ("secret" :: BS.ByteString)
-        ("trust@every.one" :: BS.ByteString)
+admin = Cr.dummyKey
 
 admins = [Cr.fromPublic $ Cr.derivePublic admin]
 
