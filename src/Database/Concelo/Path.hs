@@ -9,7 +9,9 @@ module Database.Concelo.Path
   , valueHere
   , sub
   , super
-  , append ) where
+  , append
+  , Database.Concelo.Path.init
+  , initLast ) where
 
 data Path k v = Path { getPathKeys :: [k]
                      , getPathValue :: v } deriving (Eq, Show)
@@ -41,3 +43,13 @@ sub = \case
 super k (Path ks v) = Path (k:ks) v
 
 append (Path ks v) k = Path (ks ++ [k]) v
+
+initLast' = \case
+  [] -> error "empty list"
+  [k] -> ([], k)
+  k:ks -> let (init, last) = initLast' ks in (k:init, last)
+
+initLast (Path ks v) = (Path init v, last) where
+  (init, last) = initLast' ks
+
+init = fst . initLast

@@ -8,6 +8,7 @@
 module Database.Concelo.SyncTree
   ( Serializer(serialize, encrypt)
   , SyncTree()
+  , getTreeLeaves
   , Chunk()
   , empty
   , chunkToMessage
@@ -18,7 +19,7 @@ module Database.Concelo.SyncTree
 import Database.Concelo.Control (get, patternFailure, with, set, bsShow,
                                  maybeToAction, eitherToAction, run, bsRead)
 import Control.Applicative ((<|>))
-import Control.Monad (foldM, when)
+import Control.Monad (foldM, when, forM_)
 import Data.Maybe (fromMaybe)
 
 import qualified Control.Lens as L
@@ -26,6 +27,7 @@ import qualified Control.Monad.State as S
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Foldable as F
 import qualified Database.Concelo.Trie as T
+import qualified Database.Concelo.VTrie as VT
 import qualified Database.Concelo.Map as M
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Path as Pa
@@ -74,7 +76,8 @@ data Chunk a = Group { getGroupName :: Key
 
 data SyncTree a = SyncTree { getTreeByName :: T.Trie Key (Chunk a)
                            , getTreeByReverseKeyMember :: T.Trie Key (Chunk a)
-                           , getTreeByHeightVacancy :: T.Trie Key (Chunk a) }
+                           , getTreeByHeightVacancy :: T.Trie Key (Chunk a)
+                           , getTreeLeaves :: VT.VTrie Key a }
 
 treeByName = L.lens getTreeByName (\t v -> t { getTreeByName = v })
 
@@ -90,9 +93,7 @@ leafKey = "l"
 
 groupKey = "g"
 
-emptyGroup = Group (Cr.hash []) 1 T.empty BS.empty
-
-empty = SyncTree T.empty T.empty T.empty
+empty = SyncTree T.empty T.empty T.empty VT.empty
 
 root = fromMaybe (Pa.leaf ())
        . (fmap (const ()) <$>)
@@ -130,24 +131,25 @@ visitRejects rejects = mapM_ visit $ M.pairs $ invert rejects where
 
         findObsolete group
 
-findObsolete chunk =
-  let path = byKey chunk in
-  (T.findValue path <$> get (stateTree . treeByReverseKeyMember)) >>= \case
-    Nothing -> patternFailure
-    Just group -> do
-      let groupPath = byHeightVacancy group
+findObsolete chunk = do
+  let path = byFindKey chunk
 
-      obsolete <- get stateObsolete
+  trie <- T.findTrie path <$> get (stateTree . treeByReverseKeyMember)
 
-      if T.member groupPath obsolete then
-        return ()
-        else do
-        Co.update stateObsolete $ T.union groupPath
+  forM_ trie $ \group -> do
+    let groupPath = byHeightVacancy group
 
-        Co.update stateNew
-          $ T.union $ T.index byHeightVacancy $ getGroupMembers group
+    obsolete <- get stateObsolete
 
-        findObsolete group
+    if T.member groupPath obsolete then
+      return ()
+      else do
+      Co.update stateObsolete $ T.union groupPath
+
+      Co.update stateNew
+        $ T.union $ T.index byHeightVacancy $ getGroupMembers group
+
+      findObsolete group
 
 findObsoleteGroups rejects = do
   get stateObsolete >>= mapM_ findObsolete
@@ -160,24 +162,29 @@ findObsoleteGroups rejects = do
 
 getGroupVacancy group = Pr.leafSize - BS.length (getGroupBody group)
 
-byKey chunk@(Leaf _ path) = Pa.super leafKey $ fmap (const chunk) path
-byKey chunk@(Group name _ _ _) = Pa.super groupKey $ Pa.singleton name chunk
+byKey = \case
+  chunk@(Leaf _ path) -> Pa.super leafKey $ fmap (const chunk) path
+  chunk@(Group name _ _ _) -> Pa.super groupKey $ Pa.singleton name chunk
 
-byReverseKeyMember chunk =
-  T.index byKey $ getGroupMembers chunk
+byFindKey = \case
+  chunk@(Leaf _ path) -> Pa.super leafKey $ fmap (const chunk) (Pa.init path)
+  chunk@(Group name _ _ _) -> Pa.super groupKey $ Pa.singleton name chunk
 
-byHeightVacancy chunk =
-  Pa.super (bsShow $ getGroupHeight chunk)
-  $ byVacancy chunk
+byReverseKeyMember group =
+  const group <$> (T.index byKey $ getGroupMembers group)
 
-byVacancy chunk =
-  Pa.super (bsShow $ getGroupVacancy chunk)
-  $ Pa.singleton (getGroupName chunk) chunk
+byHeightVacancy group =
+  Pa.super (bsShow $ getGroupHeight group)
+  $ byVacancy group
 
-byName chunk =
-  Pa.singleton (getGroupName chunk) chunk
+byVacancy group =
+  Pa.super (bsShow $ getGroupVacancy group)
+  $ Pa.singleton (getGroupName group) group
 
-byLeafPath chunk = const chunk <$> getLeafPath chunk
+byName group =
+  Pa.singleton (getGroupName group) group
+
+byLeafPath leaf = const leaf <$> Pa.init (getLeafPath leaf)
 
 -- attempt to combine the most empty existing group with the most
 -- empty new group to minimize fragmentation
@@ -226,7 +233,8 @@ makeGroup members = (case firstValue members of
     (Group _ height _ _) -> fromGroups height
 
   fromLeaves first = do
-    plaintext <- oneExactly <$> (serialize' $ T.index getLeafPath members)
+    plaintext <- oneExactly <$>
+                 (serialize' $ T.index (Pa.init . getLeafPath) members)
 
     let fragment = if single members then Just first else Nothing
 
@@ -314,13 +322,14 @@ chunkToMessage private level treeStream forestStream chunk =
          $ foldr (\member -> (chunkName member :)) []
          $ chunkMembers chunk
 
-update deserialize (obsolete, new) tree =
+update revision deserialize (obsolete, new) tree =
   do
-    rec obsoleteChunks <- foldM (convert $ getTreeByName tree) [] obsolete
+    rec (obsoleteChunks, leafSubset) <-
+          foldM (remove $ getTreeByName tree) ([], getTreeLeaves tree) obsolete
 
-        newChunks <- foldM (convert name) [] new
+        (newChunks, leaves) <- foldM (add named) ([], leafSubset) new
 
-        name <-
+        named <-
           return $ updateIndex byName getTreeByName obsoleteChunks newChunks
 
     let reverseKeyMember =
@@ -331,12 +340,21 @@ update deserialize (obsolete, new) tree =
           updateIndex byHeightVacancy getTreeByHeightVacancy
           obsoleteChunks newChunks
 
-    return $ SyncTree name reverseKeyMember heightVacancy
+    return $ SyncTree named reverseKeyMember heightVacancy leaves
   where
-    convert nameTrie result message =
-      (: result) <$> messageToChunk nameTrie message
+    add nameTrie (groups, leaves) message = do
+      (newGroups, newLeaves) <- convert nameTrie message
 
-    messageToChunk nameTrie = \case
+      return (newGroups ++ groups,
+              VT.union revision newLeaves leaves)
+
+    remove nameTrie (groups, leaves) message = do
+      (obsoleteGroups, obsoleteLeaves) <- convert nameTrie message
+
+      return (obsoleteGroups ++ groups,
+              VT.subtract revision obsoleteLeaves leaves)
+
+    convert nameTrie = \case
       Pr.Group { Pr.getGroupName = name
                , Pr.getGroupMembers = members } -> do
 
@@ -348,20 +366,25 @@ update deserialize (obsolete, new) tree =
 
         memberChunks <- foldM visit T.empty $ T.paths members
 
-        return $ Group (Pa.keys name !! 2) (bsRead (Pa.keys name !! 1))
-          memberChunks undefined
+        return ([Group (Pa.keys name !! 2) (bsRead (Pa.keys name !! 1))
+                 memberChunks undefined],
+                T.empty)
 
       Pr.Leaf { Pr.getLeafName = name
               , Pr.getLeafBody = body } -> do
         -- todo: handle fragmentation
         trie <- fromMaybe T.empty <$> deserialize body
+        -- todo: reject this leaf if the trie is empty
 
-        return $ Group (Pa.keys name !! 2) (bsRead (Pa.keys name !! 1))
-          (T.foldrPaths (\p -> T.union (const (Leaf undefined p) <$> p))
-           T.empty trie)
-          undefined
+        let hash = Pa.keys name !! 2
+            leaves = T.foldrPaths (T.union . flip Pa.append hash) T.empty trie
+            members = T.foldrPaths (T.union . toLeaf) T.empty leaves
+            toLeaf path = const (Leaf undefined path) <$> path
 
-      _ -> return emptyGroup
+        return ([Group hash (bsRead (Pa.keys name !! 1)) members undefined],
+                leaves)
+
+      _ -> return ([], T.empty)
 
     updateIndex index accessor obsoleteChunks newChunks =
       (foldr (T.union . index)
@@ -376,7 +399,7 @@ split path =
   snd . foldr visit (0 :: Int, T.empty) <$> serialize' (toTrie path) where
     visit string (count, trie) =
       (count + 1, T.union (const (Leaf string path') <$> path') trie) where
-        path' = Pa.super (bsShow count) path
+        path' = Pa.super (bsShow count) (Pa.append path BS.empty)
 
 toLeaves leaves path = flip T.union leaves . T.super "0" <$> split path
 

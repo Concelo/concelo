@@ -270,12 +270,13 @@ emptyTree stream key =
   ST.empty
   key
 
-updateTrees :: T.Trie BS.ByteString BS.ByteString ->
+updateTrees :: Integer ->
+               T.Trie BS.ByteString BS.ByteString ->
                Forest ->
                (T.Trie BS.ByteString Pr.Message,
                 T.Trie BS.ByteString Pr.Message) ->
                Co.Action Subscriber (VM.VMap BS.ByteString Tree)
-updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
+updateTrees forestRevision forestACLTrie currentForest (obsoleteTrees, newTrees) =
   do
     subset <- foldM remove currentTrees obsoleteTrees
     foldM add subset newTrees
@@ -369,6 +370,7 @@ updateTrees forestACLTrie currentForest (obsoleteTrees, newTrees) =
                 Just keyString ->
                   let key = Cr.toSymmetric keyString in
                   (, Just key) <$> ST.update
+                  forestRevision
                   (((T.foldrPathsAndValues
                      (\(p, v) ->
                        case Pr.parseValue (Pr.getSignedSigner signed)
@@ -474,9 +476,9 @@ updateForest name current = do
                   received
                   trees
 
-      treeMap <- updateTrees aclTrie current (snd treeDiff)
+      treeMap <- updateTrees revision aclTrie current (snd treeDiff)
 
-      sync <- ST.update (const patternFailure) (fst treeDiff)
+      sync <- ST.update revision (const patternFailure) (fst treeDiff)
               (getForestTreeSync current)
 
       chunks <- updateChunks (getForestChunks current) <$> get subscriberDiff

@@ -10,10 +10,9 @@ module Database.Concelo.Deserializer
   , deserializer
   , deserialize ) where
 
-import Database.Concelo.Control (get, patternFailure, with)
+import Database.Concelo.Control (get)
 import Data.Maybe (fromMaybe)
 import Control.Applicative ((<|>))
-import Control.Monad (foldM)
 
 import qualified Data.ByteString as BS
 import qualified Control.Lens as L
@@ -27,9 +26,9 @@ import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.VTrie as VT
 import qualified Database.Concelo.BiTrie as BT
 import qualified Database.Concelo.Subscriber as Su
-import qualified Database.Concelo.Chunks as Ch
 import qualified Database.Concelo.Crypto as Cr
 import qualified Database.Concelo.ACL as ACL
+import qualified Database.Concelo.SyncTree as ST
 
 data Deserializer =
   Deserializer { getDesPrivateKey :: Cr.PrivateKey
@@ -39,8 +38,7 @@ data Deserializer =
                , getDesRules :: R.Rules
                , getDesDependencies :: BT.BiTrie BS.ByteString
                , getDesSanitized :: VT.VTrie BS.ByteString Pr.Value
-               , getDesRejected :: T.Trie BS.ByteString [BS.ByteString]
-               , getDesPRNG :: Cr.PRNG }
+               , getDesRejected :: T.Trie BS.ByteString [BS.ByteString] }
 
 desPrivateKey =
   L.lens getDesPrivateKey (\x v -> x { getDesPrivateKey = v })
@@ -66,13 +64,9 @@ desSanitized =
 desRejected =
   L.lens getDesRejected (\x v -> x { getDesRejected = v })
 
-desPRNG :: L.Lens' Deserializer Cr.PRNG
-desPRNG =
-  L.lens getDesPRNG (\x v -> x { getDesPRNG = v })
-
 deserializer private permitAdmins defaultACL =
   Deserializer private permitAdmins defaultACL T.empty
-  R.identity BT.empty VT.empty T.empty undefined
+  R.identity BT.empty VT.empty T.empty
 
 maybeHead = \case
   x:_ -> Just x
@@ -210,29 +204,6 @@ newtype UnsanitizedElement =
 
 emptyUnsanitizedElement = UnsanitizedElement M.empty
 
--- todo: there's a lot of code duplicated between
--- unionUnsanitizedWithRaw and unionUnsanitizedWithRaw; fix that
-
-unionUnsanitizedWithRaw hash signer acl small large =
-  T.foldrPathsAndValues visit large small where
-
-    visit :: (Pa.Path BS.ByteString BS.ByteString, BS.ByteString) ->
-             T.Trie BS.ByteString UnsanitizedElement ->
-             T.Trie BS.ByteString UnsanitizedElement
-    visit (path, value) =
-      let e@(UnsanitizedElement map) =
-            update (fromMaybe emptyUnsanitizedElement (T.findValue path large))
-            value in
-      if null map then
-        id
-      else
-        T.union (const e <$> path)
-
-    update element@(UnsanitizedElement map) new =
-      case Pr.parseValue signer acl new of
-        Nothing -> element
-        Just v -> UnsanitizedElement $ M.insert hash v map
-
 unionUnsanitized small large =
   T.foldrPathsAndValues visit large small where
 
@@ -264,72 +235,35 @@ subtractUnsanitized small large =
           else
             T.union ((const $ UnsanitizedElement map') <$> path) result
 
-updateUnsanitizedDiff' key acl (obsoleteUnsanitized, newUnsanitized)
-  (obsoleteLeaves, newLeaves) = do
+addUnsanitized small large =
+  T.foldrPathsAndValues visit large small where
 
-  obsolete <- foldM visit obsoleteUnsanitized obsoleteLeaves
+    visit :: (Pa.Path BS.ByteString Pr.Value, Pr.Value) ->
+             T.Trie BS.ByteString UnsanitizedElement ->
+             T.Trie BS.ByteString UnsanitizedElement
+    visit (path, value) =
+      let (init, last) = Pa.initLast path
 
-  new <- foldM visit newUnsanitized newLeaves
+          (UnsanitizedElement oldMap) =
+            fromMaybe emptyUnsanitizedElement $ T.findValue init large
 
-  return (obsolete, new) where
+          newMap = M.insert last value oldMap
+      in
+      if null newMap then id else
+        T.union (const (UnsanitizedElement newMap) <$> init)
 
-    visit result leaf =
-      case leaf of
-        Pr.Leaf { Pr.getLeafSigned = signed
-                , Pr.getLeafName = name
-                , Pr.getLeafBody = body } ->
-          -- todo: we should just grab this from the SyncTree rather
-          -- than decrypt and parse it all over again
-          (Pr.parseTrie <$> Cr.decryptSymmetric key body) >>= \case
-            -- todo: handle defragmentation
-            Just trie ->
-              return $ unionUnsanitizedWithRaw
-                (Pa.keys name !! 2) (Pr.getSignedSigner signed) acl trie result
+updateUnsanitizedDiff oldForest (stream, newTree)
+  (obsoleteUnsanitized, newUnsanitized) =
+  (addUnsanitized obsolete obsoleteUnsanitized,
+   addUnsanitized new newUnsanitized)
+  where oldTree =
+          fromMaybe (Su.emptyTree stream Nothing)
+          $ VM.lookup stream
+          $ Su.getForestTreeMap oldForest
 
-            -- todo: include this leaf in the set of rejects somehow.
-            -- Currently, the code only knows how to reject individual
-            -- tree elements, but we should also reject an entire leaf
-            -- if it doesn't parse or if it contains an empty trie.
-            Nothing -> return result
+        leaves = ST.getTreeLeaves . Su.getTreeSync
 
-        _ -> patternFailure
-
-diffChunks oldChunks oldRoot newChunks newRoot = do
-  (_, obsoleteLeaves, _, newLeaves) <-
-    Ch.diffChunks oldChunks oldRoot newChunks newRoot
-
-  return (obsoleteLeaves, newLeaves)
-
-updateUnsanitizedDiff oldForest newForest result (stream, newTree) = do
-  privateKey <- get desPrivateKey
-
-  let oldTree =
-        fromMaybe (Su.emptyTree stream Nothing)
-        $ VM.lookup stream
-        $ Su.getForestTreeMap oldForest
-
-      maybeKey =
-        T.findValue
-        (Pa.super Pr.aclReaderKey
-         $ Pa.singleton (Cr.fromPublic $ Cr.derivePublic privateKey) ())
-        (Su.getTreeACLTrie newTree)
-
-  case maybeKey of
-    Nothing -> return result
-
-    Just encryptedKey -> do
-      key <- with desPRNG $ Cr.decryptAsymmetric privateKey encryptedKey
-
-      diffChunks
-        (Su.getForestChunks oldForest)
-        (Pr.getTreeLeaves $ Su.getTreeMessage oldTree)
-        (Su.getForestChunks newForest)
-        (Pr.getTreeLeaves $ Su.getTreeMessage newTree)
-
-        >>= updateUnsanitizedDiff'
-        (Cr.toSymmetric key)
-        (Su.getTreeACLFromTries newTree)
-        result
+        (obsolete, new) = T.diff (leaves oldTree) (leaves newTree)
 
 updateUnsanitized (obsolete, new) currentUnsanitized =
   unionUnsanitized new (subtractUnsanitized obsolete currentUnsanitized)
@@ -342,9 +276,9 @@ deserialize old new = do
   oldRejected <- get desRejected
   oldDependencies <- get desDependencies
 
-  unsanitizedDiff@(obsoleteUnsanitized, newUnsanitized) <-
-    foldM (updateUnsanitizedDiff old new) (T.empty, T.empty)
-    (VM.pairs $ Su.getForestTreeMap new)
+  let unsanitizedDiff@(obsoleteUnsanitized, newUnsanitized) =
+        foldr (updateUnsanitizedDiff old) (T.empty, T.empty)
+        (VM.pairs $ Su.getForestTreeMap new)
 
   unsanitized <- updateUnsanitized unsanitizedDiff <$> get desUnsanitized
 
@@ -371,7 +305,7 @@ deserialize old new = do
           oldDependencies
           unsanitizedDiff in
 
-    get desPRNG >>= St.put . des oldRules dependencies sanitized rejected
+    St.put $ des oldRules dependencies sanitized rejected
     else do
     let (sanitizedRules, _, _) =
           updateSanitized
@@ -399,4 +333,4 @@ deserialize old new = do
           BT.empty
           (T.empty, unsanitized)
 
-    get desPRNG >>= St.put . des rules dependencies sanitized rejected
+    St.put $ des rules dependencies sanitized rejected
