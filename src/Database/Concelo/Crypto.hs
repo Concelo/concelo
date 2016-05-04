@@ -48,9 +48,11 @@ import qualified Database.Concelo.Control as C
 
 newtype PRNG = PRNG R.ChaChaDRG
 
-newtype PrivateKey = PrivateKey { getPrivateKey :: RSAT.PrivateKey } deriving Show
+newtype PrivateKey = PrivateKey { getPrivateKey :: RSAT.PrivateKey }
+                     deriving Show
 
 newtype PublicKey = PublicKey { _getPublicKey :: RSAT.PublicKey }
+                    deriving Show
 
 newtype SymmetricKey = SymmetricKey { fromSymmetric :: BS.ByteString }
 

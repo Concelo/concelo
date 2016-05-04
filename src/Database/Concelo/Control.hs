@@ -46,13 +46,13 @@ module Database.Concelo.Control
   , stringLiteral
   , stringLiteralDelimited
   , mapPair
-  , maybeM
-  , maybeM2
   , eitherToMaybe
   , maybeToAction
   , eitherToAction
   , bsShow
   , bsRead ) where
+
+-- import Debug.Trace
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Char as C
@@ -71,11 +71,15 @@ data Exception = Exception String
                | Success
                deriving (Show)
 
-exception = E.throwError . Exception
+throw :: Exception ->
+         Action s a
+throw = error . show --E.throwError
 
-patternFailure = E.throwError PatternFailure
+exception = throw . Exception
 
-badForest = E.throwError BadForest
+patternFailure = throw PatternFailure
+
+badForest = throw BadForest
 
 missingChunks = E.throwError MissingChunks
 
@@ -115,7 +119,7 @@ getThenSet lens value = S.state $ \s -> (L.view lens s, L.set lens value s)
 
 try either =
   either >>= \case
-    Left error -> E.throwError error
+    Left error -> throw error
     Right result -> return result
 
 with :: L.Lens' s a -> Action a b -> Action s b
@@ -133,20 +137,12 @@ lend src dst lens action = do
 
 mapPair f (x, y) = (f x, f y)
 
-maybeM f x = case f x of
-  Nothing -> patternFailure
-  Just v -> return v
-
-maybeM2 f x y = case f x y of
-  Nothing -> patternFailure
-  Just v -> return v
-
 eitherToMaybe = \case
   Left _ -> Nothing
   Right v -> Just v
 
 maybeToAction error = \case
-  Nothing -> E.throwError error
+  Nothing -> throw error
   Just v -> return v
 
 eitherToAction = \case
@@ -176,7 +172,7 @@ subtractPrefix p s =
   let (a, b) = BS.splitAt (BS.length p) s in
   if p == a then Just b else Nothing
 
-prefix t =
+prefix t = do
   subtractPrefix t <$> get parseString >>= \case
     Just s -> do
       set parseString s
@@ -194,7 +190,7 @@ a >>| b = do
   case run a s of
     Right (x, s') -> S.put s' >> return x
     Left NoParse -> b
-    Left error -> E.throwError error
+    Left error -> throw error
 
 zeroOrMore parser =
   zeroOrOne parser >>= \case

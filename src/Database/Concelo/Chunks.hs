@@ -2,7 +2,8 @@
 module Database.Concelo.Chunks
   ( diffChunks ) where
 
-import Database.Concelo.Control (badForest, maybeM2)
+import Database.Concelo.Control (badForest, maybeToAction,
+                                 Exception(Exception))
 
 import Control.Monad (foldM)
 
@@ -29,23 +30,30 @@ findNewChunks oldChunks newChunks newRoot =
              C.Action s (T.Trie BS.ByteString Pr.Message,
                          T.Trie BS.ByteString Pr.Message,
                          T.Trie BS.ByteString ())
-    visit (new, newLeaves, found) name =
-      case T.findValue name oldChunks of
-        Just _ ->
-          return (new, newLeaves, T.union name found)
+    visit result@(new, newLeaves, found) name =
+      if null (Pa.keys name) then
+        return result
+      else
+        case T.findValue name oldChunks of
+          Just _ ->
+            return (new, newLeaves, T.union name found)
 
-        Nothing -> maybeM2 T.findValue name newChunks >>= \chunk ->
-          -- we do not allow a given chunk to have more than one
-          -- parent since it confuses the diff algorithm
-          if T.member name new then
-            badForest
-          else
-            foldM visit (T.union (const chunk <$> name) new,
-                         if chunkIsLeaf chunk then
-                           T.union (const chunk <$> name) newLeaves
-                         else
-                           newLeaves,
-                         found) (T.paths $ chunkMembers chunk)
+          Nothing ->
+            maybeToAction
+            (Exception ("could not find " ++ show name
+                        ++ " in " ++ show newChunks))
+            (T.findValue name newChunks) >>= \chunk ->
+            -- we do not allow a given chunk to have more than one
+            -- parent since it confuses the diff algorithm
+            if T.member name new then
+              badForest
+            else
+              foldM visit (T.union (const chunk <$> name) new,
+                           if chunkIsLeaf chunk then
+                             T.union (const chunk <$> name) newLeaves
+                           else
+                             newLeaves,
+                           found) (T.paths $ chunkMembers chunk)
 
 findObsoleteChunks oldChunks oldRoot found =
   visit (T.empty, T.empty) oldRoot where
@@ -55,10 +63,13 @@ findObsoleteChunks oldChunks oldRoot found =
              C.Action s (T.Trie BS.ByteString Pr.Message,
                          T.Trie BS.ByteString Pr.Message)
     visit result@(obsolete, obsoleteLeaves) name =
-      if T.member name found then
+      if null (Pa.keys name) || T.member name found then
         return result
       else
-        maybeM2 T.findValue name oldChunks >>= \chunk ->
+        maybeToAction
+        (Exception ("could not find " ++ show name
+                    ++ " in " ++ show oldChunks))
+        (T.findValue name oldChunks) >>= \chunk ->
           foldM visit (T.union (const chunk <$> name) obsolete,
                        if chunkIsLeaf chunk then
                          T.union (const chunk <$> name) obsoleteLeaves

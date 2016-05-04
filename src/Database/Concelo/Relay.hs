@@ -63,8 +63,6 @@ relay admins stream challenge =
 make pipe publicKey challenge =
   Relay pipe (Pi.getPipeSubscriber pipe) Se.empty publicKey challenge
 
-chunks = Su.getSubscriberReceived . Su.getSubscriberClean
-
 setSubscriber new = do
   set relayPendingSubscriber new
 
@@ -81,7 +79,7 @@ setSubscriber new = do
       with (relayPipe . Pi.pipePublisher)
         $ Pu.update
         $ filterDiff streams
-        $ T.diff (chunks previous) (chunks new)
+        $ T.diff (Su.getSubscriberClean previous) (Su.getSubscriberClean new)
 
 updateStreams publicKey oldSubscriber newSubscriber =
   updateStreams' publicKey
@@ -189,16 +187,14 @@ nextMessages now = do
     Just _ -> do
       let lens = relayPipe . Pi.pipeSubscriber . Su.subscriberPublished
 
-      published <-
-        Pr.Published . Pr.getForestName . Su.getForestMessage <$> get lens
-
       -- todo: actually persist incoming revisions to durable storage
       -- and send Pr.Persisted messages only once they are safely
       -- stored; until then, we just pretend the currently published
       -- revision has been persisted
-      persisted <-
-        Pr.Persisted . Pr.getForestName . Su.getForestMessage <$> get lens
 
-      return [published, persisted]
+      published <- Pr.getForestName . Su.getForestMessage <$> get lens
+
+      return $ if null (Pa.keys published) then [] else
+                 [Pr.Published published, Pr.Persisted published]
 
   with relayPipe $ Pi.nextMessages now ping

@@ -6,6 +6,7 @@ module Database.Concelo.Ignis
   ( Ignis()
   , ignis
   , initAdmin
+  , getIgnisPrivate
   , Credentials(PrivateKey, EmailPassword)
   , update
   , receive
@@ -36,7 +37,9 @@ import Database.Concelo.Control (get, set, with, lend, exception, run,
                                  eitherToAction)
 
 import Data.Maybe (fromMaybe)
-import Control.Monad (foldM)
+import Control.Monad (foldM, forM_)
+
+import Debug.Trace
 
 data Ignis = Ignis { getIgnisPrivate :: Cr.PrivateKey
                    , getIgnisSentChallengeResponse :: Bool
@@ -124,7 +127,7 @@ ignis admins credentials stream seed =
 data SyncState a = SyncState
 
 instance ST.Serializer a SyncState where
-  serialize _ = return [BS.empty]
+  serialize trie = return $ Pr.split $ Pr.serializeNames $ fmap (const ()) trie
   encrypt = return . id
 
 initAdmin readers writers = do
@@ -142,11 +145,20 @@ initAdmin readers writers = do
   ((_, aclBody, aclRoot), _) <-
     eitherToAction $ run (ST.visit ST.empty T.empty T.empty aclTrie) SyncState
 
-  mapM_ ((receive =<<)
-         . with ignisPRNG
-         . ST.chunkToMessage private Pr.forestACLLevel BS.empty stream) aclBody
+  -- traceM ("acl root is " ++ show aclRoot ++ "; body is " ++ show aclBody ++ "; trie is " ++ show aclTrie)
 
-  let text = BS.concat [B.fromInteger (0 :: Int), Pr.serializeName aclRoot]
+  forM_ aclBody $ \chunk ->
+    with ignisPRNG (ST.chunkToMessage private Pr.forestACLLevel BS.empty
+                    stream chunk) >>= receive
+
+  aclRootName <-
+    maybe (return $ Pa.leaf ())
+    ((Pr.name <$>)
+     . with ignisPRNG
+     . ST.chunkToMessage private Pr.forestACLLevel BS.empty stream)
+    aclRoot
+
+  let text = BS.concat [B.fromInteger (0 :: Int), Pr.serializeName aclRootName]
 
   signature <- with ignisPRNG $ Cr.sign private text
 
@@ -156,12 +168,16 @@ initAdmin readers writers = do
             0
             0
             (Pr.Signed (Cr.derivePublic private) signature text)
-            aclRoot
+            aclRootName
             (Pa.leaf ())
+
+  traceM ("forest is " ++ show forest)
 
   receive forest
 
   receive $ Pr.Published (Pr.getForestName forest)
+
+  receive $ Pr.Persisted (Pr.getForestName forest)
 
 getHead = getIgnisHead
 
@@ -172,7 +188,7 @@ authenticate = \case
 
 sign private = with ignisPRNG . Cr.sign private
 
-maybeAuthenticate =
+maybeAuthenticate = do
   get ignisSentChallengeResponse >>= \case
     True -> return $ Just []
     False -> get ignisChallenge >>= \case
@@ -207,8 +223,6 @@ receive = \case
       set ignisChallenge $ Just body
 
       set ignisSentChallengeResponse False
-
-      maybeAuthenticate
 
     return False
 
@@ -270,6 +284,8 @@ updatePublisher = do
                     . Su.subscriberPublished)
 
   let revision = 1 + (Pr.getForestRevision $ Su.getForestMessage published)
+
+  traceM ("revision is " ++ show revision)
 
   if revision == 0 then
     -- we haven't received a complete, valid revision from the server

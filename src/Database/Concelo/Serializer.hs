@@ -66,13 +66,6 @@ syncStatePRNG =
 
 serializer private = Serializer private undefined (T.empty, T.empty)
 
-split maxSize s =
-  let (a, b) = BS.splitAt maxSize s in
-  if BS.null b then
-    [a]
-  else
-    a : split maxSize b
-
 serializeValues = Pr.serializeTrie . fmap Pr.serializeValue
 
 serializeStrings = Pr.serializeTrie
@@ -80,7 +73,7 @@ serializeStrings = Pr.serializeTrie
 serializeNames = Pr.serializeNames
 
 instance ST.Serializer a SyncState where
-  serialize trie = split Pr.leafSize <$> ($ trie) <$> get syncStateSerialize
+  serialize trie = Pr.split <$> ($ trie) <$> get syncStateSerialize
 
   encrypt plaintext = do
     let length = BS.length plaintext
@@ -124,15 +117,23 @@ visitSync serialize level syncTree key treeStream forestStream rejected
   let c2m = with serializerPRNG
             . ST.chunkToMessage private level treeStream forestStream
 
-  obsoleteMessages <- mapM c2m obsolete
+      visit result chunk =
+        (\message -> T.union (const message <$> Pr.name message) result)
+        <$> c2m chunk
 
-  newMessages <- mapM c2m new
+  (allObsolete, allNew) <- get serializerDiff
 
-  update serializerDiff $ \(allObsolete, allNew) ->
-    (T.union obsoleteMessages allObsolete,
-     T.union newMessages allNew)
+  allObsolete' <- foldM visit allObsolete obsolete
 
-  return root
+  allNew' <- foldM visit allNew new
+
+  set serializerDiff (allObsolete', allNew')
+
+  maybe (return $ Pa.leaf ())
+    ((Pr.name <$>)
+     . with serializerPRNG
+     . ST.chunkToMessage private level treeStream forestStream)
+    root
 
 visitTrees forest rejected revision obsoleteByACL newByACL =
   foldM visit (T.empty, T.empty) $ T.keys unionByACL where

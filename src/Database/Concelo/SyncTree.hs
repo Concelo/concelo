@@ -10,8 +10,8 @@ module Database.Concelo.SyncTree
   , SyncTree()
   , getTreeLeaves
   , Chunk()
-  , empty
   , chunkToMessage
+  , empty
   , update
   , visit
   , root ) where
@@ -20,6 +20,7 @@ import Database.Concelo.Control (get, patternFailure, with, set, bsShow,
                                  maybeToAction, eitherToAction, run, bsRead)
 import Control.Applicative ((<|>))
 import Control.Monad (foldM, when, forM_)
+import Data.Foldable (toList)
 import Data.Maybe (fromMaybe)
 
 import qualified Control.Lens as L
@@ -316,6 +317,8 @@ addNewGroups height =
 
 chunkToMessage private level treeStream forestStream chunk =
   case chunkHeight chunk of
+    0 -> patternFailure
+
     1 -> Pr.leaf private level treeStream forestStream $ chunkBody chunk
 
     _ -> Pr.group private level (chunkHeight chunk) treeStream forestStream
@@ -408,9 +411,9 @@ visit :: Serializer a s =>
          T.Trie BS.ByteString [BS.ByteString] ->
          T.Trie BS.ByteString a ->
          T.Trie BS.ByteString a ->
-         Co.Action (s a) (T.Trie BS.ByteString (Chunk a),
-                          T.Trie BS.ByteString (Chunk a),
-                          Pr.Name)
+         Co.Action (s a) ([Chunk a],
+                          [Chunk a],
+                          Maybe (Chunk a))
 visit tree rejects obsolete new = do
   serializer <- S.get
 
@@ -425,6 +428,18 @@ visit tree rejects obsolete new = do
 
   S.put (getStateSerializer state)
 
-  return (getStateObsolete state,
-          getStateNew state,
-          root $ getStateTree state)
+  let isGroup = \case
+        Group {} -> True
+        _ -> False
+
+      groups = filter isGroup . toList
+
+      newGroups = groups $ getStateNew state
+      obsoleteGroups = groups $ getStateObsolete state
+
+      root = (T.lastValue
+              $ T.union (T.index byName newGroups)
+              $ T.subtract (T.index byName obsoleteGroups)
+              (getTreeByName $ getStateTree state))
+
+  return (obsoleteGroups, newGroups, root)

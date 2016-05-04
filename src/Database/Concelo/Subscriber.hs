@@ -1,6 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Database.Concelo.Subscriber
   ( Subscriber()
   , subscriber
@@ -27,9 +28,12 @@ module Database.Concelo.Subscriber
   , nextMessage ) where
 
 import Database.Concelo.Control (patternFailure, badForest, missingChunks,
-                                 set, get, update, updateM, getThenUpdate)
+                                 set, get, update, updateM, getThenUpdate,
+                                 exception)
 import Control.Monad (foldM, when)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
+
+import Debug.Trace
 
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Trie as T
@@ -71,7 +75,7 @@ data Subscriber =
              , getSubscriberStream :: BS.ByteString
              , getSubscriberPersisted :: Forest
              , getSubscriberPublished :: Forest
-             , getSubscriberClean :: Subscriber
+             , getSubscriberClean :: VT.VTrie BS.ByteString Pr.Message
              , getSubscriberRequestedTrees :: Se.Set BS.ByteString
              , getSubscriberDiff :: (T.Trie BS.ByteString Pr.Message,
                                      T.Trie BS.ByteString Pr.Message)
@@ -106,7 +110,7 @@ subscriberPublished :: L.Lens' Subscriber Forest
 subscriberPublished =
   L.lens getSubscriberPublished (\x v -> x { getSubscriberPublished = v })
 
-subscriberClean :: L.Lens' Subscriber Subscriber
+subscriberClean :: L.Lens' Subscriber (VT.VTrie BS.ByteString Pr.Message)
 subscriberClean =
   L.lens getSubscriberClean (\x v -> x { getSubscriberClean = v })
 
@@ -122,13 +126,13 @@ subscriberVersion :: L.Lens' Subscriber Integer
 subscriberVersion =
   L.lens getSubscriberVersion (\x v -> x { getSubscriberVersion = v })
 
-subscriber adminTrie publicKey stream = s
+subscriber adminTrie publicKey stream =
+  Subscriber (Incomplete T.empty T.empty) VT.empty BT.empty adminTrie
+  publicKey stream f f VT.empty Se.empty (T.empty, T.empty) 0
   where
     f = emptyForest stream
-    s = Subscriber (Incomplete T.empty T.empty) VT.empty BT.empty adminTrie
-        publicKey stream f f s Se.empty (T.empty, T.empty) 0
 
-receive = \case
+receive message = trace ("receive " ++ show message) $ case message of
   leaf@(Pr.Leaf { Pr.getLeafName = name }) ->
     receiveChunk leaf name T.empty
 
@@ -142,7 +146,7 @@ receive = \case
 
   forest@(Pr.Forest { Pr.getForestName = name
                     , Pr.getForestTrees = trees
-                    , Pr.getForestACL = acl }) ->
+                    , Pr.getForestACL = acl }) -> do
     receiveChunk forest name $ T.union trees $ T.union acl T.empty
 
   Pr.Persisted forest -> updateIncomplete incompletePersisted forest
@@ -159,8 +163,9 @@ updateIncomplete lens name = do
   checkIncomplete
 
 addMissingToGroups member group missing =
-  foldr (addMissingToGroups member) (BT.insert group member missing)
-  $ T.paths $ BT.reverseFind group missing
+  if null (Pa.keys member) then missing else
+    foldr (addMissingToGroups member) (BT.insert group member missing)
+    $ T.paths $ BT.reverseFind group missing
 
 addMissing :: TL.TrieLike t =>
               Pr.Name ->
@@ -228,13 +233,13 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
     add acl leaf =
       case leaf of
         Pr.Leaf { Pr.getLeafSigned = signed
-               , Pr.getLeafBody = body } -> do
+                , Pr.getLeafBody = body } -> do
 
           get subscriberAdminTrie >>= verify signed
 
           case Pr.parseTrie body of
             -- todo: handle defragmentation (or assert that no valid forest will contain a fragmented ACL)
-            Just trie -> return $ T.union trie acl
+            Just trie -> return $ T.union (T.sub "0" trie) acl
             Nothing -> badForest
 
         _ -> patternFailure
@@ -406,14 +411,14 @@ forestChunks =
 emptyForest stream =
   Forest
   (Pr.Forest
-   undefined
+   (Pa.leaf ())
    stream
    (-1)
    undefined
    (-1)
    undefined
-   undefined
-   undefined)
+   (Pa.leaf ())
+   (Pa.leaf ()))
   T.empty
   T.empty
   VM.empty
@@ -441,7 +446,7 @@ updateForest name current = do
 
       when (revision <= (Pr.getForestRevision $ getForestMessage persisted)
 
-            || (null publicKey
+            || (isNothing publicKey
                 && revision /= 1 + (Pr.getForestRevision
                                     $ getForestMessage published))
 
@@ -485,16 +490,14 @@ updateForest name current = do
 
       return $ Forest forest chunks aclTrie treeMap sync
 
-    _ -> patternFailure
+    _ -> exception ("couldn't find " ++ show name
+                    ++ " in " ++ show (const () <$> received))
 
 updateChunks chunks (obsoleteChunks, newChunks) =
   T.union newChunks $ T.subtract obsoleteChunks chunks
 
 updateChunksV version (obsoleteChunks, newChunks) =
   VT.union version newChunks . VT.subtract version obsoleteChunks
-
-updateSubscriber version diff subscriber =
-  L.over subscriberReceived (updateChunksV version diff) subscriber
 
 filterDiff :: (T.Trie BS.ByteString Pr.Message, a) ->
               Co.Action Subscriber (T.Trie BS.ByteString Pr.Message, a)
@@ -511,35 +514,45 @@ filterDiff (obsoleteChunks, newChunks) = do
   return (T.foldrPaths removeLive obsoleteChunks obsoleteChunks, newChunks)
 
 checkForest :: L.Lens' Subscriber Forest ->
+               L.Lens' Incomplete Pr.Names ->
                Pr.Name ->
                Co.Action Subscriber ()
-checkForest lens name =
+checkForest lens incomplete name =
   let resetDiff = set subscriberDiff (T.empty, T.empty)
-      resetSubscriber = get subscriberClean >>= St.put in
+      resetAll = do
+        resetDiff
+        get subscriberClean >>= set subscriberReceived
+        set subscriberIncomplete $ Incomplete T.empty T.empty
+        set subscriberMissing BT.empty
+  in
 
   do assertComplete name
-
+     traceM ("update forest " ++ show name)
+     received <- get subscriberReceived
+     traceM ("received " ++ show (const () <$> received))
      updateM lens $ updateForest name
 
      diff <- get subscriberDiff >>= filterDiff
 
      version <- getThenUpdate subscriberVersion (+ 1)
 
-     update subscriberClean $ updateSubscriber version diff
+     update subscriberReceived (updateChunksV version diff)
 
-     resetSubscriber
+     update (subscriberIncomplete . incomplete) $ T.subtract name
+
+     get subscriberReceived >>= set subscriberClean
 
   `E.catchError` \case
     Co.MissingChunks -> resetDiff
-    Co.BadForest -> resetSubscriber
+    Co.BadForest -> resetAll
     error -> E.throwError error
 
 checkIncomplete = do
   (T.paths <$> get (subscriberIncomplete . incompletePersisted))
-    >>= mapM_ (checkForest subscriberPersisted)
+    >>= mapM_ (checkForest subscriberPersisted incompletePersisted)
 
   (T.paths <$> get (subscriberIncomplete . incompletePublished))
-    >>= mapM_ (checkForest subscriberPublished)
+    >>= mapM_ (checkForest subscriberPublished incompletePublished)
 
 assertComplete :: Pr.Name ->
                   Co.Action Subscriber ()

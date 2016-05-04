@@ -7,6 +7,8 @@ module Database.Concelo.Protocol
   , Signed(Signed)
   , Name
   , Names
+  , name
+  , split
   , getSignedSigner
   , getSignedSignature
   , getSignedText
@@ -86,6 +88,8 @@ import Database.Concelo.Control (prefix, (>>|), exec, eitherToMaybe,
                                  patternFailure, get, set, update, noParse,
                                  exception, bsShow, bsRead)
 
+-- import Debug.Trace
+
 import qualified Database.Concelo.Path as P
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.TrieLike as TL
@@ -103,6 +107,7 @@ type Names = T.Trie BS.ByteString ()
 data Signed = Signed { getSignedSigner :: Cr.PublicKey
                      , getSignedSignature :: BS.ByteString
                      , getSignedText :: BS.ByteString }
+              deriving Show
 
 data Message = Cred { getCredProtocolVersion :: Int
                     , getCredPublic :: BS.ByteString
@@ -148,19 +153,7 @@ data Message = Cred { getCredProtocolVersion :: Int
                       , getForestTrees :: Name }
 
              | NoMessage
-
-instance Show Message where
-  show = \case
-    Cred {} -> "Cred"
-    Challenge {} -> "Challenge"
-    Published {} -> "Published"
-    Persisted {} -> "Persisted"
-    Nack {} -> "Nack"
-    Leaf {} -> "Leaf"
-    Group {} -> "Group"
-    Tree {} -> "Tree"
-    Forest {} -> "Forest"
-    NoMessage {} -> "NoMessage"
+             deriving Show
 
 aclWriterKey = ACL.writerKey
 
@@ -184,6 +177,13 @@ forestACLLevel = "4" :: BS.ByteString
 
 forestLevel = "5" :: BS.ByteString
 
+split s =
+  let (a, b) = BS.splitAt leafSize s in
+  if BS.null b then
+    [a]
+  else
+    a : split b
+
 toText = \case
   Leaf _ _ treeStream forestStream body ->
     return $ BS.concat [treeStream, forestStream, body]
@@ -206,6 +206,13 @@ toText = \case
                serializeName acl, serializeName trees]
 
   _ -> patternFailure
+
+name = \case
+  Leaf { getLeafName = n } -> n
+  Group { getGroupName = n } -> n
+  Tree { getTreeName = n } -> n
+  Forest { getForestName = n } -> n
+  _ -> undefined
 
 dummySigned = Signed undefined undefined undefined
 
@@ -285,7 +292,7 @@ serializeName :: Name -> BS.ByteString
 serializeName = serializeNames . flip T.union T.empty
 
 serializeTrie :: T.Trie BS.ByteString BS.ByteString -> BS.ByteString
-serializeTrie trie = BS.concat $ writeTrie trie []
+serializeTrie trie = BS.concat $ writeTrie trie ["d"]
 
 writeTrie :: T.Trie BS.ByteString BS.ByteString ->
              [BS.ByteString] ->
@@ -344,7 +351,7 @@ parseLeaf
 pathToValue =
   path >> parseLeaf >>= \v -> do
     p <- get trieStatePath
-    update trieStateTrie $ T.union $ P.toPath p v
+    update trieStateTrie $ T.union $ P.toPath (reverse p) v
 
 up = do
   prefix "u"

@@ -224,29 +224,46 @@ arbitraryTasks =
 
 stream = "my stream"
 
-admin = Cr.dummyKey
+admin = makeClient True "0"
 
-admins = [Cr.fromPublic $ Cr.derivePublic admin]
+adminPublicKeys = [Cr.fromPublic
+                   $ Cr.derivePublic
+                   $ I.getIgnisPrivate
+                   $ getClientIgnis admin]
 
 makeClient writer id =
-  case (Client id writer (R.relay admins stream id)
-        <$> I.ignis admins (I.EmailPassword id id) stream id) of
+  case (Client id writer (R.relay adminPublicKeys stream id)
+        <$> I.ignis adminPublicKeys (I.EmailPassword id id) stream id) of
     Left e -> error $ show e
-    Right c -> c
+    Right v -> v
 
 state clients tasks tries =
   State Q.empty clients 0 tasks tries VT.empty
 
+interval :: Int -> Int -> [Int]
 interval a b = if a >= b then [] else a : interval (a + 1) b
 
 arbitraryState' readerCount writerCount trieCount = do
   tries <- take trieCount <$> arbitraryTries
   tasks <- arbitraryTasks
-  let readers = map (makeClient False . bsShow) $ interval 0 readerCount
-      writers = map (makeClient True . bsShow)
-                $ (interval readerCount (readerCount + writerCount) :: [Int])
 
-  return $ state (readers ++ writers) tasks tries
+  let writers = map (makeClient True . bsShow) $ interval 1 writerCount
+
+      readers = map (makeClient False . bsShow)
+                $ interval writerCount (writerCount + readerCount)
+
+      admin' = L.over clientIgnis initAdmin admin
+
+      public = Cr.derivePublic . I.getIgnisPrivate . getClientIgnis
+
+      initAdmin ignis =
+        case exec (I.initAdmin
+                   (public <$> readers)
+                   (public <$> (admin : writers))) ignis of
+        Left e -> error $ show e
+        Right v -> v
+
+  return $ state (admin' : (writers ++ readers)) tasks tries
 
 -- arbitraryState readerCount writerCount =
 --   QC.choose (10, 1000) >>= arbitraryState' readerCount writerCount
@@ -341,7 +358,7 @@ apply' = \case
 
         update stateClients
           (L.set clientRelay
-           (R.relay admins stream
+           (R.relay adminPublicKeys stream
             $ R.getRelayChallenge
             $ getClientRelay client) client :)
 

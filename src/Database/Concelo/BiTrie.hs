@@ -21,6 +21,7 @@ import qualified Control.Lens as L
 
 data BiTrie k = BiTrie { getForward :: T.Trie k (T.Trie k ())
                        , getReverse :: T.Trie k (T.Trie k ()) }
+                deriving Show
 
 forward :: L.Lens' (BiTrie k) (T.Trie k (T.Trie k ()))
 forward = L.lens getForward (\x v -> x { getForward = v })
