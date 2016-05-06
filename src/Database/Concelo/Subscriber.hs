@@ -33,7 +33,7 @@ import Database.Concelo.Control (patternFailure, badForest, missingChunks,
 import Control.Monad (foldM, when)
 import Data.Maybe (fromMaybe, isNothing)
 
-import Debug.Trace
+-- import Debug.Trace
 
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Trie as T
@@ -50,7 +50,6 @@ import qualified Database.Concelo.Chunks as Ch
 import qualified Database.Concelo.Control as Co
 import qualified Database.Concelo.ACL as ACL
 import qualified Control.Lens as L
-import qualified Control.Monad.State as St
 import qualified Control.Monad.Except as E
 import qualified Data.ByteString as BS
 
@@ -132,7 +131,7 @@ subscriber adminTrie publicKey stream =
   where
     f = emptyForest stream
 
-receive message = trace ("receive " ++ show message) $ case message of
+receive = \case
   leaf@(Pr.Leaf { Pr.getLeafName = name }) ->
     receiveChunk leaf name T.empty
 
@@ -527,9 +526,7 @@ checkForest lens incomplete name =
   in
 
   do assertComplete name
-     traceM ("update forest " ++ show name)
-     received <- get subscriberReceived
-     traceM ("received " ++ show (const () <$> received))
+
      updateM lens $ updateForest name
 
      diff <- get subscriberDiff >>= filterDiff

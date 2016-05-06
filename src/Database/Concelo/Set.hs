@@ -9,7 +9,12 @@ module Database.Concelo.Set
 
 import qualified Database.Concelo.Map as M
 
+import Data.Foldable (toList)
+
 newtype Set v = Set { run :: M.Map v () }
+
+instance Show v => Show (Set v) where
+  show = show . toList
 
 instance Foldable Set where
   foldr visit seed = M.foldrPairs (visit . fst) seed . run

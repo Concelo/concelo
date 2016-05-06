@@ -5,6 +5,7 @@ module Database.Concelo.Deserializer
   , desSanitized
   , getDesSanitized
   , getDesRejected
+  , getDesPermitAdmins
   , getDesDefaultACL
   , getDesRules
   , deserializer
@@ -65,8 +66,8 @@ desRejected =
   L.lens getDesRejected (\x v -> x { getDesRejected = v })
 
 deserializer private permitAdmins defaultACL =
-  Deserializer private permitAdmins defaultACL T.empty
-  R.identity BT.empty VT.empty T.empty
+  Deserializer private permitAdmins defaultACL T.empty R.identity BT.empty
+  VT.empty T.empty
 
 maybeHead = \case
   x:_ -> Just x
@@ -268,6 +269,13 @@ updateUnsanitizedDiff oldForest (stream, newTree)
 updateUnsanitized (obsolete, new) currentUnsanitized =
   unionUnsanitized new (subtractUnsanitized obsolete currentUnsanitized)
 
+whiteList whitelist acl =
+  ACL.whiteListEach ACL.aclReadLists
+  (ACL.getListsWhiteList $ ACL.getACLReadLists whitelist)
+  $ ACL.whiteListEach ACL.aclWriteLists
+  (ACL.getListsWhiteList $ ACL.getACLWriteLists whitelist)
+  acl
+
 deserialize old new = do
   privateKey <- get desPrivateKey
   permitAdmins <- get desPermitAdmins
@@ -287,8 +295,8 @@ deserialize old new = do
     if acl old == acl new then
       get desDefaultACL
     else
-      -- todo: union this ACL with permitAdmins
-      return $ ACL.fromBlackTrie $ Su.getForestACLTrie new
+      return $ whiteList permitAdmins $ ACL.fromBlackTrie
+      $ Su.getForestACLTrie new
 
   let des = Deserializer privateKey permitAdmins defaultACL unsanitized
 

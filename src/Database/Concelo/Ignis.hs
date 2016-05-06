@@ -39,7 +39,7 @@ import Database.Concelo.Control (get, set, with, lend, exception, run,
 import Data.Maybe (fromMaybe)
 import Control.Monad (foldM, forM_)
 
-import Debug.Trace
+-- import Debug.Trace
 
 data Ignis = Ignis { getIgnisPrivate :: Cr.PrivateKey
                    , getIgnisSentChallengeResponse :: Bool
@@ -130,6 +130,25 @@ instance ST.Serializer a SyncState where
   serialize trie = return $ Pr.split $ Pr.serializeNames $ fmap (const ()) trie
   encrypt = return . id
 
+receiveTrie trie level = do
+  private <- get ignisPrivate
+  stream <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberStream)
+
+  ((_, body, root), _) <-
+    eitherToAction $ run (ST.visit ST.empty T.empty T.empty trie) SyncState
+
+  -- traceM ("root is " ++ show root ++ "; body is " ++ show body ++ "; trie is " ++ show trie)
+
+  forM_ body $ \chunk ->
+    with ignisPRNG (ST.chunkToMessage private level BS.empty stream chunk)
+    >>= receive
+
+  maybe (return $ Pa.leaf ())
+    ((Pr.name <$>)
+     . with ignisPRNG
+     . ST.chunkToMessage private level BS.empty stream)
+    root
+
 initAdmin readers writers = do
   private <- get ignisPrivate
   stream <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberStream)
@@ -142,23 +161,9 @@ initAdmin readers writers = do
       aclTrie = T.union (T.super ACL.writerKey writerTrie)
                 (T.super ACL.readerKey readerTrie)
 
-  ((_, aclBody, aclRoot), _) <-
-    eitherToAction $ run (ST.visit ST.empty T.empty T.empty aclTrie) SyncState
+  aclRoot <- receiveTrie aclTrie Pr.forestACLLevel
 
-  -- traceM ("acl root is " ++ show aclRoot ++ "; body is " ++ show aclBody ++ "; trie is " ++ show aclTrie)
-
-  forM_ aclBody $ \chunk ->
-    with ignisPRNG (ST.chunkToMessage private Pr.forestACLLevel BS.empty
-                    stream chunk) >>= receive
-
-  aclRootName <-
-    maybe (return $ Pa.leaf ())
-    ((Pr.name <$>)
-     . with ignisPRNG
-     . ST.chunkToMessage private Pr.forestACLLevel BS.empty stream)
-    aclRoot
-
-  let text = BS.concat [B.fromInteger (0 :: Int), Pr.serializeName aclRootName]
+  let text = BS.concat [B.fromInteger (0 :: Int), Pr.serializeName aclRoot]
 
   signature <- with ignisPRNG $ Cr.sign private text
 
@@ -168,10 +173,8 @@ initAdmin readers writers = do
             0
             0
             (Pr.Signed (Cr.derivePublic private) signature text)
-            aclRootName
+            aclRoot
             (Pa.leaf ())
-
-  traceM ("forest is " ++ show forest)
 
   receive forest
 
@@ -285,8 +288,6 @@ updatePublisher = do
 
   let revision = 1 + (Pr.getForestRevision $ Su.getForestMessage published)
 
-  traceM ("revision is " ++ show revision)
-
   if revision == 0 then
     -- we haven't received a complete, valid revision from the server
     -- yet, nor have we initialized the stream as an admin, but we
@@ -349,7 +350,8 @@ validateDiff me revision rules acl head (obsolete, new) =
               if ACL.isWriter me acl' then
                 descend
               else
-                exception "write access denied"
+                exception ("write access denied: " ++ show me
+                           ++ " not whitelisted in " ++ show acl')
             else
               exception "invalid write") where
 

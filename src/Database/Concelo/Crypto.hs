@@ -52,7 +52,9 @@ newtype PrivateKey = PrivateKey { getPrivateKey :: RSAT.PrivateKey }
                      deriving Show
 
 newtype PublicKey = PublicKey { _getPublicKey :: RSAT.PublicKey }
-                    deriving Show
+
+instance Show PublicKey where
+  show = show . fromPublic
 
 newtype SymmetricKey = SymmetricKey { fromSymmetric :: BS.ByteString }
 

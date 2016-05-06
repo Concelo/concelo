@@ -147,7 +147,7 @@ deliver (Message clientId type_ value) =
 getClient which predicate =
   choose which . filter predicate <$> get stateClients
 
-choose which xs = trace ("pick " ++ show index ++ " from " ++ show (length xs)) $ pick index xs where
+choose which xs = pick index xs where
   count = length xs
   index = clamp (count - 1) (floor ((fromIntegral count) * which))
 
@@ -260,8 +260,8 @@ arbitraryState' readerCount writerCount trieCount = do
         case exec (I.initAdmin
                    (public <$> readers)
                    (public <$> (admin : writers))) ignis of
-        Left e -> error $ show e
-        Right v -> v
+          Left e -> error $ show e
+          Right v -> v
 
   return $ state (admin' : (writers ++ readers)) tasks tries
 
@@ -311,15 +311,15 @@ apply task =
 
 apply' = \case
   SendFirst -> Q.viewl <$> get stateMessages >>= \case
-    message Q.:< messages -> traceM ("deliver first " ++ show message) >> deliver message >> set stateMessages messages
+    message Q.:< messages -> deliver message >> set stateMessages messages
     _ -> return ()
 
   SendLast -> Q.viewr <$> get stateMessages >>= \case
-    messages Q.:> message -> traceM ("deliver last " ++ show message) >> deliver message >> set stateMessages messages
+    messages Q.:> message -> deliver message >> set stateMessages messages
     _ -> return ()
 
   DropFirst -> Q.viewl <$> get stateMessages >>= \case
-    _ Q.:< messages -> traceM "deliver first" >> set stateMessages messages
+    _ Q.:< messages -> set stateMessages messages
     _ -> return ()
 
   Flush tasks ->
@@ -330,7 +330,7 @@ apply' = \case
           task:tasks -> do
             (consistent <$> St.get) >>= \case
               True -> trace "flush success" $ return ()
-              False -> traceM "flush more" >> apply task >> flush tasks
+              False -> apply task >> flush tasks
 
         flushable = \case
           Publish {} -> False
@@ -344,9 +344,8 @@ apply' = \case
       flush $ take (1000 * clientCount) $ filter flushable tasks
 
   Reconnect tasks whichClient -> do
-    traceM "foo"
     getClient whichClient (const True) >>= \case
-      Nothing -> traceM "no client!?" >> return ()
+      Nothing -> return ()
       Just client -> do
         traceM ("reconnect " ++ show (length tasks))
 
@@ -364,13 +363,12 @@ apply' = \case
 
   Publish tasks whichClient ->
     getClient whichClient getClientIsWriter >>= \case
-      Nothing -> traceM "no writer!?" >> return ()
+      Nothing -> return ()
       Just writer ->
         get stateTries >>= \case
           [] -> apply (Flush tasks) >> E.throwError Co.Success
 
           trie:tries -> do
-            traceM ("tries remaining: " ++ show (length tries))
             set stateTries tries
             set statePublished trie
 
@@ -394,7 +392,7 @@ apply' = \case
         (ignisMessages, ignis') <-
           eitherToAction $ run (I.nextMessages now) $ getClientIgnis client
 
-        traceM ("queue " ++ show (relayMessages ++ ignisMessages))
+        -- traceM ("queue " ++ show (relayMessages ++ ignisMessages))
 
         let append messageType list sequence =
               foldr (flip (Q.|>)) sequence

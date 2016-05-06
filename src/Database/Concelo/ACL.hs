@@ -14,6 +14,7 @@ module Database.Concelo.ACL
   , readerKey
   , Lists()
   , whiteList
+  , whiteListEach
   , whiteListAll
   , fromBlackTrie
   , fromWhiteTrie
@@ -36,6 +37,7 @@ import qualified Control.Lens as L
 data ACL = ACL { getACLReadLists :: Lists
                , getACLWriteLists :: Lists
                , getACLHash :: BS.ByteString }
+           deriving Show
 
 aclReadLists :: L.Lens' ACL Lists
 aclReadLists =
@@ -50,12 +52,19 @@ aclHash =
 
 data Lists = Lists { getListsBlackList :: S.Set BS.ByteString
                    , getListsWhiteList :: S.Set BS.ByteString }
+             deriving Show
 
 whiteList lens uid acl =
   setHash $ L.over lens
   (\lists -> Lists
              (S.delete uid $ getListsBlackList lists)
              (S.insert uid $ getListsWhiteList lists)) acl
+
+whiteListEach lens uids acl =
+  setHash $ L.over lens
+  (\lists -> Lists
+             (S.subtract uids $ getListsBlackList lists)
+             (S.union uids $ getListsWhiteList lists)) acl
 
 whiteListAll lens acl =
   setHash $ L.over lens
