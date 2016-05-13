@@ -7,7 +7,7 @@ module Database.Concelo.Publisher
   , receive
   , publisher ) where
 
-import Database.Concelo.Control (updateThenGet, get, patternFailure)
+import Database.Concelo.Control (updateThenGet, get, patternFailure, set)
 
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Protocol as Pr
@@ -33,13 +33,17 @@ publisherNacks = L.lens getPublisherNacks (\x v -> x { getPublisherNacks = v })
 
 publisher = Publisher (Pa.leaf ()) T.empty T.empty
 
-update :: (T.Trie BS.ByteString Pr.Message,
+update :: Pr.Name ->
+          (T.Trie BS.ByteString Pr.Message,
            T.Trie BS.ByteString Pr.Message) ->
           C.Action Publisher ()
-update (obsolete, new) = do
+update published (obsolete, new) = do
+  set publisherPublished published
+
   acks <- updateThenGet publisherAcks $ T.intersectL new . T.subtract obsolete
 
   C.update publisherNacks (T.union (T.subtract acks new) . T.subtract obsolete)
+
 
 nextMessage :: C.Action Publisher (Maybe Pr.Message)
 nextMessage =
@@ -76,4 +80,6 @@ receive streamAccessible = \case
         else
           return ()
 
-      Nothing -> return ()
+      Nothing ->
+        error ("can't find " ++ show path)
+        -- return ()

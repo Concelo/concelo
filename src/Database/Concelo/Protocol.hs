@@ -79,6 +79,7 @@ module Database.Concelo.Protocol
   , parseTrie
   , leaf
   , group
+  , group'
   , tree
   , forest
   , version ) where
@@ -153,7 +154,32 @@ data Message = Cred { getCredProtocolVersion :: Int
                       , getForestTrees :: Name }
 
              | NoMessage
-             deriving Show
+
+instance Show Message where
+  show = \case
+    Cred {} -> "Cred"
+    Challenge {} -> "Challenge"
+    Published name -> "Published " ++ show name
+    Persisted name -> "Persisted " ++ show name
+    Nack names -> "Nack " ++ show names
+    Leaf { getLeafName = name } -> "Leaf " ++ show name
+
+    Group { getGroupName = name,
+            getGroupMembers = members } ->
+      "Group name " ++ show name ++ " members " ++ show members
+
+    Tree { getTreeName = name,
+           getTreeACL = acl,
+           getTreeLeaves = leaves } ->
+      "Tree name " ++ show name ++ " acl " ++ show acl ++ " leaves "
+      ++ show leaves
+
+    Forest { getForestName = name,
+             getForestACL = acl,
+             getForestTrees = trees } ->
+      "Forest " ++ show name ++ " acl " ++ show acl ++ " trees " ++ show trees
+
+    NoMessage -> "NoMessage"
 
 aclWriterKey = ACL.writerKey
 
@@ -244,13 +270,16 @@ group :: Foldable t =>
          BS.ByteString ->
          t BS.ByteString ->
          Co.Action Cr.PRNG Message
-group private level height treeStream forestStream members = do
-  let group = Group dummyName dummySigned treeStream forestStream
-              $ foldr (\member ->
-                        T.union
-                        $ P.super level
-                        $ P.super (bsShow $ height - 1)
-                        $ P.singleton member ()) T.empty members
+group private level height treeStream forestStream members =
+  group' private level height treeStream forestStream members
+  $ foldr (\member ->
+            T.union
+            $ P.super level
+            $ P.super (bsShow $ height - 1)
+            $ P.singleton member ()) T.empty members
+
+group' private level height treeStream forestStream members names = do
+  let group = Group dummyName dummySigned treeStream forestStream names
 
   (_, signed) <- digest group private
 

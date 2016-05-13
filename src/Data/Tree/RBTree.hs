@@ -562,13 +562,13 @@ toList = foldr (:) []
 fromList :: (a -> a -> Ordering) -> [a] -> RBTree a
 fromList compareVersions = foldr (flip $ insert compareVersions) Leaf
 
-value :: RBTree a -> Maybe a
+value :: RBZip a -> Maybe a
 value t = case t of
-  Node _ v _ _ -> Just v
-  Leaf -> Nothing
+  RBZip (Node _ v _ _) _ -> Just v
+  _ -> Nothing
 
 first :: RBTree a -> Maybe a
-first = value . toTree id . leftMostZip . toZip
+first = value . leftMostZip . toZip
 
 last :: RBTree a -> Maybe a
-last = value . toTree id . rightMostZip . toZip
+last = value . rightMostZip . toZip

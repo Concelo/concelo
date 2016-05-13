@@ -33,7 +33,7 @@ import Database.Concelo.Control (patternFailure, badForest, missingChunks,
 import Control.Monad (foldM, when)
 import Data.Maybe (fromMaybe, isNothing)
 
--- import Debug.Trace
+import Debug.Trace
 
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Trie as T
@@ -395,7 +395,7 @@ updateTrees forestRevision forestACLTrie currentForest (obsoleteTrees, newTrees)
           return $ VM.insert version stream
             (Tree tree aclTrie aclFromTries sync key) trees
 
-        _ -> patternFailure
+        m -> exception ("unexpected message: " ++ show m)
 
 data Forest =
   Forest { getForestMessage :: Pr.Message
@@ -443,7 +443,39 @@ updateForest name current = do
 
       publicKey <- get subscriberPublicKey
 
-      when (revision <= (Pr.getForestRevision $ getForestMessage persisted)
+      when (revision < (Pr.getForestRevision $ getForestMessage persisted))
+        $ traceM ("old revision " ++ show revision)
+
+      when (isNothing publicKey
+            && revision /= 1 + (Pr.getForestRevision
+                                $ getForestMessage published))
+        $ traceM ("incorrect revision: wanted "
+                  ++ show (1 + (Pr.getForestRevision $ getForestMessage published))
+                  ++ ", got " ++ show revision)
+
+      when (adminRevision < (Pr.getForestAdminRevision
+                             $ getForestMessage persisted))
+        $ traceM "old admin revision"
+
+      when (adminRevision == (Pr.getForestAdminRevision
+                                  $ getForestMessage persisted)
+            && acl /= (Pr.getForestACL $ getForestMessage persisted))
+        $ traceM "wrong acl"
+
+      when (stream /= subscribed)
+        $ traceM "wrong stream"
+
+      when (revision < (Pr.getForestRevision $ getForestMessage persisted)
+
+            -- todo: if we receive a Pr.Published or Pr.Persisted
+            -- message that refers to a revision we've already parsed
+            -- and validated, just point to that, rather than re-parse
+            -- it.  It might help to optimize this by caching a few
+            -- revisions between the latest published and the latest
+            -- persisted revisions.
+
+            || (revision == (Pr.getForestRevision $ getForestMessage persisted)
+                && name /= (Pr.getForestName $ getForestMessage persisted))
 
             || (isNothing publicKey
                 && revision /= 1 + (Pr.getForestRevision
@@ -554,8 +586,9 @@ checkIncomplete = do
 assertComplete :: Pr.Name ->
                   Co.Action Subscriber ()
 assertComplete name = do
-  complete <- null . BT.find name <$> get subscriberMissing
-  when (not complete) missingChunks
+  received <- VT.member name <$> get subscriberReceived
+  noneMissing <- null . BT.find name <$> get subscriberMissing
+  when (not (received && noneMissing)) missingChunks
 
 receiveChunk :: TL.TrieLike t =>
                 Pr.Message ->
@@ -569,8 +602,15 @@ receiveChunk chunk name members = do
   updateMissing name
   checkIncomplete
 
+  -- forward <- BT.forwardTrie <$> get subscriberMissing
+  -- reverse <- BT.reverseTrie <$> get subscriberMissing
+  -- traceM ("received " ++ show name ++ "; forward: " ++ show forward ++ "; reverse: " ++ show reverse)
+
 nextMessage :: Co.Action Subscriber (Maybe Pr.Message)
-nextMessage =
-  (T.firstValue . BT.reverseTrie <$> get subscriberMissing) >>= \case
-    Nothing -> return Nothing
-    Just path -> return $ Just $ Pr.Nack path
+nextMessage = do
+  missing <- ((const () <$>) . BT.reverseTrie <$> get subscriberMissing)
+
+  return $ if T.isEmpty missing then
+             Nothing
+           else
+             Just $ Pr.Nack missing

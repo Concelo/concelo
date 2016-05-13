@@ -1,14 +1,14 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 module Database.Concelo.Ignis
   ( Ignis()
   , ignis
-  , initAdmin
   , getIgnisPrivate
   , Credentials(PrivateKey, EmailPassword)
-  , update
+  , setHead
   , receive
   , nextMessages
   , getHead
@@ -19,7 +19,6 @@ import qualified Data.ByteString as BS
 import qualified Database.Concelo.Crypto as Cr
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Pipe as Pi
-import qualified Database.Concelo.Path as Pa
 import qualified Database.Concelo.Serializer as Se
 import qualified Database.Concelo.Deserializer as D
 import qualified Database.Concelo.Subscriber as Su
@@ -28,25 +27,21 @@ import qualified Database.Concelo.VTrie as VT
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Map as M
 import qualified Database.Concelo.ACL as ACL
-import qualified Database.Concelo.Bytes as B
 import qualified Database.Concelo.Rules as R
-import qualified Database.Concelo.SyncTree as ST
 import qualified Database.Concelo.Control as Co
 
-import Database.Concelo.Control (get, set, with, lend, exception, run,
-                                 eitherToAction)
+import Database.Concelo.Control (get, set, with, lend, exception, run)
 
 import Data.Maybe (fromMaybe)
-import Control.Monad (foldM, forM_)
+import Control.Monad (foldM, when)
 
--- import Debug.Trace
+import Debug.Trace
 
 data Ignis = Ignis { getIgnisPrivate :: Cr.PrivateKey
                    , getIgnisSentChallengeResponse :: Bool
+                   , getIgnisPublisherUpdated :: Bool
                    , getIgnisChallenge :: Maybe BS.ByteString
                    , getIgnisHead :: VT.VTrie BS.ByteString Pr.Value
-                   , getIgnisDiff :: (T.Trie BS.ByteString Pr.Value,
-                                      T.Trie BS.ByteString Pr.Value)
                    , getIgnisPipe :: Pi.Pipe
                    , getIgnisSerializer :: Se.Serializer
                    , getIgnisDeserializer :: D.Deserializer
@@ -63,6 +58,11 @@ ignisSentChallengeResponse =
   L.lens getIgnisSentChallengeResponse
   (\x v -> x { getIgnisSentChallengeResponse = v })
 
+ignisPublisherUpdated :: L.Lens' Ignis Bool
+ignisPublisherUpdated =
+  L.lens getIgnisPublisherUpdated
+  (\x v -> x { getIgnisPublisherUpdated = v })
+
 ignisChallenge :: L.Lens' Ignis (Maybe BS.ByteString)
 ignisChallenge =
   L.lens getIgnisChallenge (\x v -> x { getIgnisChallenge = v })
@@ -70,11 +70,6 @@ ignisChallenge =
 ignisHead :: L.Lens' Ignis (VT.VTrie BS.ByteString Pr.Value)
 ignisHead =
   L.lens getIgnisHead (\x v -> x { getIgnisHead = v })
-
-ignisDiff :: L.Lens' Ignis (T.Trie BS.ByteString Pr.Value,
-                            T.Trie BS.ByteString Pr.Value)
-ignisDiff =
-  L.lens getIgnisDiff (\x v -> x { getIgnisDiff = v })
 
 ignisPipe :: L.Lens' Ignis Pi.Pipe
 ignisPipe =
@@ -114,73 +109,15 @@ ignis admins credentials stream seed =
         ignis = Ignis
                 private
                 False
+                False
                 Nothing
                 VT.empty
-                (T.empty, T.empty)
                 (Pi.pipe adminTrie (Just public) stream)
                 (Se.serializer private)
                 (D.deserializer private permitAdmins permitAdminsAndMe)
                 prng'
 
     return ignis
-
-data SyncState a = SyncState
-
-instance ST.Serializer a SyncState where
-  serialize trie = return $ Pr.split $ Pr.serializeNames $ fmap (const ()) trie
-  encrypt = return . id
-
-receiveTrie trie level = do
-  private <- get ignisPrivate
-  stream <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberStream)
-
-  ((_, body, root), _) <-
-    eitherToAction $ run (ST.visit ST.empty T.empty T.empty trie) SyncState
-
-  -- traceM ("root is " ++ show root ++ "; body is " ++ show body ++ "; trie is " ++ show trie)
-
-  forM_ body $ \chunk ->
-    with ignisPRNG (ST.chunkToMessage private level BS.empty stream chunk)
-    >>= receive
-
-  maybe (return $ Pa.leaf ())
-    ((Pr.name <$>)
-     . with ignisPRNG
-     . ST.chunkToMessage private level BS.empty stream)
-    root
-
-initAdmin readers writers = do
-  private <- get ignisPrivate
-  stream <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberStream)
-
-  let toPath public = Pa.singleton (Cr.fromPublic public) ()
-      writerTrie :: T.Trie BS.ByteString ()
-      writerTrie = T.index toPath writers
-      readerTrie :: T.Trie BS.ByteString ()
-      readerTrie = foldr (T.union . toPath) writerTrie readers
-      aclTrie = T.union (T.super ACL.writerKey writerTrie)
-                (T.super ACL.readerKey readerTrie)
-
-  aclRoot <- receiveTrie aclTrie Pr.forestACLLevel
-
-  let text = BS.concat [B.fromInteger (0 :: Int), Pr.serializeName aclRoot]
-
-  signature <- with ignisPRNG $ Cr.sign private text
-
-  forest <- with ignisPRNG $ Pr.forest
-            private
-            stream
-            0
-            0
-            (Pr.Signed (Cr.derivePublic private) signature text)
-            aclRoot
-            (Pa.leaf ())
-
-  receive forest
-
-  receive $ Pr.Published (Pr.getForestName forest)
-
-  receive $ Pr.Persisted (Pr.getForestName forest)
 
 getHead = getIgnisHead
 
@@ -210,14 +147,11 @@ getPublishedTrie = D.getDesSanitized . getIgnisDeserializer
 
 getPublic = Cr.derivePublic <$> get ignisPrivate
 
-update update atomicUpdate = do
-  head <- update <$> get ignisHead
+setHead trie = do
+  set ignisHead trie
+  set ignisPublisherUpdated False
 
-  makeDiff (atomicUpdate head) >>= set ignisDiff
-
-  set ignisHead head
-
-receive = \case
+receive m = traceM ("ignis receive " ++ show m) >> case m of
   Pr.Challenge { Pr.getChallengeProtocolVersion = v
                , Pr.getChallengeBody = body } -> do
     if v /= Pr.version then
@@ -286,23 +220,28 @@ updatePublisher = do
                     . Pi.pipeSubscriber
                     . Su.subscriberPublished)
 
+  publisherUpdated <- get ignisPublisherUpdated
+
   let revision = 1 + (Pr.getForestRevision $ Su.getForestMessage published)
 
   if revision == 0 then
-    -- we haven't received a complete, valid revision from the server
-    -- yet, nor have we initialized the stream as an admin, but we
-    -- need an admin-signed ACL to publish with, so we must wait until
-    -- we receive one
+    -- We haven't received a complete, valid revision from the server
+    -- yet, so we must wait until we receive one so we can merge it
+    -- with the changes we wish to publish
     return False
     else do
-    diff <- get ignisDiff
+    when (not publisherUpdated) $ do
+      diff <- get ignisHead >>= makeDiff
 
-    rejected <- D.getDesRejected <$> get ignisDeserializer
+      rejected <- D.getDesRejected <$> get ignisDeserializer
 
-    serialized <- lend ignisPRNG Se.serializerPRNG ignisSerializer
-                  $ Se.serialize published rejected revision diff
+      (forestName, serializedDiff) <-
+        lend ignisPRNG Se.serializerPRNG ignisSerializer
+        $ Se.serialize published rejected revision diff
 
-    with (ignisPipe . Pi.pipePublisher) $ Pu.update serialized
+      with (ignisPipe . Pi.pipePublisher) $ Pu.update forestName serializedDiff
+
+      set ignisPublisherUpdated True
 
     return True
 

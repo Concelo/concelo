@@ -208,15 +208,15 @@ arbitraryTasks =
   QC.infiniteListOf
   (QC.frequency [ (40, QueueMessages <$> QC.choose (0, 1.0))
 
-                , (30, return SendFirst)
+                , (40, return SendFirst)
 
                 , (10, Flush <$> arbitraryTasks)
 
                 , (10, Publish <$> arbitraryTasks <*> QC.choose (0, 1.0))
 
-                , ( 5, return SendLast)
+                -- , ( 5, return SendLast)
 
-                , ( 5, return DropFirst)
+                -- , ( 5, return DropFirst)
 
                 , ( 1, do delay <- QC.choose (10, 1000)
                           tasks <- take delay <$> arbitraryTasks
@@ -232,7 +232,7 @@ adminPublicKeys = [Cr.fromPublic
                    $ getClientIgnis admin]
 
 makeClient writer id =
-  case (Client id writer (R.relay adminPublicKeys stream id)
+  case (Client id writer (R.relay (Cr.makePRNG id) adminPublicKeys stream id)
         <$> I.ignis adminPublicKeys (I.EmailPassword id id) stream id) of
     Left e -> error $ show e
     Right v -> v
@@ -252,14 +252,15 @@ arbitraryState' readerCount writerCount trieCount = do
       readers = map (makeClient False . bsShow)
                 $ interval writerCount (writerCount + readerCount)
 
-      admin' = L.over clientIgnis initAdmin admin
+      admin' = L.over clientRelay initAdmin admin
 
       public = Cr.derivePublic . I.getIgnisPrivate . getClientIgnis
 
-      initAdmin ignis =
-        case exec (I.initAdmin
+      initAdmin relay =
+        case exec (R.initAdmin
+                   (I.getIgnisPrivate $ getClientIgnis admin)
                    (public <$> readers)
-                   (public <$> (admin : writers))) ignis of
+                   (public <$> (admin : writers))) relay of
           Left e -> error $ show e
           Right v -> v
 
@@ -306,8 +307,14 @@ clientHasMessages now client = case messages of
       <$> eval (R.nextMessages now) (getClientRelay client)
       <*> eval (I.nextMessages now) (getClientIgnis client)
 
-apply task =
-  traceM ("apply " ++ show task) >> update stateNow (+100) >> apply' task
+apply task = do
+  messages <- get stateMessages
+
+  traceM ("apply " ++ show task ++ " message count: " ++ show (Q.length messages))
+
+  update stateNow (+100)
+
+  apply' task
 
 apply' = \case
   SendFirst -> Q.viewl <$> get stateMessages >>= \case
@@ -355,11 +362,12 @@ apply' = \case
 
         traceM "reconnect complete"
 
+        let old = getClientRelay client
+
         update stateClients
           (L.set clientRelay
-           (R.relay adminPublicKeys stream
-            $ R.getRelayChallenge
-            $ getClientRelay client) client :)
+           (R.relay (R.getRelayPRNG old) adminPublicKeys stream
+            $ R.getRelayChallenge old) client :)
 
   Publish tasks whichClient ->
     getClient whichClient getClientIsWriter >>= \case
@@ -373,7 +381,7 @@ apply' = \case
             set statePublished trie
 
             ignis' <- eitherToAction
-                      $ exec (I.update (const trie) id)
+                      $ exec (I.setHead trie)
                       $ getClientIgnis writer
 
             update stateClients
@@ -392,7 +400,11 @@ apply' = \case
         (ignisMessages, ignis') <-
           eitherToAction $ run (I.nextMessages now) $ getClientIgnis client
 
-        -- traceM ("queue " ++ show (relayMessages ++ ignisMessages))
+        M.when (not $ null relayMessages)
+          $ traceM ("relay to ignis: " ++ show relayMessages)
+
+        M.when (not $ null ignisMessages)
+          $ traceM ("ignis to relay: " ++ show ignisMessages)
 
         let append messageType list sequence =
               foldr (flip (Q.|>)) sequence

@@ -1,18 +1,26 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module Database.Concelo.Relay
   ( Relay()
   , relay
+  , getRelayPRNG
   , getRelayChallenge
   , receive
   , nextMessages
-  , setSubscriber ) where
+  , setSubscriber
+  , initAdmin ) where
 
 import Database.Concelo.Control (set, get, getThenSet, updateThenGet,
-                                 exception, with, exec, eitherToAction)
+                                 exception, with, exec, eitherToAction, run)
 
-import Control.Monad (when)
-import Data.Maybe (isJust)
+import Control.Monad (when, foldM)
+import Data.Maybe (isJust, fromJust)
+
+import Debug.Trace
 
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Trie as T
@@ -24,12 +32,15 @@ import qualified Database.Concelo.Subscriber as Su
 import qualified Database.Concelo.Pipe as Pi
 import qualified Database.Concelo.Crypto as C
 import qualified Database.Concelo.ACL as ACL
+import qualified Database.Concelo.SyncTree as ST
+import qualified Database.Concelo.Bytes as B
 import qualified Control.Lens as L
 import qualified Control.Monad.State as St
 import qualified Data.ByteString.Char8 as BS
 
 data Relay =
-  Relay { getRelayPipe :: Pi.Pipe
+  Relay { getRelayPRNG :: C.PRNG
+        , getRelayPipe :: Pi.Pipe
         , getRelayPendingSubscriber :: Su.Subscriber
         , getRelayStreams :: Se.Set BS.ByteString
         , getRelayPublicKey :: Maybe C.PublicKey
@@ -37,6 +48,10 @@ data Relay =
 
 instance Show Relay where
   show relay = concat ["relay(", show $ getRelayChallenge relay, ")"]
+
+relayPRNG :: L.Lens' Relay C.PRNG
+relayPRNG =
+  L.lens getRelayPRNG (\x v -> x { getRelayPRNG = v })
 
 relayPipe :: L.Lens' Relay Pi.Pipe
 relayPipe =
@@ -57,11 +72,76 @@ relayPublicKey =
 relayChallenge =
   L.lens getRelayChallenge (\x v -> x { getRelayChallenge = v })
 
-relay admins stream challenge =
-  make (Pi.pipe (ACL.writerTrie admins) Nothing stream) Nothing challenge
+relay prng admins stream challenge =
+  make prng (Pi.pipe (ACL.writerTrie admins) Nothing stream) Nothing challenge
 
-make pipe publicKey challenge =
-  Relay pipe (Pi.getPipeSubscriber pipe) Se.empty publicKey challenge
+make prng pipe publicKey challenge =
+  Relay prng pipe (Pi.getPipeSubscriber pipe) Se.empty publicKey challenge
+
+data SyncState a = SyncState
+
+instance ST.Serializer a SyncState where
+  serialize trie = return $ Pr.split $ Pr.serializeNames $ fmap (const ()) trie
+  encrypt = return . id
+
+trieToMessages private trie level = do
+  stream <- get (relayPipe . Pi.pipeSubscriber . Su.subscriberStream)
+
+  ((_, body, root), _) <-
+    eitherToAction $ run (ST.visit ST.empty T.empty T.empty trie) SyncState
+
+  -- traceM ("root is " ++ show root ++ "; body is " ++ show body ++ "; trie is " ++ show trie)
+
+  messages <-
+    foldM (\result chunk -> do
+              message <- with relayPRNG
+                (ST.chunkToMessage private level BS.empty stream chunk)
+
+              return $ T.union (const message <$> Pr.name message) result)
+    T.empty body
+
+  (,messages) <$> maybe (return $ Pa.leaf ())
+    ((Pr.name <$>)
+     . with relayPRNG
+     . ST.chunkToMessage private level BS.empty stream)
+    root
+
+initAdmin private readers writers = do
+  stream <- get (relayPipe . Pi.pipeSubscriber . Su.subscriberStream)
+
+  let toPath public = Pa.singleton (C.fromPublic public) ()
+      writerTrie :: T.Trie BS.ByteString ()
+      writerTrie = T.index toPath writers
+      readerTrie :: T.Trie BS.ByteString ()
+      readerTrie = foldr (T.union . toPath) writerTrie readers
+      aclTrie = T.union (T.super ACL.writerKey writerTrie)
+                (T.super ACL.readerKey readerTrie)
+
+  (aclRoot, aclMessages) <- trieToMessages private aclTrie Pr.forestACLLevel
+
+  let text = BS.concat [B.fromInteger (0 :: Int), Pr.serializeName aclRoot]
+
+  signature <- with relayPRNG $ C.sign private text
+
+  forest <- with relayPRNG $ Pr.forest
+            private
+            stream
+            0
+            0
+            (Pr.Signed (C.derivePublic private) signature text)
+            aclRoot
+            (Pa.leaf ())
+
+  let forestName = Pr.name forest
+      messages = T.union (const forest <$> forestName) aclMessages
+
+  with (relayPipe . Pi.pipePublisher)
+    $ Pu.update forestName (T.empty, messages)
+
+  mapM_ receiveDirect messages
+
+  receiveDirect (Pr.Published (Pr.getForestName forest))
+    >>= setSubscriber . fromJust
 
 setSubscriber new = do
   set relayPendingSubscriber new
@@ -77,7 +157,9 @@ setSubscriber new = do
         $ updateStreams publicKey previous new
 
       with (relayPipe . Pi.pipePublisher)
-        $ Pu.update
+        $ Pu.update (Pr.getForestName
+                     $ Su.getForestMessage
+                     $ Su.getSubscriberPublished new)
         $ filterDiff streams
         $ T.diff (Su.getSubscriberClean previous) (Su.getSubscriberClean new)
 
@@ -121,7 +203,7 @@ chunkTreeStream = \case
   Pr.Group { Pr.getGroupTreeStream = treeStream } -> Just treeStream
   _ -> Nothing
 
-receive = \case
+receive m = traceM ("relay receive " ++ show m) >> case m of
   Pr.Cred version publicKey signature ->
     if version /= Pr.version then
       exception ("unexpected protocol version: " ++ show version)
@@ -132,9 +214,10 @@ receive = \case
       when (not $ C.verify public signature challenge)
         $ exception "received improperly signed challenge"
 
+      prng <- get relayPRNG
       subscriber <- get relayPendingSubscriber
 
-      St.put $ make (Pi.fromSubscriber subscriber) (Just public) challenge
+      St.put $ make prng (Pi.fromSubscriber subscriber) (Just public) challenge
       return Nothing
 
   nack@(Pr.Nack {}) -> do
@@ -160,24 +243,24 @@ receive = \case
 
   message ->
     get relayPublicKey >>= \case
-      Just _ -> do
-        subscriber <- get (relayPipe . Pi.pipeSubscriber)
+      Just _ -> receiveDirect message
+      Nothing -> return Nothing
 
-        subscriber' <- eitherToAction $ exec (Su.receive message) subscriber
+receiveDirect message = do
+  subscriber <- get (relayPipe . Pi.pipeSubscriber)
 
-        let revision = Pr.getForestRevision
-                       . Su.getForestMessage
-                       . Su.getSubscriberPublished
+  subscriber' <- eitherToAction $ exec (Su.receive message) subscriber
 
-        if revision subscriber' > revision subscriber then do
-          return $ Just subscriber'
-          else do
-          set (relayPipe . Pi.pipeSubscriber) subscriber'
+  let revision = Pr.getForestRevision
+                 . Su.getForestMessage
+                 . Su.getSubscriberPublished
 
-          return Nothing
+  if revision subscriber' > revision subscriber then do
+    return $ Just subscriber'
+    else do
+    set (relayPipe . Pi.pipeSubscriber) subscriber'
 
-      Nothing ->
-        return Nothing
+    return Nothing
 
 nextMessages now = do
   ping <- get relayPublicKey >>= \case
@@ -193,6 +276,8 @@ nextMessages now = do
       -- revision has been persisted
 
       published <- Pr.getForestName . Su.getForestMessage <$> get lens
+
+      -- traceM ("published is " ++ show published)
 
       return $ if null (Pa.keys published) then [] else
                  [Pr.Published published, Pr.Persisted published]

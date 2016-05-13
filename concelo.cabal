@@ -48,6 +48,7 @@ library
                        -Werror
 
   ghc-prof-options:    -fprof-auto
+                       -O0
 
   hs-source-dirs:      src
   build-depends:       base,
@@ -73,7 +74,8 @@ test-suite tests
                        -Werror
 
   ghc-prof-options:    -fprof-auto
-                       -with-rtsopts=-xc
+                       -O0
+                       "-with-rtsopts=-xc -M64m -hr -L1000 -xt"
 
   hs-source-dirs:      test
 

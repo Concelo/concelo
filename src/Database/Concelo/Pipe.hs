@@ -14,6 +14,8 @@ import qualified Control.Lens as L
 import qualified Database.Concelo.Publisher as P
 import qualified Database.Concelo.Subscriber as S
 
+import Control.Monad (when)
+
 data Pipe = Pipe { getPipePublisher :: P.Publisher
                  , getPipeSubscriber :: S.Subscriber
                  , getPipeLastPing :: Integer
@@ -42,22 +44,23 @@ pingInterval = 1000
 nextMessages now ping = do
   subMessage <- with pipeSubscriber S.nextMessage
   pubMessage <- with pipePublisher P.nextMessage
+  last <- get pipeLastPing
+
+  let sendPing = now - last > pingInterval
+
+  when sendPing $ set pipeLastPing now
 
   pubMessages <- case pubMessage of
     Nothing -> do
       pubSent <- getThenSet pipePublisherSent False
-      if pubSent then
+      if pubSent || sendPing then
         return ping
-        else do
-        last <- get pipeLastPing
-        if now - last > pingInterval then do
-          set pipeLastPing now
-          return ping
-          else
-          return []
+        else
+        return []
 
     Just message -> do
       set pipePublisherSent True
       return [message]
 
-  return $ maybe pubMessages (:pubMessages) subMessage
+  return $ maybe pubMessages (:pubMessages)
+    $ if sendPing then subMessage else Nothing

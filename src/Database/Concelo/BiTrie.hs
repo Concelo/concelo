@@ -3,6 +3,7 @@ module Database.Concelo.BiTrie
   ( BiTrie()
   , empty
   , trie
+  , forwardTrie
   , reverseTrie
   , insert
   , insertTrie
@@ -33,6 +34,7 @@ empty = BiTrie T.empty T.empty
 
 trie = getForward
 
+forwardTrie = getForward
 reverseTrie = getReverse
 
 insert' key value trie =

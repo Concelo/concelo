@@ -11,6 +11,7 @@ module Database.Concelo.SyncTree
   , getTreeLeaves
   , Chunk()
   , chunkToMessage
+  , chunkToGroupMessage
   , empty
   , update
   , visit
@@ -315,11 +316,33 @@ addNewGroups height =
               $ T.union (byHeightVacancy combined)
               $ T.subtract (byHeightVacancy group) groups
 
+-- todo: both chunkToMessage and chunkToGroupMessage (along with the
+-- Pr.leaf and Pr.group functions they invoke) are convoluted, leaky
+-- abstractions that need to be redesigned
+
 chunkToMessage private level treeStream forestStream chunk =
   case chunkHeight chunk of
     0 -> patternFailure
 
     1 -> Pr.leaf private level treeStream forestStream $ chunkBody chunk
+
+    _ -> Pr.group private level (chunkHeight chunk) treeStream forestStream
+         $ foldr (\member -> (chunkName member :)) []
+         $ chunkMembers chunk
+
+chunkToGroupMessage private level treeStream forestStream chunk =
+  case chunkHeight chunk of
+    0 -> patternFailure
+
+    1 -> let hashes = foldr
+                      (\member -> ((Pa.keys (getLeafPath member) !! 2) :)) []
+                      $ chunkMembers chunk
+             leafLevel = bsShow (bsRead level - 1 :: Int)
+         in
+          Pr.group' private level (chunkHeight chunk) treeStream forestStream
+          hashes
+          (foldr (\hash -> T.union (Pa.toPath [leafLevel, hash] ())) T.empty
+           $ hashes)
 
     _ -> Pr.group private level (chunkHeight chunk) treeStream forestStream
          $ foldr (\member -> (chunkName member :)) []
