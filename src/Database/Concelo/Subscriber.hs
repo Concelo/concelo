@@ -514,7 +514,12 @@ updateForest name current = do
 
       treeMap <- updateTrees revision aclTrie current (snd treeDiff)
 
-      sync <- ST.update revision (const patternFailure) (fst treeDiff)
+      sync <- ST.update revision
+              (\hash ->
+                return
+                $ Just
+                $ T.union (Pa.singleton hash ()) T.empty)
+              (fst treeDiff)
               (getForestTreeSync current)
 
       chunks <- updateChunks (getForestChunks current) <$> get subscriberDiff

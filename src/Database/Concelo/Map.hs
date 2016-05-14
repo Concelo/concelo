@@ -1,6 +1,7 @@
 module Database.Concelo.Map
   ( Map()
   , empty
+  , singleton
   , member
   , Database.Concelo.Map.lookup
   , first
@@ -27,6 +28,8 @@ instance Foldable (Map k) where
 noVersion = -1
 
 empty = Map V.empty
+
+singleton k v = Map $ V.singleton noVersion k v
 
 member k = V.member k . run
 

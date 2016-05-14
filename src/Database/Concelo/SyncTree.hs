@@ -4,7 +4,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Database.Concelo.SyncTree
   ( Serializer(serialize, encrypt)
   , SyncTree()
@@ -18,11 +18,14 @@ module Database.Concelo.SyncTree
   , root ) where
 
 import Database.Concelo.Control (get, patternFailure, with, set, bsShow,
-                                 maybeToAction, eitherToAction, run, bsRead)
+                                 maybeToAction, eitherToAction, run, bsRead,
+                                 exception)
 import Control.Applicative ((<|>))
 import Control.Monad (foldM, when, forM_)
 import Data.Foldable (toList)
 import Data.Maybe (fromMaybe)
+
+import Debug.Trace
 
 import qualified Control.Lens as L
 import qualified Control.Monad.State as S
@@ -121,8 +124,8 @@ visitRejects rejects = mapM_ visit $ M.pairs $ invert rejects where
       visitName name = M.modify name (Just . T.union path . fromMaybe T.empty)
 
   visit (name, trie) =
-    (T.findValue (Pa.singleton name ())
-     <$> get (stateTree . treeByName)) >>= \case
+    (T.findValue (Pa.singleton name ()) <$> get (stateTree . treeByName))
+    >>= \case
       Nothing -> return ()
       Just group -> do
         Co.update stateObsolete $ T.union $ byHeightVacancy group
@@ -348,15 +351,22 @@ chunkToGroupMessage private level treeStream forestStream chunk =
          $ foldr (\member -> (chunkName member :)) []
          $ chunkMembers chunk
 
+update :: Integer ->
+          (BS.ByteString ->
+           Co.Action s (Maybe (T.Trie Key a))) ->
+          (T.Trie BS.ByteString Pr.Message,
+           T.Trie BS.ByteString Pr.Message) ->
+          SyncTree a ->
+          Co.Action s (SyncTree a)
 update revision deserialize (obsolete, new) tree =
   do
-    rec (obsoleteChunks, leafSubset) <-
-          foldM (remove $ getTreeByName tree) ([], getTreeLeaves tree) obsolete
+    traceM ("obsolete: " ++ show obsolete ++ "; new: " ++ show new)
 
-        (newChunks, leaves) <- foldM (add named) ([], leafSubset) new
+    (obsoleteChunks, leafSubset, namedSubset) <-
+      foldM remove ([], getTreeLeaves tree, getTreeByName tree) obsolete
 
-        named <-
-          return $ updateIndex byName getTreeByName obsoleteChunks newChunks
+    (newChunks, leaves, named) <-
+      foldM add ([], leafSubset, namedSubset) new
 
     let reverseKeyMember =
           updateIndex byReverseKeyMember getTreeByReverseKeyMember
@@ -368,33 +378,41 @@ update revision deserialize (obsolete, new) tree =
 
     return $ SyncTree named reverseKeyMember heightVacancy leaves
   where
-    add nameTrie (groups, leaves) message = do
-      (newGroups, newLeaves) <- convert nameTrie message
+    add (groups, leaves, named) message = do
+      (newGroups, newLeaves, newNamed) <- convert named message
 
       return (newGroups ++ groups,
-              VT.union revision newLeaves leaves)
+              VT.union revision newLeaves leaves,
+              T.union newNamed named)
 
-    remove nameTrie (groups, leaves) message = do
-      (obsoleteGroups, obsoleteLeaves) <- convert nameTrie message
+    remove (groups, leaves, named) message = do
+      (obsoleteGroups, obsoleteLeaves, obsoleteNamed) <- convert named message
 
       return (obsoleteGroups ++ groups,
-              VT.subtract revision obsoleteLeaves leaves)
+              VT.subtract revision obsoleteLeaves leaves,
+              T.subtract obsoleteNamed named)
 
-    convert nameTrie = \case
+    toLeaf path = const (Leaf undefined path) <$> path
+
+    distinguish distinguisher =
+      T.foldrPaths (T.union . flip Pa.append distinguisher) T.empty
+
+    convert named = \case
       Pr.Group { Pr.getGroupName = name
                , Pr.getGroupMembers = members } -> do
 
         let visit result path =
-              case T.findValue (Pa.singleton (Pa.keys path !! 2) ()) nameTrie
-              of
-                Nothing -> patternFailure
+              case T.findValue (Pa.singleton (last $ Pa.keys path) ()) named of
+                Nothing -> exception ("can't find " ++ show path ++ " in " ++ show (const () <$> named))
                 Just chunk -> return $ T.union (byName chunk) result
 
         memberChunks <- foldM visit T.empty $ T.paths members
 
-        return ([Group (Pa.keys name !! 2) (bsRead (Pa.keys name !! 1))
-                 memberChunks undefined],
-                T.empty)
+        let hash = (Pa.keys name !! 2)
+            group = Group hash (bsRead (Pa.keys name !! 1)) memberChunks
+                    undefined
+
+        return ([group], T.empty, T.singleton hash group)
 
       Pr.Leaf { Pr.getLeafName = name
               , Pr.getLeafBody = body } -> do
@@ -403,14 +421,22 @@ update revision deserialize (obsolete, new) tree =
         -- todo: reject this leaf if the trie is empty
 
         let hash = Pa.keys name !! 2
-            leaves = T.foldrPaths (T.union . flip Pa.append hash) T.empty trie
+            leaves = distinguish hash trie
             members = T.foldrPaths (T.union . toLeaf) T.empty leaves
-            toLeaf path = const (Leaf undefined path) <$> path
+            group = Group hash (bsRead (Pa.keys name !! 1)) members undefined
 
-        return ([Group hash (bsRead (Pa.keys name !! 1)) members undefined],
-                leaves)
+        return ([group], leaves, T.singleton hash group)
 
-      _ -> return ([], T.empty)
+      Pr.Tree { Pr.getTreeName = name } -> do
+        let hash = Pa.keys name !! 1
+
+        trie <- fromMaybe T.empty <$> deserialize hash
+
+        return ([],
+                distinguish BS.empty trie,
+                (\v -> Leaf undefined (const v <$> name)) <$> trie)
+
+      _ -> patternFailure
 
     updateIndex index accessor obsoleteChunks newChunks =
       (foldr (T.union . index)
