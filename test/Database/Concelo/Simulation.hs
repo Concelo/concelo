@@ -430,6 +430,8 @@ simulate state = trace (" *** start simulation: " ++ show state) $
       error -> QC.counterexample (show error) False
     Right _ -> error ("failed to complete after " ++ show limit ++ " steps")
 
+-- todo: assert no Nacks are sent when packets are never lost or reordered
+
 runTests :: (forall t. QC.Testable t => String -> t -> IO ()) -> IO ()
 runTests check = do
   check "one reader, one writer"

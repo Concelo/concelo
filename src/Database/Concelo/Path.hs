@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Database.Concelo.Path
   ( Path()
   , leaf
@@ -13,8 +14,22 @@ module Database.Concelo.Path
   , Database.Concelo.Path.init
   , initLast ) where
 
+import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Base16 as B16
+import qualified Data.List as L
+
 data Path k v = Path { getPathKeys :: [k]
-                     , getPathValue :: v } deriving (Eq, Show)
+                     , getPathValue :: v } deriving (Eq)
+
+instance {-# OVERLAPPABLE #-} (Show v, Show k) => Show (Path k v) where
+  show (Path ks v) = (L.intercalate "/" $ map show ks) ++ ":" ++ show v
+
+instance {-# OVERLAPPING #-} Show v => Show (Path BS.ByteString v) where
+  show (Path ks v) = (L.intercalate "/" $ map visit ks) ++ ":" ++ show v where
+    visit bs = if BS.length bs > 1 then
+                 BS.unpack $ B16.encode $ BS.take 4 bs
+               else
+                 BS.unpack bs
 
 instance Functor (Path k) where
   fmap f (Path ks v) = Path ks (f v)

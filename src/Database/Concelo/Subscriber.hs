@@ -562,19 +562,33 @@ checkForest lens incomplete name =
         set subscriberMissing BT.empty
   in
 
-  do assertComplete name
+  do publishedName <-
+       Pr.getForestName . getForestMessage <$> get subscriberPublished
 
-     updateM lens $ updateForest name
+     persistedName <-
+       Pr.getForestName . getForestMessage <$> get subscriberPersisted
 
-     diff <- get subscriberDiff >>= filterDiff
+     if name == publishedName then
+       get subscriberPublished >>= set lens
+       else
+       if name == persistedName then
+         get subscriberPersisted >>= set lens
+       else do
+         assertComplete name
 
-     version <- getThenUpdate subscriberVersion (+ 1)
+         updateM lens $ updateForest name
 
-     update subscriberReceived (updateChunksV version diff)
+         diff <- get subscriberDiff >>= filterDiff
+
+         version <- getThenUpdate subscriberVersion (+ 1)
+
+         update subscriberReceived (updateChunksV version diff)
+
+         get subscriberReceived >>= set subscriberClean
+
+         resetDiff
 
      update (subscriberIncomplete . incomplete) $ T.subtract name
-
-     get subscriberReceived >>= set subscriberClean
 
   `E.catchError` \case
     Co.MissingChunks -> resetDiff

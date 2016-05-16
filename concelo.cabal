@@ -58,7 +58,8 @@ library
                        mtl >=2.2.1,
                        lens >=4.13,
                        memory >=0.11,
-                       haste-compiler >=0.5.3
+                       haste-compiler >=0.5.3,
+                       base16-bytestring >=0.1.1.6
 
   default-language:    Haskell2010
 
