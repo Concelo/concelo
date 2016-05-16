@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RankNTypes #-}
 module Database.Concelo.BiTrie
   ( BiTrie()
@@ -16,13 +17,19 @@ module Database.Concelo.BiTrie
 
 import Data.Maybe (fromMaybe)
 
+import qualified Data.ByteString.Char8 as BS
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Path as P
 import qualified Control.Lens as L
 
 data BiTrie k = BiTrie { getForward :: T.Trie k (T.Trie k ())
                        , getReverse :: T.Trie k (T.Trie k ()) }
-                deriving Show
+
+instance {-# OVERLAPPABLE #-} Show k => Show (BiTrie k) where
+  show = show . getForward
+
+instance {-# OVERLAPPING #-} Show (BiTrie BS.ByteString) where
+  show = show . getForward
 
 forward :: L.Lens' (BiTrie k) (T.Trie k (T.Trie k ()))
 forward = L.lens getForward (\x v -> x { getForward = v })

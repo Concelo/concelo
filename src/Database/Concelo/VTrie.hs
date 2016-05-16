@@ -1,5 +1,6 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Database.Concelo.VTrie
   ( VTrie()
   , isEmpty
@@ -41,6 +42,7 @@ module Database.Concelo.VTrie
   , mergeL
   , mergeR ) where
 
+import qualified Data.ByteString.Char8 as BS
 import qualified Database.Concelo.VMap as V
 import qualified Database.Concelo.TrieLike as TL
 import qualified Database.Concelo.Path as P
@@ -57,7 +59,10 @@ versionedValue = L.lens getVersionedValue (\x v -> x { getVersionedValue = v })
 data VTrie k v = VTrie { getVTrieVersioned :: Maybe (Versioned v)
                        , getVTrieMap :: V.VMap k (VTrie k v) }
 
-instance (Show k, Show v) => Show (VTrie k v) where
+instance {-# OVERLAPPABLE #-} (Show k, Show v) => Show (VTrie k v) where
+  show = show . paths
+
+instance {-# OVERLAPPING #-} Show v => Show (VTrie BS.ByteString v) where
   show = show . paths
 
 instance (Eq k, Eq v) => Eq (VTrie k v) where
