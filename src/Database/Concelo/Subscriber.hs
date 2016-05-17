@@ -25,13 +25,14 @@ module Database.Concelo.Subscriber
   , getSubscriberClean
   , subscriberPublished
   , subscriberStream
+  , subscriberPRNG
   , nextMessage ) where
 
 import Database.Concelo.Control (patternFailure, badForest, missingChunks,
                                  set, get, update, updateM, getThenUpdate,
-                                 exception)
+                                 exception, with)
 import Control.Monad (foldM, when)
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe, isNothing, fromJust)
 
 import Debug.Trace
 
@@ -66,11 +67,12 @@ incompletePublished =
   L.lens getIncompletePublished (\x v -> x { getIncompletePublished = v })
 
 data Subscriber =
-  Subscriber { getSubscriberIncomplete :: Incomplete
+  Subscriber { getSubscriberPRNG :: Cr.PRNG
+             , getSubscriberIncomplete :: Incomplete
              , getSubscriberReceived :: VT.VTrie BS.ByteString Pr.Message
              , getSubscriberMissing :: BT.BiTrie BS.ByteString
              , getSubscriberAdminTrie :: Pr.Names
-             , getSubscriberPublicKey :: Maybe Cr.PublicKey
+             , getSubscriberPrivateKey :: Maybe Cr.PrivateKey
              , getSubscriberStream :: BS.ByteString
              , getSubscriberPersisted :: Forest
              , getSubscriberPublished :: Forest
@@ -79,6 +81,10 @@ data Subscriber =
              , getSubscriberDiff :: (T.Trie BS.ByteString Pr.Message,
                                      T.Trie BS.ByteString Pr.Message)
              , getSubscriberVersion :: Integer }
+
+subscriberPRNG :: L.Lens' Subscriber Cr.PRNG
+subscriberPRNG =
+  L.lens getSubscriberPRNG (\x v -> x { getSubscriberPRNG = v })
 
 subscriberIncomplete :: L.Lens' Subscriber Incomplete
 subscriberIncomplete =
@@ -95,8 +101,8 @@ subscriberMissing =
 subscriberAdminTrie =
   L.lens getSubscriberAdminTrie (\x v -> x { getSubscriberAdminTrie = v })
 
-subscriberPublicKey =
-  L.lens getSubscriberPublicKey (\x v -> x { getSubscriberPublicKey = v })
+subscriberPrivateKey =
+  L.lens getSubscriberPrivateKey (\x v -> x { getSubscriberPrivateKey = v })
 
 subscriberStream =
   L.lens getSubscriberStream (\x v -> x { getSubscriberStream = v })
@@ -125,9 +131,9 @@ subscriberVersion :: L.Lens' Subscriber Integer
 subscriberVersion =
   L.lens getSubscriberVersion (\x v -> x { getSubscriberVersion = v })
 
-subscriber adminTrie publicKey stream =
-  Subscriber (Incomplete T.empty T.empty) VT.empty BT.empty adminTrie
-  publicKey stream f f VT.empty Se.empty (T.empty, T.empty) 0
+subscriber adminTrie privateKey stream =
+  Subscriber undefined (Incomplete T.empty T.empty) VT.empty BT.empty adminTrie
+  privateKey stream f f VT.empty Se.empty (T.empty, T.empty) 0
   where
     f = emptyForest stream
 
@@ -338,18 +344,19 @@ updateTrees forestRevision forestACLTrie currentForest (obsoleteTrees, newTrees)
 
           verify signed aclTrie
 
-          publicKey <- get subscriberPublicKey
+          privateKey <- get subscriberPrivateKey
 
           requested <- get subscriberRequestedTrees
 
           let aclFromTries = ACL.fromTries aclTrie forestACLTrie
 
-              descend = case publicKey of
+              descend = case privateKey of
                 Nothing -> True
                 Just k ->
                   ((not optional || Se.member stream requested)
                    && T.member (Pa.super Pr.aclReaderKey
-                                $ Pa.singleton (Cr.fromPublic k) ())
+                                $ Pa.singleton
+                                (Cr.fromPublic $ Cr.derivePublic k) ())
                    aclTrie)
 
           (sync, key) <-
@@ -365,28 +372,33 @@ updateTrees forestRevision forestACLTrie currentForest (obsoleteTrees, newTrees)
 
               verifyLeafDiff aclTrie (snd diff)
 
-              case publicKey >>= \k ->
+              case privateKey >>= \k ->
                 T.findValue (Pa.super Pr.aclReaderKey
-                             $ Pa.singleton (Cr.fromPublic k) ()) aclTrie of
+                             $ Pa.singleton
+                             (Cr.fromPublic $ Cr.derivePublic k) ()) aclTrie of
                 Nothing ->
                   return (ST.empty, Nothing)
 
-                Just keyString ->
-                  let key = Cr.toSymmetric keyString in
+                Just keyString -> do
+                  key <- Cr.toSymmetric
+                         <$> (with subscriberPRNG
+                              $ Cr.decryptAsymmetric (fromJust privateKey)
+                              keyString)
+
                   (, Just key) <$> ST.update
-                  forestRevision
-                  (((T.foldrPathsAndValues
-                     (\(p, v) ->
-                       case Pr.parseValue (Pr.getSignedSigner signed)
-                            aclFromTries v
-                       of
-                         Nothing -> id
-                         Just value -> T.union (const value <$> p))
-                     T.empty <$>)
-                    . Pr.parseTrie <$>)
-                   . Cr.decryptSymmetric key)
-                  (fst diff)
-                  (getTreeSync currentTree)
+                    forestRevision
+                    (((T.foldrPathsAndValues
+                       (\(p, v) ->
+                         case Pr.parseValue (Pr.getSignedSigner signed)
+                              aclFromTries v
+                         of
+                           Nothing -> id
+                           Just value -> T.union (const value <$> p))
+                       T.empty <$>)
+                      . Pr.parseTrie <$>)
+                     . Cr.decryptSymmetric key)
+                    (fst diff)
+                    (getTreeSync currentTree)
             else
               return (ST.empty, Nothing)
 
@@ -441,12 +453,12 @@ updateForest name current = do
 
       subscribed <- get subscriberStream
 
-      publicKey <- get subscriberPublicKey
+      privateKey <- get subscriberPrivateKey
 
       when (revision < (Pr.getForestRevision $ getForestMessage persisted))
         $ traceM ("old revision " ++ show revision)
 
-      when (isNothing publicKey
+      when (isNothing privateKey
             && revision /= 1 + (Pr.getForestRevision
                                 $ getForestMessage published))
         $ traceM ("incorrect revision: wanted "
@@ -477,7 +489,7 @@ updateForest name current = do
             || (revision == (Pr.getForestRevision $ getForestMessage persisted)
                 && name /= (Pr.getForestName $ getForestMessage persisted))
 
-            || (isNothing publicKey
+            || (isNothing privateKey
                 && revision /= 1 + (Pr.getForestRevision
                                     $ getForestMessage published))
 
@@ -511,6 +523,8 @@ updateForest name current = do
                   (Pr.getForestTrees $ getForestMessage current)
                   received
                   trees
+
+      -- traceM ("tree diff " ++ show treeDiff)
 
       treeMap <- updateTrees revision aclTrie current (snd treeDiff)
 

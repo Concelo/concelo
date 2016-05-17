@@ -16,7 +16,7 @@ import Database.Concelo.Control (exception, get, set, with, patternFailure,
 import Control.Monad (when, foldM)
 import Data.Maybe (isJust, isNothing, fromJust)
 
-import Debug.Trace
+-- import Debug.Trace
 
 import qualified Control.Lens as L
 import qualified Data.ByteString as BS
@@ -94,7 +94,8 @@ instance ST.Serializer a SyncState where
 newTree stream =
   Su.emptyTree stream . Just <$> with serializerPRNG Cr.newSymmetric
 
-visitSync :: (T.Trie BS.ByteString a ->
+visitSync :: Show a =>
+             (T.Trie BS.ByteString a ->
               BS.ByteString) ->
              (Cr.PrivateKey ->
               BS.ByteString ->
@@ -135,6 +136,11 @@ visitSync serialize chunkToMessage level syncTree key treeStream forestStream
   allObsolete' <- foldM visit allObsolete obsolete
 
   allNew' <- foldM visit allNew new
+
+  -- obsTrie <- foldM visit T.empty obsolete
+  -- traceM ("sync obsolete: " ++ show (const () <$> obsTrie))
+  -- newTrie <- foldM visit T.empty new
+  -- traceM ("sync new: " ++ show (const () <$> newTrie))
 
   set serializerDiff (allObsolete', allNew')
 
@@ -177,6 +183,8 @@ visitTrees forest rejected revision obsoleteByACL newByACL =
             aclTrie <- with serializerPRNG
                        $ ACL.toTrie (fromJust $ Su.getTreeKey tree) acl
 
+            -- traceM ("tree acl trie is " ++ show aclTrie)
+
             visitSync
               serializeStrings
               ST.chunkToMessage
@@ -190,6 +198,8 @@ visitTrees forest rejected revision obsoleteByACL newByACL =
               aclTrie
           else
             return $ Pr.getTreeACL $ Su.getTreeMessage tree
+
+        -- traceM ("tree acl root is " ++ show aclRoot)
 
         message <-
           with serializerPRNG $ Pr.tree
@@ -221,8 +231,8 @@ visitTrees forest rejected revision obsoleteByACL newByACL =
 visitForest forest revision (obsoleteTrees, newTrees) = do
   private <- get serializerPrivate
 
-  traceM ("obsolete trees: " ++ show obsoleteTrees)
-  traceM ("new trees: " ++ show newTrees)
+  -- traceM ("obsolete trees: " ++ show obsoleteTrees)
+  -- traceM ("new trees: " ++ show newTrees)
 
   treeRoot <- visitSync
               serializeNames

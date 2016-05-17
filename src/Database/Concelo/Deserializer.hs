@@ -15,7 +15,10 @@ import Database.Concelo.Control (get)
 import Data.Maybe (fromMaybe)
 import Control.Applicative ((<|>))
 
+import Debug.Trace
+
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Base16 as B16
 import qualified Control.Lens as L
 import qualified Control.Monad.State as St
 import qualified Database.Concelo.Map as M
@@ -78,6 +81,7 @@ maybeTail = \case
   _ -> Nothing
 
 visitDirty revision acl rules result =
+  trace ("visit dirty " ++ show dirty) $
   T.foldrKeys (visit M.empty (Pa.leaf ()) rules acl dirty) result dirty
   where
     (dirty, _, _, _) = result
@@ -87,6 +91,7 @@ visitDirty revision acl rules result =
       Just (_, v) -> T.union (const v <$> path)
 
     visit env path rules acl dirty key result =
+      trace ("visit " ++ show (B16.encode $ BS.take 4 key)) $
       visitValues result Nothing $ M.pairs possibleValues where
         (rules', wildcard) = R.subRules key rules
 
@@ -119,11 +124,11 @@ visitDirty revision acl rules result =
                 Just _ -> R.getRulesValidate rules' context
 
               dependencies' =
-                BT.insertTrie path writeDependencies
-                $ BT.insertTrie path validateDependencies
+                BT.insertTrie path' writeDependencies
+                $ BT.insertTrie path' validateDependencies
                 dependencies
 
-              remainingDirty' = T.subtract path remainingDirty
+              remainingDirty' = T.subtract path' remainingDirty
 
               visit' = visit env' path' rules' acl' dirty'
 
@@ -140,23 +145,24 @@ visitDirty revision acl rules result =
 
                    case firstValid of
                      Nothing ->
-                       VT.subtract revision path sanitized
+                       VT.subtract revision path' sanitized
                      Just (_, v) ->
-                       VT.union revision (const v <$> path) sanitized,
+                       VT.union revision (const v <$> path') sanitized,
 
                    let map = case firstValid of
                          Nothing -> possibleValues
                          Just (k, _) -> M.delete k possibleValues in
 
                    if null map then
-                     T.subtract path rejected
+                     T.subtract path' rejected
                    else
-                     T.union (const (M.keys map) <$> path)
+                     T.union (const (M.keys map) <$> path')
                      rejected,
 
                    dependencies')
                   dirty' in
 
+          trace ("visit value " ++ show value) $
           if remainingDirty `T.hasAny` writeDependencies then
             T.foldrKeys visit' result dirty'
           else
@@ -202,6 +208,7 @@ updateSanitized revision acl currentSanitized currentRejected
 newtype UnsanitizedElement =
   UnsanitizedElement
   { getUnsanitizedElementMap :: M.Map BS.ByteString Pr.Value }
+  deriving Show
 
 emptyUnsanitizedElement = UnsanitizedElement M.empty
 

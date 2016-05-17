@@ -112,7 +112,7 @@ ignis admins credentials stream seed =
                 False
                 Nothing
                 VT.empty
-                (Pi.pipe adminTrie (Just public) stream)
+                (Pi.pipe adminTrie (Just private) stream)
                 (Se.serializer private)
                 (D.deserializer private permitAdmins permitAdminsAndMe)
                 prng'
@@ -173,7 +173,8 @@ receive m = traceM ("ignis receive " ++ show m) >> case m of
   message -> do
     old <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberPublished)
 
-    with (ignisPipe . Pi.pipeSubscriber) $ Su.receive message
+    lend ignisPRNG Su.subscriberPRNG (ignisPipe . Pi.pipeSubscriber)
+      $ Su.receive message
 
     new <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberPublished)
 

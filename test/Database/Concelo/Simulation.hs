@@ -308,9 +308,9 @@ clientHasMessages now client = case messages of
       <*> eval (I.nextMessages now) (getClientIgnis client)
 
 apply task = do
-  messages <- get stateMessages
+  -- messages <- get stateMessages
 
-  traceM ("apply " ++ show task ++ " message count: " ++ show (Q.length messages))
+  -- traceM ("apply " ++ show task ++ " message count: " ++ show (Q.length messages))
 
   update stateNow (+100)
 
@@ -400,11 +400,11 @@ apply' = \case
         (ignisMessages, ignis') <-
           eitherToAction $ run (I.nextMessages now) $ getClientIgnis client
 
-        M.when (not $ null relayMessages)
-          $ traceM ("relay to ignis: " ++ show relayMessages)
+        -- M.when (not $ null relayMessages)
+        --   $ traceM ("relay to ignis: " ++ show relayMessages)
 
-        M.when (not $ null ignisMessages)
-          $ traceM ("ignis to relay: " ++ show ignisMessages)
+        -- M.when (not $ null ignisMessages)
+        --   $ traceM ("ignis to relay: " ++ show ignisMessages)
 
         let append messageType list sequence =
               foldr (flip (Q.|>)) sequence
@@ -431,6 +431,9 @@ simulate state = trace (" *** start simulation: " ++ show state) $
     Right _ -> error ("failed to complete after " ++ show limit ++ " steps")
 
 -- todo: assert no Nacks are sent when packets are never lost or reordered
+
+-- todo: assert that node never sends messages it should know the
+-- remote already has
 
 runTests :: (forall t. QC.Testable t => String -> t -> IO ()) -> IO ()
 runTests check = do

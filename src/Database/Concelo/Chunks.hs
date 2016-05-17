@@ -13,8 +13,8 @@ import qualified Database.Concelo.Path as Pa
 import qualified Database.Concelo.Control as C
 import qualified Data.ByteString as BS
 
-chunkIsLeaf = \case
-  Pr.Leaf {} -> True
+chunkIsGroup = \case
+  Pr.Group {} -> True
   _ -> False
 
 chunkMembers = \case
@@ -49,10 +49,10 @@ findNewChunks oldChunks newChunks newRoot =
               badForest
             else
               foldM visit (T.union (const chunk <$> name) new,
-                           if chunkIsLeaf chunk then
-                             T.union (const chunk <$> name) newLeaves
+                           if chunkIsGroup chunk then
+                             newLeaves
                            else
-                             newLeaves,
+                             T.union (const chunk <$> name) newLeaves,
                            found) (T.paths $ chunkMembers chunk)
 
 findObsoleteChunks oldChunks oldRoot found =
@@ -71,10 +71,11 @@ findObsoleteChunks oldChunks oldRoot found =
                     ++ " in " ++ show oldChunks))
         (T.findValue name oldChunks) >>= \chunk ->
           foldM visit (T.union (const chunk <$> name) obsolete,
-                       if chunkIsLeaf chunk then
-                         T.union (const chunk <$> name) obsoleteLeaves
+                       if chunkIsGroup chunk then
+                         obsoleteLeaves
                        else
-                         obsoleteLeaves) (T.paths $ chunkMembers chunk)
+                         T.union (const chunk <$> name) obsoleteLeaves)
+          (T.paths $ chunkMembers chunk)
 
 diffChunks oldChunks oldRoot newChunks newRoot = do
   (new, newLeaves, found) <- findNewChunks oldChunks newChunks newRoot

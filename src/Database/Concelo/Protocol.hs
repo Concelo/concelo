@@ -189,7 +189,7 @@ rulesKey = ".rules" :: BS.ByteString
 
 localVersion = (-1) :: Integer
 
-leafSize = 1024 :: Int
+leafSize = 10024 :: Int
 
 treeLeafLevel = "0" :: BS.ByteString
 
@@ -208,7 +208,7 @@ split s =
   if BS.null b then
     [a]
   else
-    a : split b
+    undefined -- todo:  a : split b
 
 toText = \case
   Leaf _ _ treeStream forestStream body ->

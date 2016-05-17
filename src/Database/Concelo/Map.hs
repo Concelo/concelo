@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleInstances #-}
 module Database.Concelo.Map
   ( Map()
   , empty
@@ -18,9 +19,19 @@ module Database.Concelo.Map
   , Database.Concelo.Map.subtract
   , diff ) where
 
+import qualified Data.ByteString.Char8 as BS
 import qualified Database.Concelo.VMap as V
 
 newtype Map k v = Map { run :: V.VMap k v }
+
+instance {-# OVERLAPPABLE #-} (Show k, Show v) => Show (Map k v) where
+  show = show . run
+
+instance {-# OVERLAPPING #-} Show v => Show (Map BS.ByteString v) where
+  show = show . run
+
+instance Ord k => Functor (Map k) where
+  fmap f = Map . fmap f . run
 
 instance Foldable (Map k) where
   foldr visit seed = foldr visit seed . run

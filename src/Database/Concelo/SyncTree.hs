@@ -25,7 +25,7 @@ import Control.Monad (foldM, when, forM_)
 import Data.Foldable (toList)
 import Data.Maybe (fromMaybe)
 
-import Debug.Trace
+-- import Debug.Trace
 
 import qualified Control.Lens as L
 import qualified Control.Monad.State as S
@@ -360,7 +360,7 @@ update :: Integer ->
           Co.Action s (SyncTree a)
 update revision deserialize (obsolete, new) tree =
   do
-    traceM ("obsolete: " ++ show obsolete ++ "; new: " ++ show new)
+    -- traceM ("obsolete: " ++ show obsolete ++ "; new: " ++ show new)
 
     (obsoleteChunks, leafSubset, namedSubset) <-
       foldM remove ([], getTreeLeaves tree, getTreeByName tree) obsolete
@@ -455,7 +455,7 @@ split path =
 
 toLeaves leaves path = flip T.union leaves . T.super "0" <$> split path
 
-visit :: Serializer a s =>
+visit :: (Show a, Serializer a s) =>
          SyncTree a ->
          T.Trie BS.ByteString [BS.ByteString] ->
          T.Trie BS.ByteString a ->
@@ -486,9 +486,13 @@ visit tree rejects obsolete new = do
       newGroups = groups $ getStateNew state
       obsoleteGroups = groups $ getStateObsolete state
 
-      root = (T.lastValue
-              $ T.union (T.index byName newGroups)
-              $ T.subtract (T.index byName obsoleteGroups)
-              (getTreeByName $ getStateTree state))
+      ordered = T.union (T.index byHeightVacancy newGroups)
+                $ T.subtract (T.index byHeightVacancy obsoleteGroups)
+                (getTreeByHeightVacancy $ getStateTree state)
+
+      root = T.lastValue ordered
+
+  -- traceM ("root is " ++ show (T.lastPath ordered))
+  -- traceM ("ordered is " ++ show ordered)
 
   return (obsoleteGroups, newGroups, root)

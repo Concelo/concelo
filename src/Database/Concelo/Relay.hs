@@ -37,6 +37,7 @@ import qualified Database.Concelo.Bytes as B
 import qualified Control.Lens as L
 import qualified Control.Monad.State as St
 import qualified Data.ByteString.Char8 as BS
+-- import qualified Data.ByteString.Base16 as B16
 
 data Relay =
   Relay { getRelayPRNG :: C.PRNG
@@ -156,6 +157,18 @@ setSubscriber new = do
         updateThenGet relayStreams
         $ updateStreams publicKey previous new
 
+      let (obsM, newM) = T.diff (Su.getSubscriberClean previous) (Su.getSubscriberClean new)
+
+      traceM ("relay obs: " ++ show obsM)
+      traceM ("relay new: " ++ show newM)
+
+      traceM ("streams: " ++ show streams)
+
+      let (obsMF, newMF) = filterDiff streams (obsM, newM)
+
+      traceM ("relay obs filtered: " ++ show obsMF)
+      traceM ("relay new filtered: " ++ show newMF)
+
       with (relayPipe . Pi.pipePublisher)
         $ Pu.update (Pr.getForestName
                      $ Su.getForestMessage
@@ -172,10 +185,14 @@ updateStreams publicKey oldSubscriber newSubscriber =
   (Su.getForestTreeMap $ Su.getSubscriberPersisted newSubscriber)
 
 updateStreams' publicKey oldTrees newTrees streams =
+  -- trace ("diffed " ++ show (Su.getTreeMessage <$> oldTrees)
+  --        ++ " with " ++ show (Su.getTreeMessage <$> newTrees)
+  --        ++ " result: " ++ show (Su.getTreeMessage <$> new))
   foldr maybeAdd streams new where
     (_, new) = M.diff oldTrees newTrees
 
     maybeAdd new streams =
+      -- trace ("is " ++ show (B16.encode $ BS.take 4 $ C.fromPublic publicKey) ++ " in " ++ show (Su.getTreeACLTrie new) ++ "? (optional: " ++ show (Pr.getTreeOptional $ Su.getTreeMessage new) ++ ")") $
       -- todo: allow client to subscribe to optional tree streams
       if T.member
          (Pa.super Pr.aclReaderKey $ Pa.singleton (C.fromPublic publicKey) ())
@@ -193,7 +210,7 @@ filterDiff streams (obsoleteChunks, newChunks) =
       case chunkTreeStream chunk of
         Nothing -> chunks
         Just stream ->
-          if Se.member stream streams then
+          if BS.null stream || Se.member stream streams then
             chunks
           else
             T.subtract path chunks

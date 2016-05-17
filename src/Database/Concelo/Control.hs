@@ -130,9 +130,11 @@ with lens action =
 
 lend :: L.Lens' s c -> L.Lens' a c -> L.Lens' s a -> Action a b -> Action s b
 lend src dst lens action = do
+  original <- get (lens . dst)
   get src >>= set (lens . dst)
   result <- with lens action
   get (lens . dst) >>= set src
+  set (lens . dst) original
   return result
 
 mapPair f (x, y) = (f x, f y)

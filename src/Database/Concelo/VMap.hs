@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleInstances #-}
 module Database.Concelo.VMap
   ( VMap()
   , empty
@@ -24,12 +25,20 @@ module Database.Concelo.VMap
   , foldrDiff
   , diff ) where
 
+import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Base16 as B16
 import qualified Data.Tree.RBTree as T
 import qualified Control.Lens as L
 import Data.Maybe (fromJust)
 import Control.Applicative ((<|>))
 
 newtype VMap k v = VMap { run :: T.RBTree (Cell k v) }
+
+instance {-# OVERLAPPABLE #-} (Show k, Show v) => Show (VMap k v) where
+  show = show . pairs
+
+instance {-# OVERLAPPING #-} Show v => Show (VMap BS.ByteString v) where
+  show = show . fmap (\(k,v) -> (B16.encode $ BS.take 4 k, v)) . pairs
 
 instance Ord k => Functor (VMap k) where
   fmap f = foldrTriples (\(r, k, v) -> insert r k $ f v) empty
