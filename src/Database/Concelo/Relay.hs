@@ -157,17 +157,17 @@ setSubscriber new = do
         updateThenGet relayStreams
         $ updateStreams publicKey previous new
 
-      let (obsM, newM) = T.diff (Su.getSubscriberClean previous) (Su.getSubscriberClean new)
+      -- let (obsM, newM) = T.diff (Su.getSubscriberClean previous) (Su.getSubscriberClean new)
 
-      traceM ("relay obs: " ++ show obsM)
-      traceM ("relay new: " ++ show newM)
+      -- traceM ("relay obs: " ++ show obsM)
+      -- traceM ("relay new: " ++ show newM)
 
-      traceM ("streams: " ++ show streams)
+      -- traceM ("streams: " ++ show streams)
 
-      let (obsMF, newMF) = filterDiff streams (obsM, newM)
+      -- let (obsMF, newMF) = filterDiff streams (obsM, newM)
 
-      traceM ("relay obs filtered: " ++ show obsMF)
-      traceM ("relay new filtered: " ++ show newMF)
+      -- traceM ("relay obs filtered: " ++ show obsMF)
+      -- traceM ("relay new filtered: " ++ show newMF)
 
       with (relayPipe . Pi.pipePublisher)
         $ Pu.update (Pr.getForestName

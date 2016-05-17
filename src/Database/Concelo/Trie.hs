@@ -7,6 +7,7 @@ module Database.Concelo.Trie
   , isLeaf
   , leaf
   , value
+  , setValue
   , firstPath
   , firstValue
   , lastPath
@@ -29,7 +30,6 @@ module Database.Concelo.Trie
   , fromTrieLike
   , sub
   , super
-  , superValue
   , singleton
   , index
   , union
@@ -81,6 +81,8 @@ leaf = Trie . V.leaf noVersion
 
 value = V.value . run
 
+setValue v = Trie . V.setValue noVersion v . run
+
 firstPath = V.firstPath . run
 
 firstValue = V.firstValue . run
@@ -125,8 +127,6 @@ fromTrieLike :: (TL.TrieLike t, Ord k) =>
 fromTrieLike = Trie . V.fromTrieLike noVersion
 
 sub k = Trie . V.sub k . run
-
-superValue k v = Trie . V.superValue noVersion k v . run
 
 super k = Trie . V.super noVersion k . run
 

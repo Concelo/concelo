@@ -15,10 +15,9 @@ import Database.Concelo.Control (get)
 import Data.Maybe (fromMaybe)
 import Control.Applicative ((<|>))
 
-import Debug.Trace
+-- import Debug.Trace
 
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Base16 as B16
 import qualified Control.Lens as L
 import qualified Control.Monad.State as St
 import qualified Database.Concelo.Map as M
@@ -81,8 +80,8 @@ maybeTail = \case
   _ -> Nothing
 
 visitDirty revision acl rules result =
-  trace ("visit dirty " ++ show dirty) $
-  T.foldrKeys (visit M.empty (Pa.leaf ()) rules acl dirty) result dirty
+  -- trace ("visit dirty " ++ show dirty) $
+  visitElement M.empty (Pa.leaf ()) rules acl dirty result
   where
     (dirty, _, _, _) = result
 
@@ -90,47 +89,39 @@ visitDirty revision acl rules result =
       Nothing -> T.subtract path
       Just (_, v) -> T.union (const v <$> path)
 
-    visit env path rules acl dirty key result =
-      trace ("visit " ++ show (B16.encode $ BS.take 4 key)) $
+    visitElement env path rules acl dirty result =
+      -- trace ("visit " ++ show path) $
       visitValues result Nothing $ M.pairs possibleValues where
-        (rules', wildcard) = R.subRules key rules
-
-        dirty' = T.sub key $ dirty
-
-        path' = path `Pa.append` key
-
-        env' = if BS.null wildcard then env else M.insert wildcard key env
-
         possibleValues = fromMaybe M.empty
-          (getUnsanitizedElementMap <$> T.value dirty')
+          (getUnsanitizedElementMap <$> T.value dirty)
 
         visitValues result@(remainingDirty, sanitized, rejected, dependencies)
           firstValid values =
           let value = maybeHead values
 
-              root = R.rootVisitor $ updateTrie path' value $ T.trie sanitized
+              root = R.rootVisitor $ updateTrie path value $ T.trie sanitized
 
-              visitor = foldr R.visitorChild root $ Pa.keys path'
+              visitor = foldr R.visitorChild root $ Pa.keys path
 
-              context = R.context revision env' root visitor
+              context = R.context revision env root visitor
 
-              (readACL, _) = R.getRulesRead rules' context acl
+              (readACL, _) = R.getRulesRead rules context acl
 
               (acl', writeDependencies) =
-                R.getRulesWrite rules' context readACL
+                R.getRulesWrite rules context readACL
 
               (validateResult, validateDependencies) = case value of
                 Nothing -> (True, T.empty)
-                Just _ -> R.getRulesValidate rules' context
+                Just _ -> R.getRulesValidate rules context
 
               dependencies' =
-                BT.insertTrie path' writeDependencies
-                $ BT.insertTrie path' validateDependencies
+                BT.insertTrie path writeDependencies
+                $ BT.insertTrie path validateDependencies
                 dependencies
 
-              remainingDirty' = T.subtract path' remainingDirty
+              remainingDirty' = T.subtract path remainingDirty
 
-              visit' = visit env' path' rules' acl' dirty'
+              visitKey' = visitKey env path rules acl' dirty
 
               next value = case maybeTail values of
                 Just tail ->
@@ -140,42 +131,52 @@ visitDirty revision acl rules result =
                   tail
 
                 Nothing ->
-                  T.foldrKeys visit'
+                  T.foldrKeys visitKey'
                   (remainingDirty',
 
                    case firstValid of
                      Nothing ->
-                       VT.subtract revision path' sanitized
+                       VT.subtract revision path sanitized
                      Just (_, v) ->
-                       VT.union revision (const v <$> path') sanitized,
+                       VT.union revision (const v <$> path) sanitized,
 
                    let map = case firstValid of
                          Nothing -> possibleValues
                          Just (k, _) -> M.delete k possibleValues in
 
                    if null map then
-                     T.subtract path' rejected
+                     T.subtract path rejected
                    else
-                     T.union (const (M.keys map) <$> path')
+                     T.union (const (M.keys map) <$> path)
                      rejected,
 
                    dependencies')
-                  dirty' in
+                  dirty in
 
-          trace ("visit value " ++ show value) $
+          -- trace ("visit value " ++ show value) $
           if remainingDirty `T.hasAny` writeDependencies then
-            T.foldrKeys visit' result dirty'
+            T.foldrKeys visitKey' result dirty
           else
             if maybe True
                (\(_, v) -> L.view Pr.valueSigner v `ACL.isWriter` acl')
                value
             then
               if remainingDirty' `T.hasAny` validateDependencies then
-                T.foldrKeys visit' result dirty'
+                T.foldrKeys visitKey' result dirty
               else
                 next $ if validateResult then value else Nothing
             else
               next Nothing
+
+    visitKey env path rules acl dirty key result =
+      visitElement env' path' rules' acl dirty' result where
+        (rules', wildcard) = R.subRules key rules
+
+        dirty' = T.sub key $ dirty
+
+        path' = path `Pa.append` key
+
+        env' = if BS.null wildcard then env else M.insert wildcard key env
 
 updateSanitized revision acl currentSanitized currentRejected
   updatedUnsanitized updatedRules currentDependencies

@@ -164,7 +164,7 @@ replaceClient client = (client :) . removeClient client
 consistent (State { getStateClients = clients
                   , getStatePublished = published }) =
   foldr check True clients where
-    check client =
+    check client = -- trace ("published " ++ show published ++ "\nclient published " ++ show (I.getPublishedTrie (getClientIgnis client))) .
       ((published == I.getPublishedTrie (getClientIgnis client)) &&)
 
 type WhichClient = Double
@@ -348,7 +348,7 @@ apply' = \case
     in do
       clientCount <- length <$> get stateClients
 
-      flush $ take (1000 * clientCount) $ filter flushable tasks
+      flush $ take (100 * clientCount) $ filter flushable tasks
 
   Reconnect tasks whichClient -> do
     getClient whichClient (const True) >>= \case

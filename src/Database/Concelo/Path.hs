@@ -27,9 +27,9 @@ instance {-# OVERLAPPABLE #-} (Show v, Show k) => Show (Path k v) where
 instance {-# OVERLAPPING #-} Show v => Show (Path BS.ByteString v) where
   show (Path ks v) = (L.intercalate "/" $ map visit ks) ++ ":" ++ show v where
     visit bs = if BS.length bs > 1 then
-                 BS.unpack $ B16.encode $ BS.take 4 bs
+                 show $ B16.encode $ BS.take 4 bs
                else
-                 BS.unpack bs
+                 show bs
 
 instance Functor (Path k) where
   fmap f (Path ks v) = Path ks (f v)

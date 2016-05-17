@@ -425,7 +425,7 @@ update revision deserialize (obsolete, new) tree =
             members = T.foldrPaths (T.union . toLeaf) T.empty leaves
             group = Group hash (bsRead (Pa.keys name !! 1)) members undefined
 
-        return ([group], leaves, T.singleton hash group)
+        return ([group], T.sub "0" leaves, T.singleton hash group)
 
       Pr.Tree { Pr.getTreeName = name } -> do
         let hash = Pa.keys name !! 1
@@ -433,7 +433,7 @@ update revision deserialize (obsolete, new) tree =
         trie <- fromMaybe T.empty <$> deserialize hash
 
         return ([],
-                distinguish BS.empty trie,
+                T.sub "0" $ distinguish BS.empty trie,
                 (\v -> Leaf undefined (const v <$> name)) <$> trie)
 
       _ -> patternFailure

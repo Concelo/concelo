@@ -256,6 +256,10 @@ makeDiff head = do
 
   published <- get (ignisPipe . Pi.pipeSubscriber . Su.subscriberPublished)
 
+  -- traceM ("sanitized " ++ show (D.getDesSanitized deserializer))
+  -- traceM ("head " ++ show head)
+  -- traceM ("diff " ++ show (T.diff (D.getDesSanitized deserializer) head))
+
   validateDiff
     me
     (Pr.getForestRevision $ Su.getForestMessage published)
@@ -274,16 +278,12 @@ validateDiff :: Cr.PublicKey ->
                 Co.Action Ignis (T.Trie BS.ByteString Pr.Value,
                                  T.Trie BS.ByteString Pr.Value)
 validateDiff me revision rules acl head (obsolete, new) =
-  foldM (validate rules acl env union obsolete new root) (T.empty, T.empty)
-  $ T.triples union where
-
+  visitValue rules acl M.empty union obsolete new root where
     union = T.union obsolete new
     root = R.rootVisitor $ T.trie head
-    env = M.empty
 
-    validate rules acl env union obsolete new visitor
-      (obsoleteResult, newResult) (k, v, _) =
-      (case v of
+    visitValue rules acl env union obsolete new visitor =
+      (case value of
           Nothing -> descend
           Just _ ->
             if valid then
@@ -293,41 +293,48 @@ validateDiff me revision rules acl head (obsolete, new) =
                 exception ("write access denied: " ++ show me
                            ++ " not whitelisted in " ++ show acl')
             else
-              exception "invalid write") where
+              exception "invalid write")
+      where
+        value = T.value union
 
-        (rules', wildcard) = R.subRules k rules
+        obsoleteValue = T.value obsolete
 
-        env' = if BS.null wildcard then env else M.insert wildcard k env
+        newValue = (L.set Pr.valueACL acl) <$> T.value new
 
-        union' = T.sub k union
+        context = R.context revision env root visitor
 
-        obsolete' = T.sub k obsolete
+        (readACL, _) = R.getRulesRead rules context acl
 
-        new' = T.sub k new
-
-        visitor' = R.visitorChild k visitor
-
-        context = R.context revision env' root visitor'
-
-        (readACL, _) = R.getRulesRead rules' context acl
-
-        (acl', _) = R.getRulesWrite rules' context readACL
+        (acl', _) = R.getRulesWrite rules context readACL
 
         (valid, _) = fromMaybe (True, T.empty)
-                     (const (R.getRulesValidate rules' context) <$> v)
-
-        obsoleteValue = T.value obsolete'
-
-        newValue = (L.set Pr.valueACL acl') <$> T.value new'
+                     (const (R.getRulesValidate rules context) <$> value)
 
         descend = do
           (obsoleteSubs, newSubs) <-
-            foldM (validate rules' acl' env' union' obsolete' new' visitor')
-            (T.empty, T.empty) $ T.triples union'
+            foldM (visitKey rules acl' env union obsolete new root)
+            (T.empty, T.empty) $ T.keys union
 
-          return
-            (T.union (T.superValue obsoleteValue k obsoleteSubs)
-             obsoleteResult,
+          return (T.setValue obsoleteValue obsoleteSubs,
+                  T.setValue newValue newSubs)
 
-             T.union (T.superValue newValue k newSubs)
-             newResult)
+    visitKey rules acl env union obsolete new visitor
+      (obsoleteResult, newResult) key =
+        do
+          (obsoleteTrie, newTrie) <-
+            visitValue rules' acl env' union' obsolete' new' visitor'
+
+          return (T.union (T.super key obsoleteTrie) obsoleteResult,
+                  T.union (T.super key newTrie) newResult)
+        where
+          (rules', wildcard) = R.subRules key rules
+
+          env' = if BS.null wildcard then env else M.insert wildcard key env
+
+          union' = T.sub key union
+
+          obsolete' = T.sub key obsolete
+
+          new' = T.sub key new
+
+          visitor' = R.visitorChild key visitor

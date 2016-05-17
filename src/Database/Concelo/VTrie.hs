@@ -8,6 +8,7 @@ module Database.Concelo.VTrie
   , isLeaf
   , leaf
   , value
+  , setValue
   , firstPath
   , firstValue
   , lastPath
@@ -31,7 +32,6 @@ module Database.Concelo.VTrie
   , sub
   , singleton
   , super
-  , superValue
   , isolate
   , index
   , union
@@ -58,6 +58,8 @@ versionedValue = L.lens getVersionedValue (\x v -> x { getVersionedValue = v })
 
 data VTrie k v = VTrie { getVTrieVersioned :: Maybe (Versioned v)
                        , getVTrieMap :: V.VMap k (VTrie k v) }
+
+vtrieVersioned = L.lens getVTrieVersioned (\x v -> x { getVTrieVersioned = v })
 
 instance {-# OVERLAPPABLE #-} (Show k, Show v) => Show (VTrie k v) where
   show = show . paths
@@ -97,6 +99,8 @@ leaf version value = VTrie (Just (Versioned version value)) V.empty
 value = value'
 
 value' trie = getVersionedValue <$> getVTrieVersioned trie
+
+setValue version value = L.set vtrieVersioned (Versioned version <$> value)
 
 firstPath (VTrie v m)
   | null m = P.leaf . getVersionedValue <$> v
@@ -177,9 +181,6 @@ singleton version key = super version key . leaf version
 single version key trie
   | isEmpty trie = V.empty
   | otherwise = V.singleton version key trie
-
-superValue version maybeValue key =
-  VTrie (Versioned version <$> maybeValue) . single version key
 
 super version key = VTrie Nothing . single version key
 
