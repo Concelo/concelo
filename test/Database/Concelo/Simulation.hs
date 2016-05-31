@@ -214,13 +214,13 @@ arbitraryTasks =
 
                 , (10, Publish <$> arbitraryTasks <*> QC.choose (0, 1.0))
 
-                -- , ( 5, return SendLast)
+                , ( 0{-5-}, return SendLast)
 
-                -- , ( 5, return DropFirst)
+                , ( 0{-5-}, return DropFirst)
 
-                , ( 1, do delay <- QC.choose (10, 1000)
-                          tasks <- take delay <$> arbitraryTasks
-                          Reconnect tasks <$> QC.choose (0, 1.0)) ])
+                , ( 0{-1-}, do delay <- QC.choose (10, 1000)
+                               tasks <- take delay <$> arbitraryTasks
+                               Reconnect tasks <$> QC.choose (0, 1.0)) ])
 
 stream = "my stream"
 

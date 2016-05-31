@@ -181,13 +181,11 @@ randomBytes count = do
 
   return result
 
-toWord64 = BS.foldl' (\x y -> x * 256 + fromIntegral y) 0
-
-toSeed s = (toWord64 a,
-            toWord64 b,
-            toWord64 c,
-            toWord64 d,
-            toWord64 e)
+toSeed s = (B.toWord64 a,
+            B.toWord64 b,
+            B.toWord64 c,
+            B.toWord64 d,
+            B.toWord64 e)
   where (a, as) = BS.splitAt 8 s
         (b, bs) = BS.splitAt 8 as
         (c, cs) = BS.splitAt 8 bs

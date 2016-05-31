@@ -79,17 +79,27 @@ relay prng admins stream challenge =
 make prng pipe publicKey challenge =
   Relay prng pipe (Pi.getPipeSubscriber pipe) Se.empty publicKey challenge
 
-data SyncState a = SyncState
+data SyncState a = SyncState { getSyncStatePRNG :: C.PRNG }
+
+syncStatePRNG :: L.Lens' (SyncState a) C.PRNG
+syncStatePRNG =
+    L.lens getSyncStatePRNG (\x v -> x { getSyncStatePRNG = v })
 
 instance ST.Serializer a SyncState where
-  serialize trie = return $ Pr.split $ Pr.serializeNames $ fmap (const ()) trie
-  encrypt = return . id
+  serialize trie = return $ Pr.serializeNames $ fmap (const ()) trie
+  makeId = with syncStatePRNG $ C.randomBytes ST.idSize
+  encrypt = return
 
 trieToMessages private trie level = do
   stream <- get (relayPipe . Pi.pipeSubscriber . Su.subscriberStream)
 
-  ((_, body, root), _) <-
-    eitherToAction $ run (ST.visit ST.empty T.empty T.empty trie) SyncState
+  prng <- get relayPRNG
+
+  ((_, body, root), SyncState prng') <-
+    eitherToAction $ run (ST.visit ST.empty T.empty T.empty trie)
+    (SyncState prng)
+
+  set relayPRNG prng'
 
   -- traceM ("root is " ++ show root ++ "; body is " ++ show body ++ "; trie is " ++ show trie)
 

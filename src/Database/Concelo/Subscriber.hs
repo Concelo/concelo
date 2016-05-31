@@ -387,16 +387,16 @@ updateTrees forestRevision forestACLTrie currentForest (obsoleteTrees, newTrees)
 
                   (, Just key) <$> ST.update
                     forestRevision
-                    (((T.foldrPathsAndValues
-                       (\(p, v) ->
-                         case Pr.parseValue (Pr.getSignedSigner signed)
-                              aclFromTries v
-                         of
-                           Nothing -> id
-                           Just value -> T.union (const value <$> p))
-                       T.empty <$>)
-                      . Pr.parseTrie <$>)
-                     . Cr.decryptSymmetric key)
+                    (Cr.decryptSymmetric key)
+                    ((T.foldrPathsAndValues
+                      (\(p, v) ->
+                        case Pr.parseValue (Pr.getSignedSigner signed)
+                             aclFromTries v
+                        of
+                          Nothing -> id
+                          Just value -> T.union (const value <$> p))
+                      T.empty <$>)
+                     . Pr.parseTrie)
                     (fst diff)
                     (getTreeSync currentTree)
             else
@@ -529,10 +529,8 @@ updateForest name current = do
       treeMap <- updateTrees revision aclTrie current (snd treeDiff)
 
       sync <- ST.update revision
-              (\hash ->
-                return
-                $ Just
-                $ T.union (Pa.singleton hash ()) T.empty)
+              return
+              (\hash -> Just $ T.union (Pa.singleton hash ()) T.empty)
               (fst treeDiff)
               (getForestTreeSync current)
 

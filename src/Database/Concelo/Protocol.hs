@@ -8,7 +8,6 @@ module Database.Concelo.Protocol
   , Name
   , Names
   , name
-  , split
   , getSignedSigner
   , getSignedSignature
   , getSignedText
@@ -189,7 +188,7 @@ rulesKey = ".rules" :: BS.ByteString
 
 localVersion = (-1) :: Integer
 
-leafSize = 10024 :: Int
+leafSize = 1024 :: Int
 
 treeLeafLevel = "0" :: BS.ByteString
 
@@ -202,13 +201,6 @@ forestTreeLevel = "3" :: BS.ByteString
 forestACLLevel = "4" :: BS.ByteString
 
 forestLevel = "5" :: BS.ByteString
-
-split s =
-  let (a, b) = BS.splitAt leafSize s in
-  if BS.null b then
-    [a]
-  else
-    undefined -- todo:  a : split b
 
 toText = \case
   Leaf _ _ treeStream forestStream body ->

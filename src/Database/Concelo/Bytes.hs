@@ -3,7 +3,9 @@
 {-# LANGUAGE LambdaCase #-}
 module Database.Concelo.Bytes
   ( Database.Concelo.Bytes.toInteger
-  , Database.Concelo.Bytes.fromInteger ) where
+  , Database.Concelo.Bytes.fromInteger
+  , toWord64
+  , fromWord64 ) where
 
 import Data.Bits ((.&.))
 
@@ -29,3 +31,8 @@ writeInteger = \case
            0 -> (toEnum 0 :) . (toEnum 1 :)
            b -> (toEnum (fromIntegral b) :))
        . writeInteger (n `B.shiftR` 8)
+
+toWord64 = BS.foldl' (\x y -> x * 256 + fromIntegral y) 0
+
+fromWord64 w =
+  BS.pack $ map (fromIntegral . (.&. 255) . B.shiftR w) [56, 48..0]

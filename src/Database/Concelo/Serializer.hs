@@ -76,7 +76,9 @@ serializeStrings = Pr.serializeTrie
 serializeNames = Pr.serializeNames
 
 instance ST.Serializer a SyncState where
-  serialize trie = Pr.split <$> ($ trie) <$> get syncStateSerialize
+  serialize trie = ($ trie) <$> get syncStateSerialize
+
+  makeId = with syncStatePRNG $ Cr.randomBytes ST.idSize
 
   encrypt plaintext = do
     let length = BS.length plaintext

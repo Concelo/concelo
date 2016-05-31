@@ -1,7 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleInstances #-}
 module Database.Concelo.Path
-  ( Path()
+  ( Path(Path)
   , leaf
   , singleton
   , toPath
