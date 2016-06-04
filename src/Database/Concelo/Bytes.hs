@@ -13,6 +13,7 @@ import qualified Database.Concelo.Control as Co
 import qualified Data.ByteString as BS
 import qualified Data.Bits as B
 import qualified Data.Char as Ch
+import qualified Data.Word as W
 
 toInteger = toInteger'
 
@@ -32,7 +33,9 @@ writeInteger = \case
            b -> (toEnum (fromIntegral b) :))
        . writeInteger (n `B.shiftR` 8)
 
+toWord64 :: BS.ByteString -> W.Word64
 toWord64 = BS.foldl' (\x y -> x * 256 + fromIntegral y) 0
 
+fromWord64 :: W.Word64 -> BS.ByteString
 fromWord64 w =
   BS.pack $ map (fromIntegral . (.&. 255) . B.shiftR w) [56, 48..0]

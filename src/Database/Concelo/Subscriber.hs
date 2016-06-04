@@ -221,33 +221,40 @@ verify (Pr.Signed { Pr.getSignedSigner = signer
     badForest
 
 updateACL currentACL (obsoleteLeaves, newLeaves) = do
-  subset <- foldM remove currentACL obsoleteLeaves
-  foldM add subset newLeaves where
-    remove :: T.Trie BS.ByteString BS.ByteString ->
+  (subset, _) <- foldM remove (currentACL, T.empty) obsoleteLeaves
+  fst <$> foldM add (subset, T.empty) newLeaves where
+    remove :: (T.Trie BS.ByteString BS.ByteString,
+               T.Trie BS.ByteString BS.ByteString) ->
               Pr.Message ->
-              Co.Action Subscriber (T.Trie BS.ByteString BS.ByteString)
-    remove acl leaf =
-      case leaf of
-        Pr.Leaf { Pr.getLeafBody = body } ->
-          case Pr.parseTrie body of
-            Just trie -> return $ T.subtract trie acl
-            Nothing -> patternFailure
+              Co.Action Subscriber (T.Trie BS.ByteString BS.ByteString,
+                                    T.Trie BS.ByteString BS.ByteString)
+    remove (acl, fragments) = \case
+      Pr.Leaf { Pr.getLeafBody = body } ->
+        let (maybeTrie, fragments') = ST.defragment Pr.parseTrie fragments body
+        in return (case maybeTrie of
+                      Just trie -> T.subtract trie acl
+                      Nothing -> acl,
+                   fragments')
 
-        _ -> patternFailure
+      _ -> patternFailure
 
-    add acl leaf =
-      case leaf of
-        Pr.Leaf { Pr.getLeafSigned = signed
-                , Pr.getLeafBody = body } -> do
+    add (acl, fragments) = \case
+      Pr.Leaf { Pr.getLeafSigned = signed
+              , Pr.getLeafBody = body } -> do
 
-          get subscriberAdminTrie >>= verify signed
+        get subscriberAdminTrie >>= verify signed
 
-          case Pr.parseTrie body of
-            -- todo: handle defragmentation (or assert that no valid forest will contain a fragmented ACL)
-            Just trie -> return $ T.union (T.sub "0" trie) acl
-            Nothing -> badForest
+        let (maybeTrie, fragments') = ST.defragment Pr.parseTrie fragments body
 
-        _ -> patternFailure
+        -- todo: should we throw a BadForest if either a fragment is
+        -- missing or the defragmented result fails to parse as a
+        -- trie?
+        return (case maybeTrie of
+                   Just trie -> T.union trie acl
+                   Nothing -> acl,
+                fragments')
+
+      _ -> patternFailure
 
 verifyLeafDiff :: T.Trie BS.ByteString BS.ByteString ->
                   (a, T.Trie BS.ByteString Pr.Message) ->

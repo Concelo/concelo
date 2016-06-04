@@ -14,6 +14,7 @@ module Database.Concelo.SyncTree
   , chunkToGroupMessage
   , empty
   , update
+  , defragment
   , visit
   , idSize
   , nullId
@@ -472,35 +473,25 @@ update revision decrypt deserialize (obsolete, new) tree =
       Pr.Leaf { Pr.getLeafName = name
               , Pr.getLeafBody = body } -> do
 
-        plaintext <- decrypt body
+        ((maybeTrie, fragments'), (id, count, myFragments))
+          <- defragment' deserialize fragments <$> decrypt body
 
-        let (id, tail) = BS.splitAt idSize plaintext
-            (indexString, tail') = BS.splitAt wordSize tail
-            (countString, fragment) = BS.splitAt wordSize tail'
-            count = B.toWord64 countString
-            fragments' = T.union
-                         (Pa.super id $ Pa.singleton indexString fragment)
-                         fragments
-            myFragments = T.sub id fragments'
+        return $ case maybeTrie of
+          Nothing ->
+            ([], T.empty, T.empty, fragments')
 
-            trie = fromMaybe T.empty
-                     $ deserialize (BS.concat $ toList myFragments)
-            -- todo: reject this leaf (i.e. add to rejected set) if the
-            -- trie is empty
-
-            hash = Pa.keys name !! 2
-            leaves = distinguish hash trie
-            members = T.foldrPaths (T.union . toLeaves id count myFragments)
-                      T.empty leaves
-            group = Group hash (bsRead (Pa.keys name !! 1)) members undefined
-
-        return $ if count == length myFragments then
-                   ([group],
-                    T.sub "0" leaves,
-                    T.singleton hash group,
-                    fragments')
-                 else
-                   ([], T.empty, T.empty, fragments')
+          Just trie ->
+            let hash = Pa.keys name !! 2
+                leaves = distinguish hash trie
+                members = T.foldrPaths
+                          (T.union . toLeaves id count myFragments)
+                          T.empty leaves
+                group = Group hash (bsRead (Pa.keys name !! 1)) members
+                        undefined
+            in ([group],
+                T.sub "0" leaves,
+                T.singleton hash group,
+                fragments')
 
       Pr.Tree { Pr.getTreeName = name } -> do
         let hash = Pa.keys name !! 1
@@ -519,6 +510,25 @@ update revision decrypt deserialize (obsolete, new) tree =
         (accessor tree)
         obsoleteChunks)
        newChunks)
+
+defragment deserialize fragments fragment =
+  fst $ defragment' deserialize fragments fragment
+
+defragment' deserialize fragments fragment =
+  ((if fromIntegral count == length myFragments then Just trie else Nothing,
+    fragments'), (id, count, myFragments))
+  where
+    (id, tail) = BS.splitAt idSize fragment
+    (indexString, tail') = BS.splitAt wordSize tail
+    (countString, body) = BS.splitAt wordSize tail'
+    count = B.toWord64 countString
+    fragments' = T.union (Pa.super id $ Pa.singleton indexString body)
+                 fragments
+    myFragments = T.sub id fragments'
+
+    -- todo: reject this leaf (i.e. add to rejected set) if the trie
+    -- is empty:
+    trie = fromMaybe T.empty $ deserialize (BS.concat $ toList myFragments)
 
 toTrie = flip T.union T.empty
 
