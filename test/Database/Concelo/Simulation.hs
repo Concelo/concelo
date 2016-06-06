@@ -385,7 +385,7 @@ apply' = \case
             set stateTries tries
             set statePublished trie
 
-            traceM ("publish " ++ show trie)
+            -- traceM ("publish " ++ show trie)
 
             ignis' <- eitherToAction
                       $ exec (I.setHead trie)
@@ -429,7 +429,7 @@ applyNext = get stateTasks >>= \case
   task:tasks -> set stateTasks tasks >> apply task
   _ -> patternFailure
 
-simulate state = trace (" *** start simulation: " ++ show state) $
+simulate state = trace ("\n *** start simulation *** \n") $
   let limit = 1000 * length (getStateTries state) in
   case exec (M.replicateM_ limit applyNext) state of
     Left result -> case result of

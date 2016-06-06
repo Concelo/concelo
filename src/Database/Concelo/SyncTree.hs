@@ -293,9 +293,11 @@ makeGroup members = (case firstValue members of
           (T.index byLeafPath members) ciphertext
 
   fromGroups height = return $ do
-    list <- collect 0 $ F.toList members
+    let named = T.index byName members
 
-    Just $ Group (Cr.hash list) (height + 1) (T.index byName members)
+    list <- collect 0 $ F.toList named
+
+    Just $ Group (Cr.hash list) (height + 1) named
       BS.empty where
 
       collect count = \case
@@ -370,8 +372,7 @@ chunkToMessage private level treeStream forestStream chunk =
     1 -> Pr.leaf private level treeStream forestStream $ chunkBody chunk
 
     _ -> Pr.group private level (chunkHeight chunk) treeStream forestStream
-         $ foldr (\member -> (chunkName member :)) []
-         $ chunkMembers chunk
+         (chunkName <$> F.toList (chunkMembers chunk))
 
 chunkToGroupMessage private level treeStream forestStream chunk =
   case chunkHeight chunk of
@@ -388,8 +389,7 @@ chunkToGroupMessage private level treeStream forestStream chunk =
            $ hashes)
 
     _ -> Pr.group private level (chunkHeight chunk) treeStream forestStream
-         $ foldr (\member -> (chunkName member :)) []
-         $ chunkMembers chunk
+         (chunkName <$> F.toList (chunkMembers chunk))
 
 nullId = BS.pack $ take idSize $ repeat '\0'
 

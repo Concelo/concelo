@@ -15,7 +15,7 @@ import Database.Concelo.Control (get)
 import Data.Maybe (fromMaybe)
 import Control.Applicative ((<|>))
 
-import Debug.Trace
+-- import Debug.Trace
 
 import qualified Data.ByteString as BS
 import qualified Control.Lens as L
@@ -272,7 +272,7 @@ updateUnsanitizedDiff oldForest (stream, newTree)
 
         leaves = ST.getTreeLeaves . Su.getTreeSync
 
-        (obsolete, new) = trace ("new is " ++ show (leaves newTree) ++ " diff is " ++ show (T.diff (leaves oldTree) (leaves newTree))) $ T.diff (leaves oldTree) (leaves newTree)
+        (obsolete, new) = T.diff (leaves oldTree) (leaves newTree)
 
 updateUnsanitized (obsolete, new) currentUnsanitized =
   unionUnsanitized new (subtractUnsanitized obsolete currentUnsanitized)
@@ -321,7 +321,7 @@ deserialize old new = do
           oldDependencies
           unsanitizedDiff in
 
-    trace ("unsanitized " ++ show unsanitized ++ " sanitized " ++ show sanitized) $
+    -- trace ("unsanitized " ++ show unsanitized ++ " sanitized " ++ show sanitized) $
 
     St.put $ des oldRules dependencies sanitized rejected
     else do

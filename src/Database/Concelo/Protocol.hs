@@ -254,7 +254,7 @@ leaf private level treeStream forestStream body = do
 
               , getLeafSigned = signed }
 
-group :: Foldable t =>
+group :: (Show (t String), Functor t, Foldable t) =>
          Cr.PrivateKey ->
          BS.ByteString ->
          Int ->
