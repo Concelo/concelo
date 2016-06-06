@@ -27,7 +27,6 @@ import Control.Applicative ((<|>))
 import Control.Monad (foldM, when, forM_)
 import Data.Foldable (toList)
 import Data.Maybe (fromMaybe, fromJust)
-
 -- import Debug.Trace
 
 import qualified Control.Lens as L
@@ -246,8 +245,6 @@ serialize' trie = with stateSerializer $ serialize trie
 
 encrypt' text = with stateSerializer $ encrypt text
 
-zeroOne = B.fromWord64 (0::W.Word64) `BS.append` B.fromWord64 (1::W.Word64)
-
 makeGroup members = (case firstValue members of
                         Nothing -> return Nothing
                         Just first -> fromChunks first) where
@@ -261,25 +258,32 @@ makeGroup members = (case firstValue members of
 
   fromLeaves fragment id index count = do
 
-    plaintext <- (BS.append id . BS.append zeroOne <$>)
-                 . oneExactly . split
-                 <$> (serialize'
-                      $ T.index (snd
-                                 . fromJust
-                                 . Pa.sub
-                                 . Pa.init
-                                 . getLeafPath)
-                      members)
+    combinedRaw <- oneExactly
+                   . split
+                   <$> (serialize'
+                        $ T.index (snd
+                                   . fromJust
+                                   . Pa.sub
+                                   . Pa.init
+                                   . getLeafPath)
+                        members)
 
-    let fragmented = if single members then
-                       Just (id
-                             `BS.append` B.fromWord64 index
-                             `BS.append` B.fromWord64 count
-                             `BS.append` fragment)
-                     else
-                       Nothing
+    let addHeader = BS.append id
+                    . BS.append (B.fromWord64 index)
+                    . BS.append (B.fromWord64 count)
+                    . (B.fromWord32
+                       . fromIntegral
+                       . BS.length
+                       >>= BS.append)
 
-    case plaintext <|> fragmented of
+        combined = addHeader <$> combinedRaw
+
+        fragmented = addHeader <$> if single members then
+                                     Just fragment
+                                   else
+                                     Nothing
+
+    case combined <|> fragmented of
       Nothing ->
         return Nothing
 
@@ -437,18 +441,6 @@ update revision decrypt deserialize (obsolete, new) tree =
               T.subtract obsoleteNamed named,
               fragments')
 
-    toLeaves id count fragments path = T.foldrPaths visit T.empty fragments
-
-      where path' index = Pa.super (bsShow index) path
-
-            visit = \case
-              Pa.Path [indexString] fragment ->
-                let index = (B.toWord64 indexString) :: W.Word64 in
-                T.union $ const (Leaf fragment (path' index) id index count)
-                <$> (path' index)
-
-              _ -> undefined
-
     distinguish distinguisher =
       T.foldrPaths (T.union . flip Pa.append distinguisher) T.empty
 
@@ -473,24 +465,39 @@ update revision decrypt deserialize (obsolete, new) tree =
       Pr.Leaf { Pr.getLeafName = name
               , Pr.getLeafBody = body } -> do
 
+        let hash = Pa.keys name !! 2
+
         ((maybeTrie, fragments'), (id, count, myFragments))
-          <- defragment' deserialize fragments <$> decrypt body
+          <- defragment' hash deserialize fragments <$> decrypt body
 
         return $ case maybeTrie of
           Nothing ->
             ([], T.empty, T.empty, fragments')
 
           Just trie ->
-            let hash = Pa.keys name !! 2
-                leaves = distinguish hash trie
-                members = T.foldrPaths
-                          (T.union . toLeaves id count myFragments)
-                          T.empty leaves
-                group = Group hash (bsRead (Pa.keys name !! 1)) members
-                        undefined
-            in ([group],
-                T.sub "0" leaves,
-                T.singleton hash group,
+            let distinguished = distinguish hash trie
+
+                toGroup = \case
+                  Pa.Path [indexString] (hash, fragment) ->
+                    let index = (B.toWord64 indexString) :: W.Word64
+                        toLeaf path =
+                          let path' = Pa.super (bsShow index) path in
+                          T.union (const (Leaf fragment path' id index count)
+                                   <$> path')
+                    in (Group hash 1
+                        (T.super "0"
+                         $ T.foldrPaths toLeaf T.empty distinguished)
+                        undefined :)
+
+                  _ -> undefined
+
+                groups = T.foldrPaths toGroup [] myFragments
+
+            in --trace ("id " ++ prefix id ++ " name " ++ show name ++ " hash " ++ prefix hash ++ " groups " ++ show (prefix . getGroupName <$> groups))
+               (groups,
+                distinguished,
+                foldr (T.union . (getGroupName >>= T.singleton)) T.empty
+                groups,
                 fragments')
 
       Pr.Tree { Pr.getTreeName = name } -> do
@@ -498,7 +505,7 @@ update revision decrypt deserialize (obsolete, new) tree =
             trie = fromMaybe T.empty $ deserialize hash
 
         return ([],
-                T.sub "0" $ distinguish BS.empty trie,
+                distinguish BS.empty trie,
                 (\v -> Leaf undefined (const v <$> name) nullId 0 1) <$> trie,
                 fragments)
 
@@ -512,31 +519,45 @@ update revision decrypt deserialize (obsolete, new) tree =
        newChunks)
 
 defragment deserialize fragments fragment =
-  fst $ defragment' deserialize fragments fragment
+  fst $ defragment' BS.empty deserialize fragments fragment
 
-defragment' deserialize fragments fragment =
-  ((if fromIntegral count == length myFragments then Just trie else Nothing,
-    fragments'), (id, count, myFragments))
+defragment' hash deserialize fragments fragment =
+  -- trace ("defrag " ++ prefix id ++ " " ++ show (B.toWord64 indexString)
+  --        ++ " of " ++ show count ++ "; length " ++ show length32
+  --        ++ "; accumulated " ++ show (length myFragments))
+  ((if fromIntegral count == length myFragments then
+      -- trace ("defrag " ++ prefix id ++ " result " ++ show (const () <$> trie)) $
+      Just trie
+    else
+      Nothing,
+    fragments'),
+   (id, count, myFragments))
   where
     (id, tail) = BS.splitAt idSize fragment
-    (indexString, tail') = BS.splitAt wordSize tail
-    (countString, body) = BS.splitAt wordSize tail'
+    (indexString, tail') = BS.splitAt indexSize tail
+    (countString, tail'') = BS.splitAt indexSize tail'
+    (lengthString, tail''') = BS.splitAt lengthSize tail''
+    length32 = B.toWord32 lengthString
+    body = BS.take (fromIntegral length32) tail'''
     count = B.toWord64 countString
-    fragments' = T.union (Pa.super id $ Pa.singleton indexString body)
+    fragments' = T.union (Pa.super id $ Pa.singleton indexString (hash, body))
                  fragments
     myFragments = T.sub id fragments'
 
     -- todo: reject this leaf (i.e. add to rejected set) if the trie
     -- is empty:
-    trie = fromMaybe T.empty $ deserialize (BS.concat $ toList myFragments)
+    trie = fromMaybe T.empty
+           $ deserialize (BS.concat (snd <$> toList myFragments))
 
 toTrie = flip T.union T.empty
 
 idSize = 32
 
-wordSize = 8
+indexSize = 8
 
-headerSize = idSize + (wordSize * 2)
+lengthSize = 4
+
+headerSize = idSize + (indexSize * 2) + lengthSize
 
 split s =
   let (a, b) = BS.splitAt (Pr.leafSize - headerSize) s in
@@ -548,6 +569,8 @@ split s =
 fragment path =
   do fragments <- split <$> serialize' (toTrie path)
      id <- with stateSerializer makeId
+
+     -- traceM ("frag " ++ prefix id ++ " " ++ show (const () <$> path) ++ " into " ++ show (BS.length <$> fragments))
 
      return $ visit id (fromIntegral $ length fragments) (0::W.Word64)
        fragments

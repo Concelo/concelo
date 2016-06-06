@@ -224,10 +224,11 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
   (subset, _) <- foldM remove (currentACL, T.empty) obsoleteLeaves
   fst <$> foldM add (subset, T.empty) newLeaves where
     remove :: (T.Trie BS.ByteString BS.ByteString,
-               T.Trie BS.ByteString BS.ByteString) ->
+               T.Trie BS.ByteString (BS.ByteString, BS.ByteString)) ->
               Pr.Message ->
               Co.Action Subscriber (T.Trie BS.ByteString BS.ByteString,
-                                    T.Trie BS.ByteString BS.ByteString)
+                                    T.Trie BS.ByteString (BS.ByteString,
+                                                          BS.ByteString))
     remove (acl, fragments) = \case
       Pr.Leaf { Pr.getLeafBody = body } ->
         let (maybeTrie, fragments') = ST.defragment Pr.parseTrie fragments body

@@ -84,7 +84,7 @@ module Database.Concelo.Protocol
   , version ) where
 
 import Database.Concelo.Control (prefix, (>>|), exec, eitherToMaybe,
-                                 zeroOrOne, zeroOrMore, oneOrMore, endOfStream,
+                                 zeroOrOne, zeroOrMore, endOfStream,
                                  patternFailure, get, set, update, noParse,
                                  exception, bsShow, bsRead)
 
@@ -363,7 +363,7 @@ key = do
   prefix "k"
   B.toInteger >>= stringOfSize >>= \s -> update trieStatePath (s:)
 
-path = oneOrMore key
+path = zeroOrMore key
 
 parseLeaf
   =   (prefix "n" >> return BS.empty)

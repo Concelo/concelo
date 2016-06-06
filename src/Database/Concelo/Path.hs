@@ -15,8 +15,8 @@ module Database.Concelo.Path
   , initLast ) where
 
 import qualified Data.ByteString.Char8 as BS
-import qualified Data.ByteString.Base16 as B16
 import qualified Data.List as L
+import qualified Database.Concelo.Bytes as B
 
 data Path k v = Path { getPathKeys :: [k]
                      , getPathValue :: v } deriving (Eq)
@@ -25,11 +25,7 @@ instance {-# OVERLAPPABLE #-} (Show v, Show k) => Show (Path k v) where
   show (Path ks v) = (L.intercalate "/" $ map show ks) ++ ":" ++ show v
 
 instance {-# OVERLAPPING #-} Show v => Show (Path BS.ByteString v) where
-  show (Path ks v) = (L.intercalate "/" $ map visit ks) ++ ":" ++ show v where
-    visit bs = if BS.length bs > 1 then
-                 show $ B16.encode $ BS.take 4 bs
-               else
-                 show bs
+  show (Path ks v) = (L.intercalate "/" $ map B.prefix ks) ++ ":" ++ show v
 
 instance Functor (Path k) where
   fmap f (Path ks v) = Path ks (f v)

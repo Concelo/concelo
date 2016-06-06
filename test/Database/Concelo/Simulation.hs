@@ -167,6 +167,11 @@ consistent (State { getStateClients = clients
     check client = -- trace ("published " ++ show published ++ "\nclient published " ++ show (I.getPublishedTrie (getClientIgnis client))) .
       ((published == I.getPublishedTrie (getClientIgnis client)) &&)
 
+flushFailure (State { getStateClients = clients
+                    , getStatePublished = published }) =
+  "flush failed: published: " ++ show published
+  ++ " vs. " ++ show (I.getPublishedTrie . getClientIgnis <$> clients)
+
 type WhichClient = Double
 
 data Task = SendFirst
@@ -332,7 +337,7 @@ apply' = \case
   Flush tasks ->
     let flush :: [Task] -> Co.Action State ()
         flush = \case
-          [] -> St.get >>= exception . ("flush failed: " ++) . show
+          [] -> St.get >>= exception . flushFailure
 
           task:tasks -> do
             (consistent <$> St.get) >>= \case
@@ -348,7 +353,7 @@ apply' = \case
     in do
       clientCount <- length <$> get stateClients
 
-      flush $ take (100 * clientCount) $ filter flushable tasks
+      flush $ take (1000 * clientCount) $ filter flushable tasks
 
   Reconnect tasks whichClient -> do
     getClient whichClient (const True) >>= \case
@@ -379,6 +384,8 @@ apply' = \case
           trie:tries -> do
             set stateTries tries
             set statePublished trie
+
+            traceM ("publish " ++ show trie)
 
             ignis' <- eitherToAction
                       $ exec (I.setHead trie)
