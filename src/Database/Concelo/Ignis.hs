@@ -35,7 +35,7 @@ import Database.Concelo.Control (get, set, with, lend, exception, run)
 import Data.Maybe (fromMaybe)
 import Control.Monad (foldM, when)
 
-import Debug.Trace
+-- import Debug.Trace
 
 data Ignis = Ignis { getIgnisPrivate :: Cr.PrivateKey
                    , getIgnisSentChallengeResponse :: Bool
@@ -151,7 +151,7 @@ setHead trie = do
   set ignisHead trie
   set ignisPublisherUpdated False
 
-receive m = traceM ("ignis receive " ++ show m) >> case m of
+receive = \case --m = traceM ("ignis receive " ++ show m) >> case m of
   Pr.Challenge { Pr.getChallengeProtocolVersion = v
                , Pr.getChallengeBody = body } -> do
     if v /= Pr.version then

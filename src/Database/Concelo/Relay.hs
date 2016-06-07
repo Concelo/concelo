@@ -20,7 +20,7 @@ import Database.Concelo.Control (set, get, getThenSet, updateThenGet,
 import Control.Monad (when, foldM)
 import Data.Maybe (isJust, fromJust)
 
-import Debug.Trace
+-- import Debug.Trace
 
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Trie as T
@@ -230,7 +230,7 @@ chunkTreeStream = \case
   Pr.Group { Pr.getGroupTreeStream = treeStream } -> Just treeStream
   _ -> Nothing
 
-receive m = traceM ("relay receive " ++ show m) >> case m of
+receive = \case -- m = traceM ("relay receive " ++ show m) >> case m of
   Pr.Cred version publicKey signature ->
     if version /= Pr.version then
       exception ("unexpected protocol version: " ++ show version)

@@ -341,7 +341,8 @@ apply' = \case
 
           task:tasks -> do
             (consistent <$> St.get) >>= \case
-              True -> trace "flush success" $ return ()
+              True -> -- trace "flush success" $
+                      return ()
               False -> apply task >> flush tasks
 
         flushable = \case
@@ -429,7 +430,7 @@ applyNext = get stateTasks >>= \case
   task:tasks -> set stateTasks tasks >> apply task
   _ -> patternFailure
 
-simulate state = trace ("\n *** start simulation *** \n") $
+simulate state = -- trace ("\n *** start simulation *** \n") $
   let limit = 1000 * length (getStateTries state) in
   case exec (M.replicateM_ limit applyNext) state of
     Left result -> case result of

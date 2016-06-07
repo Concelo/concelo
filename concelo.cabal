@@ -46,6 +46,7 @@ library
                        -fno-warn-unused-do-bind
                        -fno-warn-orphans
                        -Werror
+                       -O2
 
   ghc-prof-options:    -fprof-auto
                        -O0
@@ -73,6 +74,7 @@ test-suite tests
                        -fno-warn-unused-do-bind
                        -fno-warn-orphans
                        -Werror
+                       -O2
 
   ghc-prof-options:    -fprof-auto
                        -O0
