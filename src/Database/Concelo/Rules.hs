@@ -30,13 +30,16 @@ module Database.Concelo.Rules
   , rulesWildCard
   , rulesMap ) where
 
+import Prelude hiding (foldr, null)
 import Database.Concelo.Control (noParse, maybeToAction, stringLiteral,
                                  update, skipSpace, terminal, zeroOrOne,
                                  (>>|), void, group, get, set, run, eval,
                                  endOfInput, eitherToAction)
-
+import Database.Concelo.Misc (null)
 import Control.Monad (liftM2, liftM3, foldM)
 import Data.Fixed (mod')
+import Data.Functor ((<$>))
+import Data.Foldable (foldr)
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as BSL

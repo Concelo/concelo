@@ -23,10 +23,13 @@ module Database.Concelo.SyncTree
 import Database.Concelo.Control (get, patternFailure, with, set, bsShow,
                                  maybeToAction, eitherToAction, run, bsRead,
                                  exception)
-import Control.Applicative ((<|>))
-import Control.Monad (foldM, when, forM_)
-import Data.Foldable (toList)
+import Control.Applicative ((<|>), (<*>))
+import Data.Functor ((<$>))
+import Control.Monad (when)
+import Database.Concelo.Misc (foldM, forM_, mapM_, length)
+import Data.Foldable (toList, foldr)
 import Data.Maybe (fromMaybe, fromJust)
+import Prelude hiding (foldr, mapM_, length)
 -- import Debug.Trace
 
 import qualified Control.Lens as L

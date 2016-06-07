@@ -8,6 +8,7 @@ module Database.Concelo.Publisher
   , publisher ) where
 
 import Database.Concelo.Control (updateThenGet, get, patternFailure, set)
+import Data.Functor ((<$>))
 
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Protocol as Pr

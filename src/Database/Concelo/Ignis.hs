@@ -32,6 +32,7 @@ import qualified Database.Concelo.Control as Co
 
 import Database.Concelo.Control (get, set, with, lend, exception, run)
 
+import Data.Functor ((<$>))
 import Data.Maybe (fromMaybe)
 import Control.Monad (foldM, when)
 

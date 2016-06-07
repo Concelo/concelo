@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverlappingInstances #-}
 module Database.Concelo.Path
   ( Path(Path)
   , leaf
@@ -14,6 +15,9 @@ module Database.Concelo.Path
   , Database.Concelo.Path.init
   , initLast ) where
 
+import Prelude hiding (foldr)
+import Data.Foldable (Foldable(foldr))
+
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.List as L
 import qualified Database.Concelo.Bytes as B
@@ -21,10 +25,10 @@ import qualified Database.Concelo.Bytes as B
 data Path k v = Path { getPathKeys :: [k]
                      , getPathValue :: v } deriving (Eq)
 
-instance {-# OVERLAPPABLE #-} (Show v, Show k) => Show (Path k v) where
+instance (Show v, Show k) => Show (Path k v) where
   show (Path ks v) = (L.intercalate "/" $ map show ks) ++ ":" ++ show v
 
-instance {-# OVERLAPPING #-} Show v => Show (Path BS.ByteString v) where
+instance Show v => Show (Path BS.ByteString v) where
   show (Path ks v) = (L.intercalate "/" $ map B.prefix ks) ++ ":" ++ show v
 
 instance Functor (Path k) where

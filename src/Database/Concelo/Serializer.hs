@@ -13,7 +13,9 @@ module Database.Concelo.Serializer
 import Database.Concelo.Control (exception, get, set, with, patternFailure,
                                  update, getThenSet, eitherToAction, run)
 
-import Control.Monad (when, foldM)
+import Control.Monad (when)
+import Data.Functor ((<$>))
+import Database.Concelo.Misc (foldM)
 import Data.Maybe (isJust, isNothing, fromJust)
 
 -- import Debug.Trace

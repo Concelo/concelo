@@ -17,7 +17,11 @@ module Database.Concelo.Relay
 import Database.Concelo.Control (set, get, getThenSet, updateThenGet,
                                  exception, with, exec, eitherToAction, run)
 
-import Control.Monad (when, foldM)
+import Control.Monad (when)
+import Prelude hiding (mapM_, foldr)
+import Database.Concelo.Misc (foldM, mapM_)
+import Data.Functor ((<$>))
+import Data.Foldable (foldr)
 import Data.Maybe (isJust, fromJust)
 
 -- import Debug.Trace

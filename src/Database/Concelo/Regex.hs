@@ -13,6 +13,7 @@ import Database.Concelo.Control (noParse, ParseState(parseString), endOfStream,
                                  endOfInput, oneOrMore, get)
 
 import Data.Maybe (isJust)
+import Data.Functor ((<$>))
 
 import qualified Control.Monad.Except as E
 import qualified Data.ByteString.Char8 as BS

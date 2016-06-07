@@ -100,6 +100,10 @@ import qualified Database.Concelo.Bytes as B
 import qualified Control.Lens as L
 import qualified Data.ByteString.Char8 as BS
 
+import Data.Functor ((<$>))
+import Prelude hiding (foldr)
+import Data.Foldable (Foldable(foldr))
+
 type Name = P.Path BS.ByteString ()
 
 type Names = T.Trie BS.ByteString ()

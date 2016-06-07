@@ -29,11 +29,15 @@ module Data.Tree.RBTree (
   -- * Difference
   foldrDiffVersioned, diffVersioned, diff,
   -- * Verification
-  vD, vR
+  vD, vR,
 )
 where
 
+import Prelude hiding (foldr)
 import Control.Monad(liftM2)
+import Data.Foldable (Foldable(foldr))
+
+import qualified Data.Foldable as F
 
 -- |Color of a 'Node'.
 --  Leaf is assumed to be Black.
@@ -522,15 +526,15 @@ diff compareValues a b =
 
 unionVersioned :: (a -> a) -> (a -> a -> Ordering) -> RBTree a -> RBTree a -> RBTree a
 unionVersioned updateVersion compareValues small large =
-  foldr (flip $ insertVersioned updateVersion compareValues) large small
+  F.foldr (flip $ insertVersioned updateVersion compareValues) large small
 
 subtractVersioned :: (a -> a) -> (a -> a -> Ordering) -> RBTree a -> RBTree a -> RBTree a
 subtractVersioned updateVersion compareValues subtrahend minuend =
-  foldr (flip $ deleteVersioned updateVersion compareValues) minuend subtrahend
+  F.foldr (flip $ deleteVersioned updateVersion compareValues) minuend subtrahend
 
 intersectVersioned :: (a -> a) -> (a -> a -> Ordering) -> RBTree a -> RBTree a -> RBTree a
 intersectVersioned updateVersion compareValues small large =
-  foldr visit small small where
+  F.foldr visit small small where
     visit v r = case searchFast compareValues large v of
       Nothing -> deleteVersioned updateVersion compareValues r v
       _ -> r
@@ -557,10 +561,10 @@ instance Eq a => Eq (RBTree a) where
     walk _ _ = False
 
 toList :: RBTree a -> [a]
-toList = foldr (:) []
+toList = F.foldr (:) []
 
 fromList :: (a -> a -> Ordering) -> [a] -> RBTree a
-fromList compareVersions = foldr (flip $ insert compareVersions) Leaf
+fromList compareVersions = F.foldr (flip $ insert compareVersions) Leaf
 
 value :: RBZip a -> Maybe a
 value t = case t of

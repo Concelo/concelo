@@ -1,6 +1,7 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverlappingInstances #-}
 module Database.Concelo.VTrie
   ( VTrie()
   , isEmpty
@@ -48,8 +49,12 @@ import qualified Database.Concelo.TrieLike as TL
 import qualified Database.Concelo.Path as P
 import qualified Control.Lens as L
 
+import Database.Concelo.Misc (null)
 import Data.Maybe (isNothing, isJust, fromMaybe)
 import Control.Applicative ((<|>))
+import Data.Functor ((<$>))
+import Prelude hiding (foldr, null)
+import Data.Foldable (Foldable(foldr))
 
 data Versioned v = Versioned { _getVersionedVersion :: Integer
                              , getVersionedValue :: v }
@@ -61,10 +66,10 @@ data VTrie k v = VTrie { getVTrieVersioned :: Maybe (Versioned v)
 
 vtrieVersioned = L.lens getVTrieVersioned (\x v -> x { getVTrieVersioned = v })
 
-instance {-# OVERLAPPABLE #-} (Show k, Show v) => Show (VTrie k v) where
+instance (Show k, Show v) => Show (VTrie k v) where
   show = show . paths
 
-instance {-# OVERLAPPING #-} Show v => Show (VTrie BS.ByteString v) where
+instance Show v => Show (VTrie BS.ByteString v) where
   show = show . paths
 
 instance (Eq k, Eq v) => Eq (VTrie k v) where

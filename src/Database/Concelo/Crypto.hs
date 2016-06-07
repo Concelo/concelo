@@ -29,6 +29,9 @@ module Database.Concelo.Crypto
   , verify
   , hash ) where
 
+import Data.Functor ((<$>))
+import Data.Foldable (Foldable())
+
 import qualified Crypto.Error as E
 import qualified Crypto.Random as R
 import qualified Crypto.Cipher.Types as CT
@@ -38,6 +41,7 @@ import qualified Crypto.PubKey.RSA as RSA
 import qualified Crypto.PubKey.RSA.Types as RSAT
 import qualified Crypto.PubKey.RSA.PKCS15 as PKCS15
 import qualified Crypto.KDF.PBKDF2 as PBKDF2
+import qualified Data.Foldable as F
 import qualified Data.ByteString as BS
 import qualified Data.ByteArray as BA
 import qualified Control.Lens as L
@@ -223,4 +227,4 @@ verify (PublicKey key) signature text =
 
 hash :: Foldable t => t BS.ByteString -> BS.ByteString
 hash = BA.convert . H.hashFinalize
-       . foldr (flip H.hashUpdate) (H.hashInitWith hashAlgorithm)
+       . F.foldr (flip H.hashUpdate) (H.hashInitWith hashAlgorithm)

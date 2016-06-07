@@ -54,6 +54,8 @@ module Database.Concelo.Control
 
 -- import Debug.Trace
 
+import Data.Functor ((<$>))
+
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Char as C
 import qualified Control.Lens as L
@@ -99,10 +101,10 @@ setThenGet lens value = S.state $ \s -> (value, L.set lens value s)
 
 update lens update = S.state $ \s -> ((), L.over lens update s)
 
-updateM :: S.MonadState s m => L.Lens' s a -> (a -> m a) -> m ()
+updateM :: (Functor m, S.MonadState s m) => L.Lens' s a -> (a -> m a) -> m ()
 updateM lens action = get lens >>= action >>= set lens
 
-overM :: Monad m => L.Lens' s a -> (a -> m a) -> s -> m s
+overM :: (Functor m, Monad m) => L.Lens' s a -> (a -> m a) -> s -> m s
 overM lens action object =
   flip (L.set lens) object <$> action (L.view lens object)
 

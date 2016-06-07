@@ -24,6 +24,7 @@ library
                        Database.Concelo.Deserializer,
                        Database.Concelo.Ignis,
                        Database.Concelo.Map,
+                       Database.Concelo.Misc,
                        Database.Concelo.Path,
                        Database.Concelo.Pipe,
                        Database.Concelo.Protocol,

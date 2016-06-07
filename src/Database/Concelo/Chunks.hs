@@ -6,6 +6,7 @@ import Database.Concelo.Control (badForest, maybeToAction,
                                  Exception(Exception))
 
 import Control.Monad (foldM)
+import Data.Functor ((<$>))
 
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Trie as T

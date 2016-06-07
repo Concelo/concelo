@@ -10,6 +10,8 @@ module Database.Concelo.Set
 import qualified Database.Concelo.Map as M
 
 import Data.Foldable (toList)
+import Prelude hiding (foldr)
+import Data.Foldable (Foldable(foldr))
 
 newtype Set v = Set { run :: M.Map v () }
 

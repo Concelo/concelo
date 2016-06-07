@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE RankNTypes #-}
 module Database.Concelo.BiTrie
   ( BiTrie()
@@ -16,19 +17,23 @@ module Database.Concelo.BiTrie
   , find ) where
 
 import Data.Maybe (fromMaybe)
+import Data.Functor ((<$>))
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Path as P
 import qualified Control.Lens as L
 
+import Database.Concelo.Misc (null)
+import Prelude hiding (foldr, null)
+
 data BiTrie k = BiTrie { getForward :: T.Trie k (T.Trie k ())
                        , getReverse :: T.Trie k (T.Trie k ()) }
 
-instance {-# OVERLAPPABLE #-} Show k => Show (BiTrie k) where
+instance Show k => Show (BiTrie k) where
   show = show . getForward
 
-instance {-# OVERLAPPING #-} Show (BiTrie BS.ByteString) where
+instance Show (BiTrie BS.ByteString) where
   show = show . getForward
 
 forward :: L.Lens' (BiTrie k) (T.Trie k (T.Trie k ()))
@@ -74,6 +79,11 @@ deleteFromBoth path a b biTrie =
             $ L.view a biTrie)
   $ L.over a (T.subtract path) biTrie
 
+deleteFromEach :: Ord k =>
+                  P.Path k v ->
+                  T.Trie k t1 ->
+                  T.Trie k (T.Trie k ()) ->
+                  T.Trie k (T.Trie k ())
 deleteFromEach value keys trie =
   T.foldrPaths visit trie keys where
     visit key = case T.findValue key trie of

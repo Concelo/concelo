@@ -11,6 +11,7 @@ module Database.Concelo.Bytes
   , prefix ) where
 
 import Data.Bits ((.&.))
+import Data.Functor ((<$>))
 
 import qualified Database.Concelo.Control as Co
 import qualified Data.ByteString as BS

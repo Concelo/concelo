@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverlappingInstances #-}
 module Database.Concelo.Trie
   ( Trie()
   , trie
@@ -41,13 +42,18 @@ module Database.Concelo.Trie
 import qualified Data.ByteString.Char8 as BS
 import qualified Database.Concelo.VTrie as V
 import qualified Database.Concelo.TrieLike as TL
+import Prelude hiding (foldr)
+import Control.Applicative ((<*>), pure)
+import Data.Functor ((<$>))
+import Data.Foldable (Foldable(foldr))
+import Data.Traversable (Traversable(traverse))
 
 newtype Trie k v = Trie { run :: V.VTrie k v } deriving (Eq)
 
-instance {-# OVERLAPPABLE #-} (Show k, Show v) => Show (Trie k v) where
+instance (Show k, Show v) => Show (Trie k v) where
   show = show . run
 
-instance {-# OVERLAPPING #-} Show v => Show (Trie BS.ByteString v) where
+instance Show v => Show (Trie BS.ByteString v) where
   show = show . run
 
 instance Ord k => Functor (Trie k) where
