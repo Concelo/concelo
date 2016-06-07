@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Crypto
   ( derivePrivate
   , derivePublic
@@ -29,8 +30,7 @@ module Database.Concelo.Crypto
   , verify
   , hash ) where
 
-import Data.Functor ((<$>))
-import Data.Foldable (Foldable())
+import Database.Concelo.Prelude
 
 import qualified Crypto.Error as E
 import qualified Crypto.Random as R

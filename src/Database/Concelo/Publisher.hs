@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Publisher
   ( Publisher()
   , publisherPublished
@@ -7,8 +8,9 @@ module Database.Concelo.Publisher
   , receive
   , publisher ) where
 
+import Database.Concelo.Prelude
+
 import Database.Concelo.Control (updateThenGet, get, patternFailure, set)
-import Data.Functor ((<$>))
 
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Protocol as Pr

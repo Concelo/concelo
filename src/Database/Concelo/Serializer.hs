@@ -4,19 +4,17 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Serializer
   ( Serializer()
   , serializerPRNG
   , serializer
   , serialize ) where
 
+import Database.Concelo.Prelude
+
 import Database.Concelo.Control (exception, get, set, with, patternFailure,
                                  update, getThenSet, eitherToAction, run)
-
-import Control.Monad (when)
-import Data.Functor ((<$>))
-import Database.Concelo.Misc (foldM)
-import Data.Maybe (isJust, isNothing, fromJust)
 
 -- import Debug.Trace
 

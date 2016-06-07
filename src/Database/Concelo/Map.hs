@@ -1,5 +1,8 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE CPP #-}
+#if __GLASGOW_HASKELL__ < 710
 {-# LANGUAGE OverlappingInstances #-}
+#endif
 module Database.Concelo.Map
   ( Map()
   , empty
@@ -30,7 +33,11 @@ newtype Map k v = Map { run :: V.VMap k v }
 instance (Show k, Show v) => Show (Map k v) where
   show = show . run
 
-instance Show v => Show (Map BS.ByteString v) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+    {-# OVERLAPPING #-}
+#endif
+  Show v => Show (Map BS.ByteString v) where
   show = show . run
 
 instance Ord k => Functor (Map k) where

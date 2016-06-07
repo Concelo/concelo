@@ -1,6 +1,9 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE CPP #-}
+#if __GLASGOW_HASKELL__ < 710
 {-# LANGUAGE OverlappingInstances #-}
+#endif
 module Database.Concelo.Path
   ( Path(Path)
   , leaf
@@ -28,7 +31,11 @@ data Path k v = Path { getPathKeys :: [k]
 instance (Show v, Show k) => Show (Path k v) where
   show (Path ks v) = (L.intercalate "/" $ map show ks) ++ ":" ++ show v
 
-instance Show v => Show (Path BS.ByteString v) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+    {-# OVERLAPPING #-}
+#endif
+  Show v => Show (Path BS.ByteString v) where
   show (Path ks v) = (L.intercalate "/" $ map B.prefix ks) ++ ":" ++ show v
 
 instance Functor (Path k) where

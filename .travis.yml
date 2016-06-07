@@ -4,6 +4,9 @@ ghc: '7.8'
 notifications:
   email: true
 
+script:
+  - cabal configure --enable-tests && cabal build && cabal test --show-details=streaming
+
 branches:
   only:
     - master

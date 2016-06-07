@@ -1,6 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Protocol
   ( Message(Cred, Challenge, Published, Persisted, Nack, Leaf, Group, Tree,
             Forest, NoMessage)
@@ -83,6 +84,8 @@ module Database.Concelo.Protocol
   , forest
   , version ) where
 
+import Database.Concelo.Prelude
+
 import Database.Concelo.Control (prefix, (>>|), exec, eitherToMaybe,
                                  zeroOrOne, zeroOrMore, endOfStream,
                                  patternFailure, get, set, update, noParse,
@@ -99,10 +102,6 @@ import qualified Database.Concelo.ACL as ACL
 import qualified Database.Concelo.Bytes as B
 import qualified Control.Lens as L
 import qualified Data.ByteString.Char8 as BS
-
-import Data.Functor ((<$>))
-import Prelude hiding (foldr)
-import Data.Foldable (Foldable(foldr))
 
 type Name = P.Path BS.ByteString ()
 

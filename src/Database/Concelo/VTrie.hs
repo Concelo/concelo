@@ -1,7 +1,11 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE CPP #-}
+#if __GLASGOW_HASKELL__ < 710
 {-# LANGUAGE OverlappingInstances #-}
+#endif
 module Database.Concelo.VTrie
   ( VTrie()
   , isEmpty
@@ -49,12 +53,7 @@ import qualified Database.Concelo.TrieLike as TL
 import qualified Database.Concelo.Path as P
 import qualified Control.Lens as L
 
-import Database.Concelo.Misc (null)
-import Data.Maybe (isNothing, isJust, fromMaybe)
-import Control.Applicative ((<|>))
-import Data.Functor ((<$>))
-import Prelude hiding (foldr, null)
-import Data.Foldable (Foldable(foldr))
+import Database.Concelo.Prelude
 
 data Versioned v = Versioned { _getVersionedVersion :: Integer
                              , getVersionedValue :: v }
@@ -69,7 +68,11 @@ vtrieVersioned = L.lens getVTrieVersioned (\x v -> x { getVTrieVersioned = v })
 instance (Show k, Show v) => Show (VTrie k v) where
   show = show . paths
 
-instance Show v => Show (VTrie BS.ByteString v) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+    {-# OVERLAPPING #-}
+#endif
+  Show v => Show (VTrie BS.ByteString v) where
   show = show . paths
 
 instance (Eq k, Eq v) => Eq (VTrie k v) where

@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Bytes
   ( Database.Concelo.Bytes.toInteger
   , Database.Concelo.Bytes.fromInteger
@@ -10,8 +11,9 @@ module Database.Concelo.Bytes
   , fromWord32
   , prefix ) where
 
+import Database.Concelo.Prelude
+
 import Data.Bits ((.&.))
-import Data.Functor ((<$>))
 
 import qualified Database.Concelo.Control as Co
 import qualified Data.ByteString as BS
@@ -43,14 +45,14 @@ toWord64 = BS.foldl' (\x y -> x * 256 + fromIntegral y) 0
 
 fromWord64 :: W.Word64 -> BS.ByteString
 fromWord64 w =
-  BS.pack $ map (fromIntegral . (.&. 255) . B.shiftR w) [56, 48..0]
+  BS.pack $ fmap (fromIntegral . (.&. 255) . B.shiftR w) [56, 48..0]
 
 toWord32 :: BS.ByteString -> W.Word32
 toWord32 = BS.foldl' (\x y -> x * 256 + fromIntegral y) 0
 
 fromWord32 :: W.Word32 -> BS.ByteString
 fromWord32 w =
-  BS.pack $ map (fromIntegral . (.&. 255) . B.shiftR w) [24, 16..0]
+  BS.pack $ fmap (fromIntegral . (.&. 255) . B.shiftR w) [24, 16..0]
 
 prefix bs = if BS.length bs > 1 then
               show $ B16.encode $ BS.take 4 bs

@@ -4,6 +4,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Relay
   ( Relay()
   , relay
@@ -14,17 +15,12 @@ module Database.Concelo.Relay
   , setSubscriber
   , initAdmin ) where
 
+import Database.Concelo.Prelude
+
 import Database.Concelo.Control (set, get, getThenSet, updateThenGet,
                                  exception, with, exec, eitherToAction, run)
 
-import Control.Monad (when)
-import Prelude hiding (mapM_, foldr)
-import Database.Concelo.Misc (foldM, mapM_)
-import Data.Functor ((<$>))
-import Data.Foldable (foldr)
-import Data.Maybe (isJust, fromJust)
-
--- import Debug.Trace
+import Debug.Trace
 
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Trie as T
@@ -234,7 +230,7 @@ chunkTreeStream = \case
   Pr.Group { Pr.getGroupTreeStream = treeStream } -> Just treeStream
   _ -> Nothing
 
-receive = \case -- m = traceM ("relay receive " ++ show m) >> case m of
+receive m = traceM ("relay receive " ++ show m) >> case m of
   Pr.Cred version publicKey signature ->
     if version /= Pr.version then
       exception ("unexpected protocol version: " ++ show version)

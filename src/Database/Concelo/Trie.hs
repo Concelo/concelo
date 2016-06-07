@@ -1,5 +1,9 @@
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE CPP #-}
+#if __GLASGOW_HASKELL__ < 710
 {-# LANGUAGE OverlappingInstances #-}
+#endif
 module Database.Concelo.Trie
   ( Trie()
   , trie
@@ -39,21 +43,22 @@ module Database.Concelo.Trie
   , Database.Concelo.Trie.subtract
   , diff ) where
 
+import Database.Concelo.Prelude
+
 import qualified Data.ByteString.Char8 as BS
 import qualified Database.Concelo.VTrie as V
 import qualified Database.Concelo.TrieLike as TL
-import Prelude hiding (foldr)
-import Control.Applicative ((<*>), pure)
-import Data.Functor ((<$>))
-import Data.Foldable (Foldable(foldr))
-import Data.Traversable (Traversable(traverse))
 
 newtype Trie k v = Trie { run :: V.VTrie k v } deriving (Eq)
 
 instance (Show k, Show v) => Show (Trie k v) where
   show = show . run
 
-instance Show v => Show (Trie BS.ByteString v) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+    {-# OVERLAPPING #-}
+#endif
+  Show v => Show (Trie BS.ByteString v) where
   show = show . run
 
 instance Ord k => Functor (Trie k) where

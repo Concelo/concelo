@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NoMonomorphismRestriction #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Rules
   ( identity
   , parse
@@ -30,16 +31,13 @@ module Database.Concelo.Rules
   , rulesWildCard
   , rulesMap ) where
 
-import Prelude hiding (foldr, null)
+import Database.Concelo.Prelude
+
 import Database.Concelo.Control (noParse, maybeToAction, stringLiteral,
                                  update, skipSpace, terminal, zeroOrOne,
                                  (>>|), void, group, get, set, run, eval,
                                  endOfInput, eitherToAction)
-import Database.Concelo.Misc (null)
-import Control.Monad (liftM2, liftM3, foldM)
 import Data.Fixed (mod')
-import Data.Functor ((<$>))
-import Data.Foldable (foldr)
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy as BSL
@@ -215,7 +213,7 @@ queryValue visitor = (T.value . getVisitorTrie) <$> queryVisitor visitor
 queryMaybeType accessor visitor =
   (maybe False (const True)) <$> queryMaybeField accessor visitor
 
-queryMaybeField accessor visitor = (accessor =<<) <$> queryValue visitor
+queryMaybeField accessor visitor = (>>= accessor) <$> queryValue visitor
 
 queryRequiredField accessor visitor =
   queryMaybeField accessor visitor

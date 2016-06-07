@@ -2,6 +2,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Subscriber
   ( Subscriber()
   , subscriber
@@ -28,15 +29,11 @@ module Database.Concelo.Subscriber
   , subscriberPRNG
   , nextMessage ) where
 
+import Database.Concelo.Prelude
+
 import Database.Concelo.Control (patternFailure, badForest, missingChunks,
                                  set, get, update, updateM, getThenUpdate,
                                  exception, with)
-import Control.Monad (when)
-import Data.Functor ((<$>))
-import Data.Foldable (foldr)
-import Prelude hiding (foldr, mapM_, null)
-import Database.Concelo.Misc (foldM, mapM_, null)
-import Data.Maybe (fromMaybe, isNothing, fromJust)
 
 import Debug.Trace
 
@@ -54,6 +51,7 @@ import qualified Database.Concelo.Crypto as Cr
 import qualified Database.Concelo.Chunks as Ch
 import qualified Database.Concelo.Control as Co
 import qualified Database.Concelo.ACL as ACL
+import qualified Database.Concelo.Bytes as B
 import qualified Control.Lens as L
 import qualified Control.Monad.Except as E
 import qualified Data.ByteString as BS
@@ -228,11 +226,10 @@ updateACL currentACL (obsoleteLeaves, newLeaves) = do
   (subset, _) <- foldM remove (currentACL, T.empty) obsoleteLeaves
   fst <$> foldM add (subset, T.empty) newLeaves where
     remove :: (T.Trie BS.ByteString BS.ByteString,
-               T.Trie BS.ByteString (BS.ByteString, BS.ByteString)) ->
+               T.Trie BS.ByteString ST.Fragment) ->
               Pr.Message ->
               Co.Action Subscriber (T.Trie BS.ByteString BS.ByteString,
-                                    T.Trie BS.ByteString (BS.ByteString,
-                                                          BS.ByteString))
+                                    T.Trie BS.ByteString ST.Fragment)
     remove (acl, fragments) = \case
       Pr.Leaf { Pr.getLeafBody = body } ->
         let (maybeTrie, fragments') = ST.defragment Pr.parseTrie fragments body
@@ -336,8 +333,20 @@ updateTrees forestRevision forestACLTrie currentForest (obsoleteTrees, newTrees)
               oldACL = maybe acl (Pr.getTreeACL . getTreeMessage) old
               currentTree = fromMaybe (emptyTree stream Nothing) old
 
+          when (revision < (Pr.getTreeRevision $ getTreeMessage currentTree))
+            $ traceM ("revision " ++ show revision ++ " too old; expected at least " ++ show (Pr.getTreeRevision $ getTreeMessage currentTree))
+
+          when (acl /= oldACL)
+            $ traceM ("tree " ++ B.prefix stream ++ " acl changed!")
+
+          when (forestStream /= (Pr.getForestStream
+                                 $ getForestMessage currentForest))
+            $ traceM ("expected forest stream "
+                      ++ B.prefix (Pr.getForestStream
+                                   $ getForestMessage currentForest)
+                      ++ ", got " ++ B.prefix forestStream)
+
           when (revision < (Pr.getTreeRevision $ getTreeMessage currentTree)
-                || VM.member stream trees
                 || acl /= oldACL
                 || forestStream /= (Pr.getForestStream
                                     $ getForestMessage currentForest))

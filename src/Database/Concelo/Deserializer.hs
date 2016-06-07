@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Deserializer
   ( Deserializer()
   , desSanitized
@@ -11,12 +12,8 @@ module Database.Concelo.Deserializer
   , deserializer
   , deserialize ) where
 
+import Database.Concelo.Prelude
 import Database.Concelo.Control (get)
-import Data.Functor ((<$>))
-import Prelude hiding (null)
-import Database.Concelo.Misc (null)
-import Data.Maybe (fromMaybe)
-import Control.Applicative ((<|>))
 
 -- import Debug.Trace
 

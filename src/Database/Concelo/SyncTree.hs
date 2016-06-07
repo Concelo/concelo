@@ -5,9 +5,11 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.SyncTree
   ( Serializer(serialize, makeId, encrypt)
   , SyncTree()
+  , Fragment()
   , getTreeLeaves
   , Chunk()
   , chunkToMessage
@@ -20,17 +22,13 @@ module Database.Concelo.SyncTree
   , nullId
   , root ) where
 
+import Database.Concelo.Prelude
+
 import Database.Concelo.Control (get, patternFailure, with, set, bsShow,
                                  maybeToAction, eitherToAction, run, bsRead,
                                  exception)
-import Control.Applicative ((<|>), (<*>))
-import Data.Functor ((<$>))
-import Control.Monad (when)
-import Database.Concelo.Misc (foldM, forM_, mapM_, length)
-import Data.Foldable (toList, foldr)
-import Data.Maybe (fromMaybe, fromJust)
-import Prelude hiding (foldr, mapM_, length)
--- import Debug.Trace
+
+import Debug.Trace
 
 import qualified Control.Lens as L
 import qualified Control.Monad.State as S
@@ -81,7 +79,8 @@ stateNew =
 data Chunk a = Group { getGroupName :: Key
                      , getGroupHeight :: Int
                      , getGroupMembers :: T.Trie Key (Chunk a)
-                     , getGroupBody :: BS.ByteString }
+                     , getGroupBody :: BS.ByteString
+                     , getGroupVacancy :: Int }
 
              | Leaf { getLeafFragment :: BS.ByteString
                     , getLeafPath :: Pa.Path Key a
@@ -95,6 +94,10 @@ data SyncTree a = SyncTree { getTreeByName :: T.Trie Key (Chunk a)
                            , getTreeByReverseKeyMember :: T.Trie Key (Chunk a)
                            , getTreeByHeightVacancy :: T.Trie Key (Chunk a)
                            , getTreeLeaves :: VT.VTrie Key a }
+
+data Fragment = Fragment { getFragmentEncrypted :: BS.ByteString
+                         , getFragmentHash :: BS.ByteString
+                         , getFragmentRaw :: BS.ByteString }
 
 treeByName = L.lens getTreeByName (\t v -> t { getTreeByName = v })
 
@@ -125,7 +128,9 @@ chunkBody = \case
   Leaf { getLeafFragment = f } -> f
   Group { getGroupBody = b } -> b
 
-chunkName = getGroupName
+chunkName = \case
+  Leaf { getLeafFragment = name } -> name
+  Group { getGroupName = name } -> name
 
 chunkMembers = getGroupMembers
 
@@ -177,8 +182,6 @@ findObsoleteGroups rejects = do
 
   Co.update stateNew (T.subtract obsolete)
 
-getGroupVacancy group = Pr.leafSize - BS.length (getGroupBody group)
-
 byKey = \case
   chunk@(Leaf { getLeafPath = path }) ->
     Pa.super leafKey $ fmap (const chunk) path
@@ -196,16 +199,18 @@ byFindKey = \case
 byReverseKeyMember group =
   const group <$> (T.index byKey $ getGroupMembers group)
 
-byHeightVacancy group =
-  Pa.super (bsShow $ getGroupHeight group)
-  $ byVacancy group
+byHeightVacancy = \case
+  leaf@(Leaf {}) ->
+    Pa.super "0" $ byLeafPath leaf
+
+  group@(Group { getGroupHeight = height }) ->
+    Pa.super (bsShow height) $ byVacancy group
 
 byVacancy group =
   Pa.super (bsShow $ getGroupVacancy group)
   $ Pa.singleton (getGroupName group) group
 
-byName group =
-  Pa.singleton (getGroupName group) group
+byName = chunkName >>= Pa.singleton
 
 byLeafPath leaf = const leaf <$> Pa.init (getLeafPath leaf)
 
@@ -294,15 +299,17 @@ makeGroup members = (case firstValue members of
         ciphertext <- encrypt' text
         return $ Just $ Group (Cr.hash [ciphertext]) 1
           (T.index byLeafPath members) ciphertext
+          (Pr.leafSize - BS.length ciphertext)
 
-  fromGroups height = return $ do
-    let named = T.index byName members
+  fromGroups height =
+    return $ do
+      let named = T.index byName members
 
-    list <- collect 0 $ F.toList named
+      list <- collect 0 $ F.toList named
 
-    Just $ Group (Cr.hash list) (height + 1) named
-      BS.empty where
-
+      Just $ Group (Cr.hash list) (height + 1) named undefined
+        (sum (BS.length <$> list))
+    where
       collect count = \case
         member:members ->
           let name = getGroupName member
@@ -455,13 +462,14 @@ update revision decrypt deserialize (obsolete, new) tree =
               case T.findValue (Pa.singleton (last $ Pa.keys path) ()) named of
                 Nothing -> exception ("can't find " ++ show path
                                       ++ " in " ++ show (const () <$> named))
-                Just chunk -> return $ T.union (byName chunk) result
+                Just chunk -> return $ trace ("member " ++ show path) $ T.union (byName chunk) result
 
         memberChunks <- foldM visit T.empty $ T.paths members
 
         let hash = (Pa.keys name !! 2)
             group = Group hash (bsRead (Pa.keys name !! 1)) memberChunks
-                    undefined
+                    undefined (Pr.leafSize - sum (BS.length . chunkName
+                                                  <$> memberChunks))
 
         return ([group], T.empty, T.singleton hash group, fragments)
 
@@ -471,7 +479,7 @@ update revision decrypt deserialize (obsolete, new) tree =
         let hash = Pa.keys name !! 2
 
         ((maybeTrie, fragments'), (id, count, myFragments))
-          <- defragment' hash deserialize fragments <$> decrypt body
+          <- defragment' body hash deserialize fragments <$> decrypt body
 
         return $ case maybeTrie of
           Nothing ->
@@ -481,16 +489,21 @@ update revision decrypt deserialize (obsolete, new) tree =
             let distinguished = distinguish hash trie
 
                 toGroup = \case
-                  Pa.Path [indexString] (hash, fragment) ->
+                  Pa.Path [indexString]
+                    (Fragment { getFragmentEncrypted = encrypted
+                              , getFragmentHash = hash
+                              , getFragmentRaw = raw }) ->
                     let index = (B.toWord64 indexString) :: W.Word64
                         toLeaf path =
                           let path' = Pa.super (bsShow index) path in
-                          T.union (const (Leaf fragment path' id index count)
+                          T.union (const (Leaf raw path' id index count)
                                    <$> path')
                     in (Group hash 1
                         (T.super "0"
                          $ T.foldrPaths toLeaf T.empty distinguished)
-                        undefined :)
+                        encrypted
+                        (Pr.leafSize - sum (BS.length . getFragmentRaw
+                                            <$> myFragments)) :)
 
                   _ -> undefined
 
@@ -505,11 +518,12 @@ update revision decrypt deserialize (obsolete, new) tree =
 
       Pr.Tree { Pr.getTreeName = name } -> do
         let hash = Pa.keys name !! 1
+            path = Pa.super "0" name
             trie = fromMaybe T.empty $ deserialize hash
 
         return ([],
                 distinguish BS.empty trie,
-                (\v -> Leaf undefined (const v <$> name) nullId 0 1) <$> trie,
+                (\v -> Leaf hash (const v <$> path) nullId 0 1) <$> trie,
                 fragments)
 
       _ -> patternFailure
@@ -522,9 +536,9 @@ update revision decrypt deserialize (obsolete, new) tree =
        newChunks)
 
 defragment deserialize fragments fragment =
-  fst $ defragment' BS.empty deserialize fragments fragment
+  fst $ defragment' BS.empty BS.empty deserialize fragments fragment
 
-defragment' hash deserialize fragments fragment =
+defragment' encrypted hash deserialize fragments fragment =
   -- trace ("defrag " ++ prefix id ++ " " ++ show (B.toWord64 indexString)
   --        ++ " of " ++ show count ++ "; length " ++ show length32
   --        ++ "; accumulated " ++ show (length myFragments))
@@ -543,14 +557,16 @@ defragment' hash deserialize fragments fragment =
     length32 = B.toWord32 lengthString
     body = BS.take (fromIntegral length32) tail'''
     count = B.toWord64 countString
-    fragments' = T.union (Pa.super id $ Pa.singleton indexString (hash, body))
+    fragments' = T.union (Pa.super id
+                          $ Pa.singleton indexString
+                          $ Fragment encrypted hash body)
                  fragments
     myFragments = T.sub id fragments'
 
     -- todo: reject this leaf (i.e. add to rejected set) if the trie
     -- is empty:
     trie = fromMaybe T.empty
-           $ deserialize (BS.concat (snd <$> toList myFragments))
+           $ deserialize (BS.concat (getFragmentRaw <$> toList myFragments))
 
 toTrie = flip T.union T.empty
 

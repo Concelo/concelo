@@ -3,16 +3,16 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Simulation
   ( runTests ) where
+
+import Database.Concelo.Prelude
 
 import Database.Concelo.Control (get, run, exec, update, Exception(Success),
                                  updateM, eitherToAction, overM, set,
                                  exception, eval, patternFailure, bsShow)
 
-import Data.List (inits)
-import Data.Functor ((<$>))
-import Control.Applicative ((<*>))
 import Debug.Trace
 
 import qualified Database.Concelo.VTrie as VT
@@ -250,13 +250,14 @@ state clients tasks tries =
 interval :: Int -> Int -> [Int]
 interval a b = if a >= b then [] else a : interval (a + 1) b
 
-arbitraryState' readerCount writerCount trieCount = do
+arbitraryState' readerCount writerCount = do
+  trieCount <- QC.arbitrary
   tries <- take trieCount <$> arbitraryTries
   tasks <- arbitraryTasks
 
-  let writers = map (makeClient True . bsShow) $ interval 1 writerCount
+  let writers = fmap (makeClient True . bsShow) $ interval 1 writerCount
 
-      readers = map (makeClient False . bsShow)
+      readers = fmap (makeClient False . bsShow)
                 $ interval writerCount (writerCount + readerCount)
 
       admin' = L.over clientRelay initAdmin admin
@@ -279,7 +280,7 @@ arbitraryState' readerCount writerCount trieCount = do
 shrinkNonEmpty = \case
   [] -> []
   [_] -> []
-  x:xs -> (x:) <$> inits xs
+  xs -> inits $ init xs
 
 shrinkClients clients = case writers of
   [] -> []
@@ -432,8 +433,9 @@ applyNext = get stateTasks >>= \case
   task:tasks -> set stateTasks tasks >> apply task
   _ -> patternFailure
 
-simulate state = -- trace ("\n *** start simulation *** \n") $
-  let limit = 1000 * length (getStateTries state) in
+simulate state =
+  trace ("\n *** start simulation " ++ show (length $ getStateTries state)) $
+  let limit = 1000 * (1 + length (getStateTries state)) in
   case exec (M.replicateM_ limit applyNext) state of
     Left result -> case result of
       Success -> QC.property True
@@ -448,4 +450,4 @@ simulate state = -- trace ("\n *** start simulation *** \n") $
 runTests :: (forall t. QC.Testable t => String -> t -> IO ()) -> IO ()
 runTests check = do
   check "one reader, one writer"
-    $ QC.forAllShrink (arbitraryState' 0 1 1) shrinkState simulate
+    $ QC.forAllShrink (arbitraryState' 0 1) shrinkState simulate

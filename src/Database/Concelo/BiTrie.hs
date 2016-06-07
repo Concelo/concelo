@@ -1,6 +1,10 @@
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE CPP #-}
+#if __GLASGOW_HASKELL__ < 710
+{-# LANGUAGE OverlappingInstances #-}
+#endif
 module Database.Concelo.BiTrie
   ( BiTrie()
   , empty
@@ -16,16 +20,12 @@ module Database.Concelo.BiTrie
   , reverseFind
   , find ) where
 
-import Data.Maybe (fromMaybe)
-import Data.Functor ((<$>))
-
 import qualified Data.ByteString.Char8 as BS
 import qualified Database.Concelo.Trie as T
 import qualified Database.Concelo.Path as P
 import qualified Control.Lens as L
 
-import Database.Concelo.Misc (null)
-import Prelude hiding (foldr, null)
+import Database.Concelo.Prelude
 
 data BiTrie k = BiTrie { getForward :: T.Trie k (T.Trie k ())
                        , getReverse :: T.Trie k (T.Trie k ()) }
@@ -33,7 +33,11 @@ data BiTrie k = BiTrie { getForward :: T.Trie k (T.Trie k ())
 instance Show k => Show (BiTrie k) where
   show = show . getForward
 
-instance Show (BiTrie BS.ByteString) where
+instance
+#if __GLASGOW_HASKELL__ >= 710
+    {-# OVERLAPPING #-}
+#endif
+  Show (BiTrie BS.ByteString) where
   show = show . getForward
 
 forward :: L.Lens' (BiTrie k) (T.Trie k (T.Trie k ()))

@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 
 -- todo: this file has become home to a lot of little utilities
 -- unrelated to control flow; split them out
@@ -54,7 +55,7 @@ module Database.Concelo.Control
 
 -- import Debug.Trace
 
-import Data.Functor ((<$>))
+import Database.Concelo.Prelude
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Char as C

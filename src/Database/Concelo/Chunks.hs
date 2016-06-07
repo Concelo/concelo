@@ -1,12 +1,12 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Chunks
   ( diffChunks ) where
 
+import Database.Concelo.Prelude
+
 import Database.Concelo.Control (badForest, maybeToAction,
                                  Exception(Exception))
-
-import Control.Monad (foldM)
-import Data.Functor ((<$>))
 
 import qualified Database.Concelo.Protocol as Pr
 import qualified Database.Concelo.Trie as T

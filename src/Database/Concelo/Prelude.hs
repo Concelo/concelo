@@ -1,80 +1,84 @@
 module Database.Concelo.Prelude
-  ( null
-  , foldM
-  , forM_
-  , mapM_
-  , length
-  , (++)
-  , (+)
-  , (-)
-  , (*)
-  , (/)
+  ( (!!)
   , ($)
-  , (>)
-  , (<)
-  , (>=)
-  , (<=)
-  , (/=)
   , (&&)
-  , (||)
-  , (!!)
+  , (*)
+  , (+)
+  , (++)
+  , (-)
   , (.)
-  , not
-  , error
-  , undefined
-  , otherwise
-  , flip
-  , fromIntegral
-  , toEnum
-  , fst
-  , snd
-  , id
-  , const
-  , reverse
-  , concat
-  , take
-  , repeat
-  , last
-  , filter
-  , floor
-  , zipWith
-  , Double()
+  , (/)
+  , (/=)
+  , (<$>)
+  , (<)
+  , (<*>)
+  , (<=)
+  , (<|>)
+  , (>)
+  , (>=)
+  , (>>)
+  , (>>=)
+  , (||)
   , Bool(True, False)
-  , String
+  , Double()
+  , Either(Left, Right)
+  , Eq((==))
+  , Foldable(foldr)
+  , Functor(fmap)
+  , IO()
   , Int()
   , Integer()
-  , IO()
-  , Show(show)
-  , Read
-  , read
-  , Eq((==))
+  , Maybe(Just, Nothing)
+  , Monad
   , Ord(compare)
   , Ordering(EQ)
-  , Maybe(Just, Nothing)
-  , fromMaybe
-  , isJust
+  , Read
+  , Show(show)
+  , String
+  , Traversable(traverse)
+  , concat
+  , const
+  , error
+  , filter
+  , flip
+  , floor
+  , foldM
+  , foldl'
+  , forM_
+  , fromIntegral
   , fromJust
+  , fromMaybe
+  , fst
+  , id
+  , init
+  , inits
+  , isJust
   , isNothing
-  , maybe
-  , Either(Left, Right)
-  , Monad
-  , (>>=)
-  , (>>)
-  , return
+  , last
+  , length
   , liftM2
   , liftM3
-  , when
   , mapM
-  , Foldable(foldr)
-  , toList
-  , foldl'
-  , Functor(fmap)
-  , Traversable(traverse)
+  , mapM_
+  , maybe
+  , not
+  , null
+  , otherwise
   , pure
-  , (<$>)
-  , (<*>)
-  , (<|>)
-  , inits ) where
+  , read
+  , repeat
+  , return
+  , reverse
+  , snd
+  , sum
+  , tail
+  , take
+  , toEnum
+  , toList
+  , undefined
+  , when
+  , zipWith
+  ) where
 
 import Prelude (($), (.), error, undefined, String, Bool(True, False),
                 flip, Int(), (+), (-), Show(show), Read, read, otherwise,
@@ -86,12 +90,12 @@ import Prelude (($), (.), error, undefined, String, Bool(True, False),
 import Data.Maybe (Maybe(Just, Nothing), fromMaybe, isJust, fromJust,
                    isNothing, maybe)
 import Data.Either (Either(Left, Right))
-import Data.Foldable (Foldable(foldr), toList, foldl')
+import Data.Foldable (Foldable(foldr), toList, foldl', sum)
 import Control.Monad (Monad, (>>=), (>>), return, liftM2, liftM3, when, mapM)
 import Data.Functor (Functor(fmap), (<$>))
 import Control.Applicative ((<|>), (<*>), pure)
 import Data.Traversable (Traversable(traverse))
-import Data.List (inits)
+import Data.List (inits, init, tail)
 
 import qualified Control.Monad as M
 

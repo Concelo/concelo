@@ -2,18 +2,18 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Regex
   ( regex
   , matches ) where
+
+import Database.Concelo.Prelude
 
 import Database.Concelo.Control (noParse, ParseState(parseString), endOfStream,
                                  prefix, character, (>>|), Action(),
                                  stringLiteralDelimited, zeroOrMore, eval,
                                  zeroOrOne, void, group, update,
                                  endOfInput, oneOrMore, get)
-
-import Data.Maybe (isJust)
-import Data.Functor ((<$>))
 
 import qualified Control.Monad.Except as E
 import qualified Data.ByteString.Char8 as BS

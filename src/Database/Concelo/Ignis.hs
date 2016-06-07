@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.Ignis
   ( Ignis()
   , ignis
@@ -13,6 +14,8 @@ module Database.Concelo.Ignis
   , nextMessages
   , getHead
   , getPublishedTrie ) where
+
+import Database.Concelo.Prelude
 
 import qualified Control.Lens as L
 import qualified Data.ByteString as BS
@@ -32,11 +35,7 @@ import qualified Database.Concelo.Control as Co
 
 import Database.Concelo.Control (get, set, with, lend, exception, run)
 
-import Data.Functor ((<$>))
-import Data.Maybe (fromMaybe)
-import Control.Monad (foldM, when)
-
--- import Debug.Trace
+import Debug.Trace
 
 data Ignis = Ignis { getIgnisPrivate :: Cr.PrivateKey
                    , getIgnisSentChallengeResponse :: Bool
@@ -152,7 +151,7 @@ setHead trie = do
   set ignisHead trie
   set ignisPublisherUpdated False
 
-receive = \case --m = traceM ("ignis receive " ++ show m) >> case m of
+receive m = traceM ("ignis receive " ++ show m) >> case m of
   Pr.Challenge { Pr.getChallengeProtocolVersion = v
                , Pr.getChallengeBody = body } -> do
     if v /= Pr.version then

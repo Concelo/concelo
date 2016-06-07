@@ -28,8 +28,8 @@ Please see the [wiki](https://github.com/Concelo/concelo/wiki) for details.
 Build Notes
 -----------
 
-  sudo apt-get install ghc-prof libghc-mtl-prof libghc-text-prof libghc-parsec3-prof libghc-network-prof
-  cabal sandbox init
-  cabal configure --enable-library-profiling --enable-executable-profiling --enable-tests
-  cabal install --only-dependencies
-  cabal test --show-details=streaming
+    sudo apt-get install ghc-prof libghc-mtl-prof libghc-text-prof libghc-parsec3-prof libghc-network-prof
+    cabal sandbox init
+    cabal configure --enable-library-profiling --enable-executable-profiling --enable-tests
+    cabal install --only-dependencies
+    cabal test --show-details=streaming

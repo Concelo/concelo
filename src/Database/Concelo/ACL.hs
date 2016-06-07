@@ -1,6 +1,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Database.Concelo.ACL
   ( ACL()
   , empty
@@ -24,8 +25,9 @@ module Database.Concelo.ACL
   , isWriter
   , hash ) where
 
+import Database.Concelo.Prelude
+
 import Database.Concelo.Control (eitherToAction)
-import Database.Concelo.Misc (foldM)
 
 import qualified Database.Concelo.Set as S
 import qualified Database.Concelo.Trie as T
@@ -33,8 +35,6 @@ import qualified Database.Concelo.Path as P
 import qualified Database.Concelo.Crypto as C
 import qualified Data.ByteString as BS
 import qualified Control.Lens as L
-import Prelude hiding (foldr)
-import Data.Foldable (foldr)
 
 data ACL = ACL { getACLReadLists :: Lists
                , getACLWriteLists :: Lists

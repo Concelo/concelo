@@ -1,9 +1,10 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module Data.Tree.RBTests
   ( runTests ) where
 
-import Data.Functor ((<$>))
+import Database.Concelo.Prelude
 import Data.Tree.RBTree
 import Test.QuickCheck
 
@@ -30,7 +31,7 @@ instance Arbitrary Cell where
 
 instance Arbitrary (RBTree Cell) where
   arbitrary = fromList compareCells <$> arbitrary
-  shrink = map (fromList compareCells) . shrink . toList
+  shrink = fmap (fromList compareCells) . shrink . toList
 
 diffV = diffVersioned cellVersionsEqual compareCells
 

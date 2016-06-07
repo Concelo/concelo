@@ -25,7 +25,7 @@ module Data.Tree.RBTree (
   (<<?), search, searchOrd, searchFast, searchMax, searchMin,
   searchInterval, searchIntervalOrd, first, Data.Tree.RBTree.last,
   -- * Conversion
-  toList, fromList,
+  fromList,
   -- * Difference
   foldrDiffVersioned, diffVersioned, diff,
   -- * Verification
@@ -559,9 +559,6 @@ instance Eq a => Eq (RBTree a) where
       va == vb && walk (succZip a') (succZip b')
     walk (RBZip Leaf _) (RBZip Leaf _) = True
     walk _ _ = False
-
-toList :: RBTree a -> [a]
-toList = F.foldr (:) []
 
 fromList :: (a -> a -> Ordering) -> [a] -> RBTree a
 fromList compareVersions = F.foldr (flip $ insert compareVersions) Leaf
