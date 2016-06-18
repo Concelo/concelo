@@ -1,5 +1,4 @@
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE RankNTypes #-}
 module Database.Concelo.BiTrie
   ( BiTrie()

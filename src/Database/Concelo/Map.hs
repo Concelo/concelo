@@ -1,5 +1,4 @@
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE OverlappingInstances #-}
 module Database.Concelo.Map
   ( Map()
   , empty
@@ -27,10 +26,10 @@ import Data.Foldable (Foldable(foldr))
 
 newtype Map k v = Map { run :: V.VMap k v }
 
-instance (Show k, Show v) => Show (Map k v) where
+instance {-# OVERLAPPABLE #-} (Show k, Show v) => Show (Map k v) where
   show = show . run
 
-instance Show v => Show (Map BS.ByteString v) where
+instance {-# OVERLAPPABLE #-} Show v => Show (Map BS.ByteString v) where
   show = show . run
 
 instance Ord k => Functor (Map k) where
