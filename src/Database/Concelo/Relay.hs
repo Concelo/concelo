@@ -20,7 +20,6 @@ import Database.Concelo.Control (set, get, getThenSet, updateThenGet,
 import Control.Monad (when)
 import Prelude hiding (mapM_, foldr)
 import Database.Concelo.Misc (foldM, mapM_)
-import Data.Functor ((<$>))
 import Data.Foldable (foldr)
 import Data.Maybe (isJust, fromJust)
 

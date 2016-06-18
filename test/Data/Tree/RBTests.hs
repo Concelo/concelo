@@ -3,7 +3,6 @@
 module Data.Tree.RBTests
   ( runTests ) where
 
-import Data.Functor ((<$>))
 import Data.Tree.RBTree
 import Test.QuickCheck
 

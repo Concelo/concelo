@@ -11,8 +11,6 @@ import Database.Concelo.Control (get, run, exec, update, Exception(Success),
                                  exception, eval, patternFailure, bsShow)
 
 import Data.List (inits)
-import Data.Functor ((<$>))
-import Control.Applicative ((<*>))
 import Debug.Trace
 
 import qualified Database.Concelo.VTrie as VT

@@ -12,7 +12,6 @@ module Database.Concelo.Deserializer
   , deserialize ) where
 
 import Database.Concelo.Control (get)
-import Data.Functor ((<$>))
 import Prelude hiding (null)
 import Database.Concelo.Misc (null)
 import Data.Maybe (fromMaybe)

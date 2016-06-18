@@ -23,8 +23,7 @@ module Database.Concelo.SyncTree
 import Database.Concelo.Control (get, patternFailure, with, set, bsShow,
                                  maybeToAction, eitherToAction, run, bsRead,
                                  exception)
-import Control.Applicative ((<|>), (<*>))
-import Data.Functor ((<$>))
+import Control.Applicative ((<|>))
 import Control.Monad (when)
 import Database.Concelo.Misc (foldM, forM_, mapM_, length)
 import Data.Foldable (toList, foldr)

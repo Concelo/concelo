@@ -52,7 +52,6 @@ import qualified Control.Lens as L
 import Database.Concelo.Misc (null)
 import Data.Maybe (isNothing, isJust, fromMaybe)
 import Control.Applicative ((<|>))
-import Data.Functor ((<$>))
 import Prelude hiding (foldr, null)
 import Data.Foldable (Foldable(foldr))
 
