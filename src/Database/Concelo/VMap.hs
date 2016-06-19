@@ -1,6 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE OverlappingInstances #-}
 module Database.Concelo.VMap
   ( VMap()
   , empty
@@ -31,17 +30,16 @@ import qualified Data.ByteString.Base16 as B16
 import qualified Data.Tree.RBTree as T
 import qualified Control.Lens as L
 import Data.Maybe (fromJust)
-import Data.Functor ((<$>))
 import Control.Applicative ((<|>))
 import Prelude hiding (foldr)
 import Data.Foldable (Foldable(foldr))
 
 newtype VMap k v = VMap { run :: T.RBTree (Cell k v) }
 
-instance (Show k, Show v) => Show (VMap k v) where
+instance {-# OVERLAPPABLE #-} (Show k, Show v) => Show (VMap k v) where
   show = show . pairs
 
-instance Show v => Show (VMap BS.ByteString v) where
+instance {-# OVERLAPPABLE #-} Show v => Show (VMap BS.ByteString v) where
   show = show . fmap (\(k,v) -> (B16.encode $ BS.take 4 k, v)) . pairs
 
 instance Ord k => Functor (VMap k) where

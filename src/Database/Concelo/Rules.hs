@@ -38,7 +38,6 @@ import Database.Concelo.Control (noParse, maybeToAction, stringLiteral,
 import Database.Concelo.Misc (null)
 import Control.Monad (liftM2, liftM3, foldM)
 import Data.Fixed (mod')
-import Data.Functor ((<$>))
 import Data.Foldable (foldr)
 
 import qualified Data.ByteString.Char8 as BS

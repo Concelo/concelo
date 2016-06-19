@@ -32,7 +32,6 @@ import Database.Concelo.Control (patternFailure, badForest, missingChunks,
                                  set, get, update, updateM, getThenUpdate,
                                  exception, with)
 import Control.Monad (when)
-import Data.Functor ((<$>))
 import Data.Foldable (foldr)
 import Prelude hiding (foldr, mapM_, null)
 import Database.Concelo.Misc (foldM, mapM_, null)

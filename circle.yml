@@ -1,0 +1,10 @@
+machine:
+  timezone:
+    America/Denver
+  cache_directories:
+    - ".cabal-sandbox"
+  ghc:
+    version: 7.10.2
+test:
+  override:
+    - cabal test --show-details=streaming

@@ -54,8 +54,6 @@ module Database.Concelo.Control
 
 -- import Debug.Trace
 
-import Data.Functor ((<$>))
-
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.Char as C
 import qualified Control.Lens as L

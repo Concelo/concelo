@@ -29,9 +29,6 @@ module Database.Concelo.Crypto
   , verify
   , hash ) where
 
-import Data.Functor ((<$>))
-import Data.Foldable (Foldable())
-
 import qualified Crypto.Error as E
 import qualified Crypto.Random as R
 import qualified Crypto.Cipher.Types as CT

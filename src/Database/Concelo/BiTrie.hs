@@ -1,5 +1,4 @@
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE RankNTypes #-}
 module Database.Concelo.BiTrie
   ( BiTrie()
@@ -17,7 +16,6 @@ module Database.Concelo.BiTrie
   , find ) where
 
 import Data.Maybe (fromMaybe)
-import Data.Functor ((<$>))
 
 import qualified Data.ByteString.Char8 as BS
 import qualified Database.Concelo.Trie as T
