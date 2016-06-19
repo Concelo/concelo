@@ -53,7 +53,7 @@ module Database.Concelo.Control
   , bsShow
   , bsRead ) where
 
--- import Debug.Trace
+import Debug.Trace
 
 import Database.Concelo.Prelude
 
@@ -76,7 +76,7 @@ data Exception = Exception String
 
 throw :: Exception ->
          Action s a
-throw = error . show --E.throwError
+throw = error . traceId . show --E.throwError
 
 exception = throw . Exception
 

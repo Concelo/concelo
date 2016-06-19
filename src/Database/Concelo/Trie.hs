@@ -41,6 +41,7 @@ module Database.Concelo.Trie
   , intersectL
   , intersectR
   , Database.Concelo.Trie.subtract
+  , subtractAll
   , diff ) where
 
 import Database.Concelo.Prelude
@@ -152,6 +153,8 @@ intersectL a = Trie . V.intersectL noVersion a . run
 intersectR a = Trie . V.intersectR noVersion a . run
 
 subtract a = Trie . V.subtract noVersion a . run
+
+subtractAll a = Trie . V.subtractAll noVersion a . run
 
 diff a b = (Trie obsolete, Trie new) where
   (obsolete, new) = V.diff noVersion a b

@@ -389,7 +389,7 @@ apply' = \case
             set stateTries tries
             set statePublished trie
 
-            -- traceM ("publish " ++ show trie)
+            traceM (" ++ publish " ++ show trie)
 
             ignis' <- eitherToAction
                       $ exec (I.setHead trie)

@@ -26,7 +26,7 @@ import Database.Concelo.Prelude
 
 import Database.Concelo.Control (get, patternFailure, with, set, bsShow,
                                  maybeToAction, eitherToAction, run, bsRead,
-                                 exception)
+                                 exception, getThenSet)
 
 import Debug.Trace
 
@@ -88,7 +88,14 @@ data Chunk a = Group { getGroupName :: Key
                     , getLeafIndex :: W.Word64
                     , getLeafCount :: W.Word64 }
 
-             deriving Show
+instance Show (Chunk a) where
+  show = \case
+    Group { getGroupName = name,
+            getGroupHeight = height,
+            getGroupMembers = members } ->
+      "(group " ++ B.prefix name ++ " " ++ show height ++ " " ++ show (show <$> members) ++ ")"
+    Leaf { getLeafPath = path } ->
+      "(leaf " ++ show (const () <$> path) ++ ")"
 
 data SyncTree a = SyncTree { getTreeByName :: T.Trie Key (Chunk a)
                            , getTreeByReverseKeyMember :: T.Trie Key (Chunk a)
@@ -173,14 +180,39 @@ findObsolete chunk = do
 
       findObsolete group
 
+subtract subtrahend minuend =
+  foldr visit minuend subtrahend where
+    visit chunk result = case chunk of
+      Leaf { getLeafPath = path } ->
+        -- subtract all leaves which share the same path init
+        -- (i.e. such that the paths match except for the final key in
+        -- the path):
+        let path' = Pa.super "0" $ Pa.init path in
+        T.foldrTriples
+        (\(k, v, _) -> case v of
+            Nothing -> id
+            Just _ -> T.subtract $ Pa.append path' k)
+        result
+        $ T.findTrie path' result
+
+      group@(Group {}) ->
+        T.subtract (byHeightVacancy group) result
+
 findObsoleteGroups rejects = do
+  originalNew <- getThenSet stateNew T.empty
+
   get stateObsolete >>= mapM_ findObsolete
 
   visitRejects rejects
 
   obsolete <- get stateObsolete
+  new <- get stateNew
 
-  Co.update stateNew (T.subtract obsolete)
+  traceM (" *  orphans " ++ show new)
+  traceM (" * obsolete " ++ show obsolete)
+  traceM (" *      new " ++ show originalNew)
+
+  set stateNew $ T.union originalNew $ subtract obsolete new
 
 byKey = \case
   chunk@(Leaf { getLeafPath = path }) ->
@@ -414,14 +446,16 @@ update :: Integer ->
           Co.Action s (SyncTree a)
 update revision decrypt deserialize (obsolete, new) tree =
   do
-    -- traceM ("obsolete: " ++ show obsolete ++ "; new: " ++ show new)
-
     (obsoleteChunks, leafSubset, namedSubset, _) <-
       foldM remove ([], getTreeLeaves tree, getTreeByName tree, T.empty)
       obsolete
 
     (newChunks, leaves, named, _) <-
       foldM add ([], leafSubset, namedSubset, T.empty) new
+
+    traceM ("obsolete: " ++ show obsolete)
+    traceM ("new: " ++ show new)
+    traceM ("leaves: " ++ show (const () <$> leaves))
 
     let reverseKeyMember =
           updateIndex byReverseKeyMember getTreeByReverseKeyMember
@@ -461,7 +495,8 @@ update revision decrypt deserialize (obsolete, new) tree =
         let visit result path =
               case T.findValue (Pa.singleton (last $ Pa.keys path) ()) named of
                 Nothing -> exception ("can't find " ++ show path
-                                      ++ " in " ++ show (const () <$> named))
+                                      ++ " in " ++ show (const () <$> named)
+                                      ++ " for " ++ show name)
                 Just chunk -> return $ trace ("member " ++ show path) $ T.union (byName chunk) result
 
         memberChunks <- foldM visit T.empty $ T.paths members
@@ -495,12 +530,12 @@ update revision decrypt deserialize (obsolete, new) tree =
                               , getFragmentRaw = raw }) ->
                     let index = (B.toWord64 indexString) :: W.Word64
                         toLeaf path =
-                          let path' = Pa.super (bsShow index) path in
+                          let path' = Pa.super (bsShow index)
+                                      (Pa.append path hash) in
                           T.union (const (Leaf raw path' id index count)
                                    <$> path')
                     in (Group hash 1
-                        (T.super "0"
-                         $ T.foldrPaths toLeaf T.empty distinguished)
+                        (T.super "0" $ T.foldrPaths toLeaf T.empty trie)
                         encrypted
                         (Pr.leafSize - sum (BS.length . getFragmentRaw
                                             <$> myFragments)) :)
@@ -518,7 +553,7 @@ update revision decrypt deserialize (obsolete, new) tree =
 
       Pr.Tree { Pr.getTreeName = name } -> do
         let hash = Pa.keys name !! 1
-            path = Pa.super "0" name
+            path = Pa.super "0" (Pa.append name BS.empty)
             trie = fromMaybe T.empty $ deserialize hash
 
         return ([],
@@ -624,6 +659,7 @@ visit tree rejects obsolete new = do
         foldM toLeaves T.empty (T.paths new) >>= set stateNew
 
         findObsoleteGroups rejects
+
         addNewGroups (0 :: Int))
     $ State tree serializer T.empty T.empty
 
@@ -645,6 +681,8 @@ visit tree rejects obsolete new = do
       root = T.lastValue ordered
 
   -- traceM ("root is " ++ show (T.lastPath ordered))
-  -- traceM ("ordered is " ++ show ordered)
+  traceM ("obs     is " ++ show (getStateObsolete state))
+  traceM ("new     is " ++ show (getStateNew state))
+  traceM ("ordered is " ++ show ordered)
 
   return (obsoleteGroups, newGroups, root)

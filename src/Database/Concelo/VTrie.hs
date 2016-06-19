@@ -29,6 +29,8 @@ module Database.Concelo.VTrie
   , paths
   , foldrPathsAndValues
   , pathsAndValues
+  , foldrPathsAndVersions
+  , pathsAndVersions
   , foldrKeys
   , keys
   , foldrTriples
@@ -43,6 +45,7 @@ module Database.Concelo.VTrie
   , intersectL
   , intersectR
   , Database.Concelo.VTrie.subtract
+  , subtractAll
   , diff
   , mergeL
   , mergeR ) where
@@ -162,6 +165,21 @@ foldrPathsAndValues visit seed (VTrie v m) =
 
 pathsAndValues = foldrPathsAndValues (:) []
 
+foldrPathsAndVersions visit seed (VTrie v m) =
+  case v of
+    Nothing -> below
+    Just (Versioned version value) -> visit (P.leaf value, version) below
+  where
+    below =
+      V.foldrPairs
+      (\(k, t) r ->
+        foldrPathsAndVersions
+        (\(p, version) ->
+          visit (P.super k p, version))
+        r t) seed m
+
+pathsAndVersions = foldrPathsAndVersions (:) []
+
 foldrKeys visit seed (VTrie _ m) = V.foldrPairs (visit . fst) seed m
 
 keys = foldrKeys (:) []
@@ -231,6 +249,23 @@ subtract' version small (VTrie largeVersioned largeMap) =
     visit (k, a) = case V.lookup k largeMap of
       Nothing -> id
       Just b -> let trie = subtract' version a b in
+        if isEmpty trie then
+          V.delete version k
+        else
+          V.insert version k trie
+
+subtractAll version small (VTrie largeVersioned largeMap) =
+  let sv = TL.value small
+      lv = getVersionedValue <$> largeVersioned in
+
+  if isNothing sv then
+    VTrie (Versioned version <$> lv) $ TL.foldrPairs visit largeMap small
+  else
+    empty
+  where
+    visit (k, a) = case V.lookup k largeMap of
+      Nothing -> id
+      Just b -> let trie = subtractAll version a b in
         if isEmpty trie then
           V.delete version k
         else

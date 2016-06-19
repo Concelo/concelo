@@ -263,6 +263,10 @@ addUnsanitized small large =
 
 updateUnsanitizedDiff oldForest (stream, newTree)
   (obsoleteUnsanitized, newUnsanitized) =
+  -- trace ("old leaves " ++ show (leaves oldTree)) $
+  -- trace ("new leaves " ++ show (leaves newTree)) $
+  -- trace ("obs diff " ++ show obsolete) $
+  -- trace ("new diff " ++ show new) $
   (addUnsanitized obsolete obsoleteUnsanitized,
    addUnsanitized new newUnsanitized)
   where oldTree =
@@ -296,6 +300,9 @@ deserialize old new = do
         foldr (updateUnsanitizedDiff old) (T.empty, T.empty)
         (VM.pairs $ Su.getForestTreeMap new)
 
+  -- traceM ("unsanitized obs " ++ show (fst unsanitizedDiff))
+  -- traceM ("unsanitized new " ++ show (snd unsanitizedDiff))
+
   unsanitized <- updateUnsanitized unsanitizedDiff <$> get desUnsanitized
 
   defaultACL <-
@@ -321,7 +328,8 @@ deserialize old new = do
           oldDependencies
           unsanitizedDiff in
 
-    -- trace ("unsanitized " ++ show unsanitized ++ " sanitized " ++ show sanitized) $
+    -- trace ("unsanitized " ++ show unsanitized) $
+    -- trace ("sanitized " ++ show sanitized) $
 
     St.put $ des oldRules dependencies sanitized rejected
     else do

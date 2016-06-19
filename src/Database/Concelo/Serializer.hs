@@ -16,7 +16,7 @@ import Database.Concelo.Prelude
 import Database.Concelo.Control (exception, get, set, with, patternFailure,
                                  update, getThenSet, eitherToAction, run)
 
--- import Debug.Trace
+import Debug.Trace
 
 import qualified Control.Lens as L
 import qualified Data.ByteString as BS
@@ -139,10 +139,10 @@ visitSync serialize chunkToMessage level syncTree key treeStream forestStream
 
   allNew' <- foldM visit allNew new
 
-  -- obsTrie <- foldM visit T.empty obsolete
-  -- traceM ("sync obsolete: " ++ show (const () <$> obsTrie))
-  -- newTrie <- foldM visit T.empty new
-  -- traceM ("sync new: " ++ show (const () <$> newTrie))
+  obsTrie <- foldM visit T.empty obsolete
+  traceM ("sync obsolete: " ++ show obsTrie)
+  newTrie <- foldM visit T.empty new
+  traceM ("sync new: " ++ show newTrie)
 
   set serializerDiff (allObsolete', allNew')
 
@@ -233,8 +233,8 @@ visitTrees forest rejected revision obsoleteByACL newByACL =
 visitForest forest revision (obsoleteTrees, newTrees) = do
   private <- get serializerPrivate
 
-  -- traceM ("obsolete trees: " ++ show obsoleteTrees)
-  -- traceM ("new trees: " ++ show newTrees)
+  traceM ("obsolete trees: " ++ show obsoleteTrees)
+  traceM ("new trees: " ++ show newTrees)
 
   treeRoot <- visitSync
               serializeNames
@@ -247,6 +247,8 @@ visitForest forest revision (obsoleteTrees, newTrees) = do
               T.empty
               obsoleteTrees
               newTrees
+
+  traceM ("tree root: " ++ show treeRoot)
 
   let old = Su.getForestMessage forest
 
@@ -274,6 +276,9 @@ group f = T.foldrPathsAndValues visit T.empty where
 serialize forest rejected revision (obsolete, new) = do
   let obsoleteByACL = group byACL obsolete
       newByACL = group byACL new
+
+  -- traceM ("obsolete leaves: " ++ show obsolete)
+  -- traceM ("new leaves: " ++ show new)
 
   forestName <- visitTrees forest rejected revision obsoleteByACL newByACL
     >>= visitForest forest revision
